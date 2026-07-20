@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/kidandcat/mercadona-mcp/sdk"
-
 	"github.com/kidandcat/takan/internal/mcp"
 	"github.com/kidandcat/takan/internal/store"
 )
@@ -16,17 +14,17 @@ import (
 type Module struct {
 	Takan *store.Store
 	DB    *sql.DB
-	Box   *sdk.Box
-	Acc   *sdk.AccountStore // actually *accounts.Store via alias
+	Box   *Box
+	Acc   *AccountStore // actually *accounts.Store via alias
 }
 
-// NewModule wires mercadona-mcp SDK pieces.
-func NewModule(takan *store.Store, db *sql.DB, box *sdk.Box, publicURL string) *Module {
+// NewModule wires Mercadona DB, crypto and tools.
+func NewModule(takan *store.Store, db *sql.DB, box *Box, publicURL string) *Module {
 	return &Module{
 		Takan: takan,
 		DB:    db,
 		Box:   box,
-		Acc:   sdk.NewAccountStore(db, box, publicURL),
+		Acc:   NewAccountStore(db, box, publicURL),
 	}
 }
 
@@ -37,8 +35,8 @@ func (m *Module) Factory() func(ctx context.Context, userID string) []mcp.Regist
 	}
 }
 
-func (m *Module) svc(userID string) *sdk.Service {
-	return sdk.NewService(m.DB, userID, m.Acc)
+func (m *Module) svc(userID string) *Service {
+	return NewService(m.DB, userID, m.Acc)
 }
 
 func (m *Module) tools() []mcp.RegisteredTool {

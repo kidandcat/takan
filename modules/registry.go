@@ -22,8 +22,8 @@ var Catalog = []Info{
 
 // Provider builds tools for enabled modules.
 type Provider struct {
-	Store   *store.Store
-	Machine ToolFactory
+	Store     *store.Store
+	Machine   ToolFactory
 	Mercadona ToolFactory
 }
 

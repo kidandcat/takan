@@ -9,11 +9,13 @@ Connect Grok / Claude / Cursor once to Takan. From the web panel, enable modules
 
 ## Modules
 
-| Module | Tools | Setup |
-|--------|--------|--------|
-| **Machine** | `machine_list`, `machine_bash` | Install `takan-agent` on each PC (outbound WSS) |
-| **Mercadona** | `mercadona_status` (+ cart next) | Credentials in panel |
-| **meta** | `takan_status` | Always available |
+Integrations live under `modules/` as subpackages (add new ones there):
+
+| Module | Path | Tools | Setup |
+|--------|------|--------|--------|
+| **Machine** | `modules/machine` | `machine_list`, `machine_bash` | Install `takan-agent` on each PC (outbound WSS) |
+| **Mercadona** | `modules/mercadona` | search, add, list, remove, clear, … | Credentials in panel |
+| **meta** | `modules` | `takan_status` | Always available |
 
 ## MCP
 

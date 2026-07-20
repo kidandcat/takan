@@ -13,8 +13,8 @@ import (
 
 	"github.com/kidandcat/takan/internal/agenthub"
 	"github.com/kidandcat/takan/internal/cryptox"
-	"github.com/kidandcat/takan/internal/modules"
 	"github.com/kidandcat/takan/internal/store"
+	"github.com/kidandcat/takan/modules"
 )
 
 //go:embed templates/*.html

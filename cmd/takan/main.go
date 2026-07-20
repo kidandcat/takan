@@ -11,18 +11,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kidandcat/mercadona-mcp/sdk"
-
 	"github.com/kidandcat/takan/internal/agenthub"
 	"github.com/kidandcat/takan/internal/config"
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/mcp"
-	"github.com/kidandcat/takan/internal/modules"
-	"github.com/kidandcat/takan/internal/modules/machine"
-	"github.com/kidandcat/takan/internal/modules/mercadona"
 	"github.com/kidandcat/takan/internal/oauth"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/internal/web"
+	"github.com/kidandcat/takan/modules"
+	"github.com/kidandcat/takan/modules/machine"
+	"github.com/kidandcat/takan/modules/mercadona"
 )
 
 func main() {
@@ -63,12 +61,12 @@ func main() {
 	)
 
 	// Mercadona multi-tenant DB (aliases, cart prefs, encrypted sessions).
-	mdb, err := sdk.OpenDB(filepath.Join(cfg.DataDir, "mercadona.db"))
+	mdb, err := mercadona.OpenDB(filepath.Join(cfg.DataDir, "mercadona.db"))
 	if err != nil {
 		log.Fatalf("mercadona store: %v", err)
 	}
 	defer mdb.Close()
-	mbox, err := sdk.NewBox(cfg.SessionKey)
+	mbox, err := mercadona.NewBox(cfg.SessionKey)
 	if err != nil {
 		log.Fatalf("mercadona crypto: %v", err)
 	}
