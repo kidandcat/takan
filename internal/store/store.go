@@ -597,7 +597,17 @@ func (s *Store) DeleteMercadonaCreds(ctx context.Context, userID string) error {
 
 // --- email (Resend) ---
 
-// migrateEmailSettings upgrades from_addr → domains JSON list.
+// EmailDomain is a Resend domain with a user enable flag.
+type EmailDomain struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Status    string `json:"status,omitempty"`
+	Sending   string `json:"sending,omitempty"`   // Resend capability: enabled|disabled
+	Receiving string `json:"receiving,omitempty"` // Resend capability: enabled|disabled
+	Enabled   bool   `json:"enabled"`             // user toggle for Takan tools
+}
+
+// migrateEmailSettings upgrades legacy from_addr / plain domain lists.
 func (s *Store) migrateEmailSettings() error {
 	rows, err := s.db.Query(`PRAGMA table_info(email_settings)`)
 	if err != nil {
@@ -617,16 +627,12 @@ func (s *Store) migrateEmailSettings() error {
 	}
 	rows.Close()
 	if len(cols) == 0 {
-		return nil // table created fresh with domains
-	}
-	if cols["domains"] {
 		return nil
 	}
-	if cols["from_addr"] {
+	if !cols["domains"] && cols["from_addr"] {
 		if _, err := s.db.Exec(`ALTER TABLE email_settings ADD COLUMN domains TEXT NOT NULL DEFAULT '[]'`); err != nil {
 			return err
 		}
-		// Convert single from addresses to domain list.
 		r2, err := s.db.Query(`SELECT user_id, from_addr FROM email_settings`)
 		if err != nil {
 			return err
@@ -646,12 +652,49 @@ func (s *Store) migrateEmailSettings() error {
 			dom := domainFromEmail(it.from)
 			raw := "[]"
 			if dom != "" {
-				b, _ := json.Marshal([]string{dom})
+				b, _ := json.Marshal([]EmailDomain{{Name: dom, Enabled: true, Status: "legacy"}})
 				raw = string(b)
 			}
 			if _, err := s.db.Exec(`UPDATE email_settings SET domains = ? WHERE user_id = ?`, raw, it.uid); err != nil {
 				return err
 			}
+		}
+	}
+	// Upgrade plain string[] domains → EmailDomain objects.
+	r3, err := s.db.Query(`SELECT user_id, domains FROM email_settings`)
+	if err != nil {
+		return err
+	}
+	defer r3.Close()
+	type up struct{ uid, raw string }
+	var ups []up
+	for r3.Next() {
+		var u, raw string
+		if err := r3.Scan(&u, &raw); err != nil {
+			return err
+		}
+		ups = append(ups, up{u, raw})
+	}
+	for _, it := range ups {
+		if _, ok := tryParseEmailDomains(it.raw); ok {
+			continue
+		}
+		// plain string list
+		var names []string
+		if err := json.Unmarshal([]byte(it.raw), &names); err != nil {
+			continue
+		}
+		var doms []EmailDomain
+		for _, n := range names {
+			n = normalizeDomainName(n)
+			if n == "" {
+				continue
+			}
+			doms = append(doms, EmailDomain{Name: n, Enabled: true})
+		}
+		b, _ := json.Marshal(doms)
+		if _, err := s.db.Exec(`UPDATE email_settings SET domains = ? WHERE user_id = ?`, string(b), it.uid); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -662,30 +705,52 @@ func domainFromEmail(addr string) string {
 	if i := strings.LastIndexByte(addr, '@'); i >= 0 && i+1 < len(addr) {
 		return addr[i+1:]
 	}
-	// bare domain
 	if strings.Contains(addr, ".") && !strings.Contains(addr, " ") {
 		return strings.TrimPrefix(addr, "@")
 	}
 	return ""
 }
 
-func (s *Store) SaveEmailSettings(ctx context.Context, userID, apiKeyEnc string, domains []string) error {
-	clean := normalizeDomains(domains)
-	raw, err := json.Marshal(clean)
-	if err != nil {
-		return err
+func normalizeDomainName(d string) string {
+	d = strings.ToLower(strings.TrimSpace(d))
+	d = strings.TrimPrefix(d, "@")
+	d = strings.TrimSuffix(d, ".")
+	if d == "" || !strings.Contains(d, ".") {
+		return ""
 	}
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO email_settings (user_id, api_key_enc, domains, updated_at) VALUES (?,?,?,?)
+	return d
+}
+
+func (s *Store) SaveEmailAPIKey(ctx context.Context, userID, apiKeyEnc string) error {
+	// Preserve existing domain toggles if row exists.
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO email_settings (user_id, api_key_enc, domains, updated_at) VALUES (?,?, '[]', ?)
 ON CONFLICT(user_id) DO UPDATE SET
   api_key_enc = excluded.api_key_enc,
-  domains = excluded.domains,
   updated_at = excluded.updated_at`,
-		userID, apiKeyEnc, string(raw), time.Now().UTC().Format(time.RFC3339))
+		userID, apiKeyEnc, time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
-func (s *Store) GetEmailSettings(ctx context.Context, userID string) (apiKeyEnc string, domains []string, ok bool, err error) {
+func (s *Store) SaveEmailDomains(ctx context.Context, userID string, domains []EmailDomain) error {
+	raw, err := json.Marshal(domains)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `
+UPDATE email_settings SET domains = ?, updated_at = ? WHERE user_id = ?`,
+		string(raw), time.Now().UTC().Format(time.RFC3339), userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("email not configured")
+	}
+	return nil
+}
+
+func (s *Store) GetEmailSettings(ctx context.Context, userID string) (apiKeyEnc string, domains []EmailDomain, ok bool, err error) {
 	var raw string
 	err = s.db.QueryRowContext(ctx,
 		`SELECT api_key_enc, domains FROM email_settings WHERE user_id = ?`, userID).
@@ -696,7 +761,7 @@ func (s *Store) GetEmailSettings(ctx context.Context, userID string) (apiKeyEnc 
 	if err != nil {
 		return "", nil, false, err
 	}
-	domains = parseDomainsJSON(raw)
+	domains, _ = tryParseEmailDomains(raw)
 	return apiKeyEnc, domains, true, nil
 }
 
@@ -705,39 +770,60 @@ func (s *Store) DeleteEmailSettings(ctx context.Context, userID string) error {
 	return err
 }
 
-func normalizeDomains(in []string) []string {
-	seen := map[string]bool{}
+// EnabledEmailDomains returns names of domains the user enabled for tools.
+func EnabledEmailDomains(domains []EmailDomain) []string {
 	var out []string
-	for _, d := range in {
-		d = strings.ToLower(strings.TrimSpace(d))
-		d = strings.TrimPrefix(d, "@")
-		d = strings.TrimSuffix(d, ".")
-		if d == "" || !strings.Contains(d, ".") {
-			continue
+	for _, d := range domains {
+		if d.Enabled && d.Name != "" {
+			out = append(out, d.Name)
 		}
-		if seen[d] {
-			continue
-		}
-		seen[d] = true
-		out = append(out, d)
 	}
 	return out
 }
 
-func parseDomainsJSON(raw string) []string {
+func tryParseEmailDomains(raw string) ([]EmailDomain, bool) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
+	if raw == "" || raw == "[]" {
+		return nil, true
 	}
-	var list []string
-	if err := json.Unmarshal([]byte(raw), &list); err == nil {
-		return normalizeDomains(list)
+	var list []EmailDomain
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil, false
 	}
-	// fallback: newline / comma separated
-	parts := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == '\n' || r == ',' || r == ';' || r == ' '
-	})
-	return normalizeDomains(parts)
+	// Detect plain string array mis-parsed as objects with empty Name
+	if len(list) > 0 && list[0].Name == "" {
+		var names []string
+		if err := json.Unmarshal([]byte(raw), &names); err == nil {
+			return nil, false
+		}
+	}
+	for i := range list {
+		list[i].Name = normalizeDomainName(list[i].Name)
+	}
+	return list, true
+}
+
+// MergeEmailDomains keeps user Enabled flags when refreshing from Resend.
+func MergeEmailDomains(prev, fromAPI []EmailDomain) []EmailDomain {
+	prevEn := map[string]bool{}
+	for _, d := range prev {
+		prevEn[d.Name] = d.Enabled
+	}
+	out := make([]EmailDomain, 0, len(fromAPI))
+	for _, d := range fromAPI {
+		d.Name = normalizeDomainName(d.Name)
+		if d.Name == "" {
+			continue
+		}
+		if en, ok := prevEn[d.Name]; ok {
+			d.Enabled = en
+		} else {
+			// New domain: enable if verified (or sending enabled).
+			d.Enabled = d.Status == "verified" || d.Sending == "enabled"
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // --- memory ---

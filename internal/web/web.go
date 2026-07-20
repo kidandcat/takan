@@ -15,6 +15,7 @@ import (
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/modules"
+	emailmod "github.com/kidandcat/takan/modules/email"
 )
 
 //go:embed templates/*.html
@@ -69,7 +70,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
 	mux.HandleFunc("POST /dashboard/mercadona/clear", s.clearMercadona)
 	mux.HandleFunc("POST /dashboard/email", s.saveEmail)
+	mux.HandleFunc("POST /dashboard/email/refresh", s.refreshEmail)
 	mux.HandleFunc("POST /dashboard/email/clear", s.clearEmail)
+	mux.HandleFunc("POST /dashboard/email/domains/toggle", s.toggleEmailDomain)
 	mux.HandleFunc("POST /dashboard/memory", s.saveMemory)
 }
 
@@ -91,7 +94,7 @@ type pageData struct {
 	MercadonaEmail      string
 	MercadonaPostal     string
 	EmailConfigured     bool
-	EmailDomains        []string
+	EmailDomainRows     []emailDomainView
 	EmailKeySet         bool
 	MemoryContent       string
 	MemoryUpdated       string
@@ -102,6 +105,11 @@ type pageData struct {
 	MachTotalCount  int
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
+}
+
+type emailDomainView struct {
+	Name, Status, Sending, Receiving string
+	Enabled                          bool
 }
 
 type modView struct {
@@ -334,8 +342,8 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			mv.Ready = m.Enabled && ok
 		case "email":
 			mv.Path = "/dashboard/email"
-			_, _, ok, _ := s.Store.GetEmailSettings(ctx, u.ID)
-			mv.Ready = m.Enabled && ok
+			_, domains, ok, _ := s.Store.GetEmailSettings(ctx, u.ID)
+			mv.Ready = m.Enabled && ok && len(store.EnabledEmailDomains(domains)) > 0
 		case "memory":
 			mv.Path = "/dashboard/memory"
 			mv.Ready = m.Enabled // always ready once enabled
@@ -363,8 +371,12 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data.MercadonaPostal = postal
 	if _, domains, eok, _ := s.Store.GetEmailSettings(ctx, u.ID); eok {
 		data.EmailConfigured = true
-		data.EmailDomains = domains
 		data.EmailKeySet = true
+		for _, d := range domains {
+			data.EmailDomainRows = append(data.EmailDomainRows, emailDomainView{
+				Name: d.Name, Status: d.Status, Sending: d.Sending, Receiving: d.Receiving, Enabled: d.Enabled,
+			})
+		}
 	}
 	if content, updated, mok, _ := s.Store.GetMemory(ctx, u.ID); mok {
 		data.MemoryContent = content
@@ -516,37 +528,34 @@ func (s *Server) saveEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	domainsRaw := r.FormValue("domains")
-	var domains []string
-	for _, line := range strings.Split(domainsRaw, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			domains = append(domains, line)
-		}
-	}
-	if len(domains) == 0 {
-		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("at least one domain required"), http.StatusFound)
-		return
-	}
 	key := strings.TrimSpace(r.FormValue("api_key"))
-	var enc string
+	var plainKey string
 	if key == "" {
 		oldEnc, _, ok, _ := s.Store.GetEmailSettings(r.Context(), u.ID)
 		if !ok {
 			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("api key required"), http.StatusFound)
 			return
 		}
-		enc = oldEnc
-	} else {
 		var err error
-		enc, err = s.Box.Seal(key)
+		plainKey, err = s.Box.Open(oldEnc)
+		if err != nil {
+			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("re-enter api key"), http.StatusFound)
+			return
+		}
+	} else {
+		plainKey = key
+		enc, err := s.Box.Seal(key)
 		if err != nil {
 			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
 			return
 		}
+		if err := s.Store.SaveEmailAPIKey(r.Context(), u.ID, enc); err != nil {
+			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
+			return
+		}
 	}
-	if err := s.Store.SaveEmailSettings(r.Context(), u.ID, enc, domains); err != nil {
-		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
+	if err := s.syncEmailDomains(r.Context(), u.ID, plainKey); err != nil {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("key saved but domain sync failed: "+err.Error()), http.StatusFound)
 		return
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "email", true)
@@ -554,6 +563,73 @@ func (s *Server) saveEmail(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/email?flash=Email+saved", http.StatusFound)
+}
+
+func (s *Server) refreshEmail(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	enc, _, ok, _ := s.Store.GetEmailSettings(r.Context(), u.ID)
+	if !ok {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("save api key first"), http.StatusFound)
+		return
+	}
+	plain, err := s.Box.Open(enc)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("decrypt key failed"), http.StatusFound)
+		return
+	}
+	if err := s.syncEmailDomains(r.Context(), u.ID, plain); err != nil {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/dashboard/email?flash=Domains+refreshed", http.StatusFound)
+}
+
+func (s *Server) syncEmailDomains(ctx context.Context, userID, apiKey string) error {
+	fromAPI, err := emailmod.FetchDomains(ctx, apiKey)
+	if err != nil {
+		return err
+	}
+	_, prev, _, _ := s.Store.GetEmailSettings(ctx, userID)
+	merged := store.MergeEmailDomains(prev, fromAPI)
+	return s.Store.SaveEmailDomains(ctx, userID, merged)
+}
+
+func (s *Server) toggleEmailDomain(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	name := strings.TrimSpace(r.FormValue("domain"))
+	en := r.FormValue("enabled") == "1"
+	_, domains, ok, err := s.Store.GetEmailSettings(r.Context(), u.ID)
+	if err != nil || !ok {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("email not configured"), http.StatusFound)
+		return
+	}
+	found := false
+	for i := range domains {
+		if strings.EqualFold(domains[i].Name, name) {
+			domains[i].Enabled = en
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("domain not found"), http.StatusFound)
+		return
+	}
+	if err := s.Store.SaveEmailDomains(r.Context(), u.ID, domains); err != nil {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/email", http.StatusFound)
 }
 
 func (s *Server) clearEmail(w http.ResponseWriter, r *http.Request) {

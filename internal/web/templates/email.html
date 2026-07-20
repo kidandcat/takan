@@ -2,7 +2,7 @@
 <section class="section hero">
   <div>
     <h1>Email</h1>
-    <p class="muted" style="margin-top:.4rem;max-width:52ch">Resend API key + verified domains. The AI picks <code>domain</code> and <code>sender</code> (local part) when sending — ask the user if unsure.</p>
+    <p class="muted" style="margin-top:.4rem;max-width:52ch">Paste your Resend API key. Domains are loaded from Resend — enable the ones Takan may use for send/read.</p>
   </div>
 </section>
 
@@ -14,40 +14,62 @@
   <div class="card">
     <div class="card-head">
       <div>
-        <h3>Resend settings</h3>
-        <p class="muted">Key is stored encrypted. Domains must be verified in your Resend account.</p>
+        <h3>Resend API key</h3>
+        <p class="muted">Stored encrypted. Domains are discovered automatically from your Resend account.</p>
       </div>
       {{if .EmailConfigured}}
-        <span class="pill on"><span class="live"></span> Configured</span>
+        <span class="pill on"><span class="live"></span> Key saved</span>
       {{else}}
         <span class="pill off">Not configured</span>
       {{end}}
     </div>
 
-    {{if .EmailConfigured}}
-    <div class="machine-row" style="margin-bottom:1rem">
+    <form method="post" action="/dashboard/email" class="form-stack" style="max-width:100%">
       <div>
-        <div class="name">{{range $i, $d := .EmailDomains}}{{if $i}}, {{end}}{{$d}}{{else}}(no domains){{end}}</div>
-        <div class="faint">API key on file · tools: email_available_domains, email_send(domain, sender, …)</div>
+        <label for="api_key">API key</label>
+        <input id="api_key" name="api_key" type="password" {{if not .EmailConfigured}}required{{end}}
+          placeholder="{{if .EmailConfigured}}leave blank to keep current key{{else}}re_...{{end}}" autocomplete="off"/>
       </div>
-      <form method="post" action="/dashboard/email/clear">
-        <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Clear</button>
-      </form>
-    </div>
-    {{end}}
-
-    <form method="post" action="/dashboard/email" class="form-stack">
-      <div>
-        <label for="domains">Allowed domains (one per line)</label>
-        <textarea id="domains" name="domains" rows="4" required placeholder="example.com&#10;mail.example.org" style="width:100%;font-family:var(--mono);font-size:.85rem">{{range $i, $d := .EmailDomains}}{{if $i}}
-{{end}}{{$d}}{{end}}</textarea>
+      <div class="row">
+        <button type="submit">{{if .EmailConfigured}}Update key &amp; refresh domains{{else}}Save &amp; load domains{{end}}</button>
+        {{if .EmailConfigured}}
+        <button type="submit" formaction="/dashboard/email/refresh" class="secondary">Refresh domains only</button>
+        <button type="submit" formaction="/dashboard/email/clear" class="secondary" formnovalidate
+          onclick="return confirm('Remove API key and domain settings?')">Clear</button>
+        {{end}}
       </div>
-      <div>
-        <label for="api_key">Resend API key</label>
-        <input id="api_key" name="api_key" type="password" {{if not .EmailConfigured}}required{{end}} placeholder="{{if .EmailConfigured}}leave blank to keep{{end}}" autocomplete="off"/>
-      </div>
-      <button type="submit">{{if .EmailConfigured}}Update{{else}}Save &amp; enable{{end}}</button>
     </form>
+
+    {{if .EmailConfigured}}
+    <h3 style="margin-top:1.5rem;margin-bottom:.35rem">Domains</h3>
+    <p class="muted" style="margin-bottom:.75rem">Enable domains for send/list/get tools. Status comes from Resend.</p>
+    {{if .EmailDomainRows}}
+    <div class="machine-list">
+      {{range .EmailDomainRows}}
+      <div class="machine-row">
+        <div>
+          <div class="name">{{.Name}}</div>
+          <div class="faint">
+            status {{.Status}}
+            · send {{.Sending}}
+            · receive {{.Receiving}}
+          </div>
+        </div>
+        <form method="post" action="/dashboard/email/domains/toggle">
+          <input type="hidden" name="domain" value="{{.Name}}"/>
+          <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
+          <label class="switch" title="{{if .Enabled}}Disable{{else}}Enable{{end}}">
+            <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.submit()"/>
+            <span class="slider"></span>
+          </label>
+        </form>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">No domains returned by Resend. Add a domain in the Resend dashboard, then refresh.</div>
+    {{end}}
+    {{end}}
   </div>
 </section>
 {{end}}
