@@ -4,23 +4,6 @@
     <h1>Overview</h1>
     <p class="muted" style="margin-top:.4rem;max-width:48ch">Connect your AI once, then manage modules from here.</p>
   </div>
-  <div class="stats">
-    <div class="stat">
-      <div class="label">Modules</div>
-      <div class="value">{{.ModEnabledCount}}<span class="muted" style="font-size:1rem;font-weight:500"> / {{.ModTotalCount}}</span></div>
-      <div class="hint">enabled</div>
-    </div>
-    <div class="stat">
-      <div class="label">Machines</div>
-      <div class="value">{{.MachOnlineCount}}<span class="muted" style="font-size:1rem;font-weight:500"> / {{.MachTotalCount}}</span></div>
-      <div class="hint">online now</div>
-    </div>
-    <div class="stat">
-      <div class="label">MCP</div>
-      <div class="value" style="font-size:1.1rem;padding-top:.2rem">Live</div>
-      <div class="hint">endpoint ready</div>
-    </div>
-  </div>
 </section>
 
 {{if .Flash}}
