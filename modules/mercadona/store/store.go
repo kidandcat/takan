@@ -18,9 +18,9 @@ func Open(path string) (*sql.DB, error) {
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			path = "./data/mercadona-mcp.db"
+			path = "./data/mercadona.db"
 		} else {
-			path = filepath.Join(home, ".mercadona-mcp", "data.db")
+			path = filepath.Join(home, ".takan", "mercadona.db")
 		}
 	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
