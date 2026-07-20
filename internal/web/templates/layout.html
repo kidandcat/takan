@@ -330,11 +330,31 @@
       color: var(--text);
       font: inherit;
       transition: border-color 0.15s, box-shadow 0.15s;
+      color-scheme: dark;
     }
     input:focus, select:focus, textarea:focus {
       outline: none;
       border-color: var(--border-strong);
       box-shadow: 0 0 0 3px rgba(0, 229, 255, 0.14);
+    }
+    /* Chrome/Safari paint autofilled (esp. password) fields light — force dark. */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus,
+    input:-webkit-autofill:active,
+    textarea:-webkit-autofill,
+    select:-webkit-autofill {
+      -webkit-text-fill-color: var(--text) !important;
+      caret-color: var(--text);
+      border: 1px solid var(--border) !important;
+      transition: background-color 99999s ease-out 0s;
+      box-shadow: 0 0 0 1000px #0a1417 inset !important;
+    }
+    input:-webkit-autofill:focus {
+      border-color: var(--border-strong) !important;
+      box-shadow:
+        0 0 0 1000px #0a1417 inset,
+        0 0 0 3px rgba(0, 229, 255, 0.14) !important;
     }
     button, .btn {
       display: inline-flex;
