@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/mentasystems/colmena v0.0.0
+	github.com/mentasystems/colmena v0.13.1-0.20260706094143-22a1a348be8a
 	golang.org/x/crypto v0.36.0
 	modernc.org/sqlite v1.54.0
 )
@@ -20,7 +20,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-// Colmena v2 is tagged v2.0.0 but the module path is still without /v2.
-// Local path for development; public consumers need a published pseudo-version.
-replace github.com/mentasystems/colmena => ../colmena
