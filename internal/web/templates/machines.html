@@ -1,0 +1,69 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Machines</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Outbound agent on each computer. No inbound SSH required.</p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Registered agents</h3>
+        <p class="muted">Install the agent once per host with the one-liner below.</p>
+      </div>
+      <span class="pill {{if gt .MachOnlineCount 0}}on{{else}}neutral{{end}}">
+        {{if gt .MachOnlineCount 0}}<span class="live"></span>{{end}}
+        {{.MachOnlineCount}} online
+      </span>
+    </div>
+
+    {{if .Machines}}
+    <div class="machine-list">
+      {{range .Machines}}
+      <div class="machine-row">
+        <div class="row" style="gap:.6rem">
+          <span class="name">{{.Name}}</span>
+          {{if .Online}}
+            <span class="pill on"><span class="live"></span> Online</span>
+          {{else}}
+            <span class="pill off">Offline</span>
+          {{end}}
+        </div>
+        <form method="post" action="/dashboard/machines/{{.ID}}/delete" onsubmit="return confirm('Remove machine {{.Name}}?')">
+          <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Remove</button>
+        </form>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">No machines yet. Create one and run the install command on the host.</div>
+    {{end}}
+
+    <h3 style="margin-top:1.25rem;margin-bottom:.35rem">Add machine</h3>
+    <p class="muted" style="margin-bottom:.65rem">Name is stored on the server. The install token is shown once.</p>
+    <form method="post" action="/dashboard/machines" class="form-grid">
+      <div>
+        <label for="mach-name">Name</label>
+        <input id="mach-name" name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="mac, vps1, laptop…"/>
+      </div>
+      <button type="submit">Create + install cmd</button>
+    </form>
+
+    {{if .InstallCmd}}
+    <div style="margin-top:1.15rem;padding:1rem;border-radius:12px;border:1px solid rgba(52,211,153,.28);background:var(--ok-bg)">
+      <p class="ok" style="margin:0 0 .5rem;font-weight:600">Run on the target machine (token shown once)</p>
+      <div class="code-wrap">
+        <pre id="install-cmd">{{.InstallCmd}}</pre>
+        <button type="button" class="copy-btn" onclick="copyText('install-cmd', this)">Copy</button>
+      </div>
+    </div>
+    {{end}}
+  </div>
+</section>
+{{end}}

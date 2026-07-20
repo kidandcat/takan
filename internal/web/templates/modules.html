@@ -1,0 +1,60 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Modules</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Toggle modules on or off. Tools appear and disappear in your AI client without reconnecting.</p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="module-grid">
+    {{range .Modules}}
+    <article class="mod-card{{if .Enabled}} enabled{{end}}">
+      <div class="mod-top">
+        <div class="mod-icon {{.ID}}">
+          {{if eq .ID "machine"}}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+          {{else if eq .ID "mercadona"}}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg>
+          {{else}}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6"/></svg>
+          {{end}}
+        </div>
+        <form method="post" action="/dashboard/modules/{{.ID}}/toggle" title="{{if .Enabled}}Disable{{else}}Enable{{end}}">
+          <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
+          <label class="switch">
+            <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.submit()"/>
+            <span class="slider"></span>
+          </label>
+        </form>
+      </div>
+      <div class="mod-body">
+        <div class="row" style="gap:.45rem">
+          <h3>{{.Name}}</h3>
+          {{if .Enabled}}<span class="pill on">On</span>{{else}}<span class="pill off">Off</span>{{end}}
+          {{if .Ready}}<span class="pill on"><span class="live"></span> Ready</span>
+          {{else if .Enabled}}<span class="pill warn">Needs setup</span>{{end}}
+        </div>
+        <p>{{.Description}}</p>
+      </div>
+      <div class="mod-foot">
+        {{if eq .ID "machine"}}
+          <a href="/dashboard/machines">Configure machines →</a>
+        {{else if eq .ID "mercadona"}}
+          <a href="/dashboard/mercadona">Configure account →</a>
+        {{else}}
+          <span class="faint">—</span>
+        {{end}}
+        <span class="faint">{{.ID}}</span>
+      </div>
+    </article>
+    {{else}}
+    <div class="empty" style="grid-column:1/-1">No modules in catalog yet.</div>
+    {{end}}
+  </div>
+</section>
+{{end}}

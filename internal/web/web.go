@@ -50,7 +50,11 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /register", s.registerGet)
 	mux.HandleFunc("POST /register", s.registerPost)
 	mux.HandleFunc("GET /logout", s.logout)
-	mux.HandleFunc("GET /dashboard", s.dashboard)
+	mux.HandleFunc("GET /dashboard", s.dashOverview)
+	mux.HandleFunc("GET /dashboard/connect", s.dashConnect)
+	mux.HandleFunc("GET /dashboard/modules", s.dashModules)
+	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
+	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("POST /dashboard/modules/{id}/toggle", s.toggleModule)
 	mux.HandleFunc("POST /dashboard/machines", s.createMachine)
 	mux.HandleFunc("POST /dashboard/machines/{id}/delete", s.deleteMachine)
@@ -76,10 +80,12 @@ type pageData struct {
 	MercadonaEmail      string
 	MercadonaPostal     string
 	// Dashboard stats (precomputed for templates)
-	ModEnabledCount  int
-	ModTotalCount    int
-	MachOnlineCount  int
-	MachTotalCount   int
+	ModEnabledCount int
+	ModTotalCount   int
+	MachOnlineCount int
+	MachTotalCount  int
+	// ActiveNav highlights the sidebar item: overview|connect|modules|machines|mercadona
+	ActiveNav string
 }
 
 type modView struct {
@@ -222,17 +228,21 @@ func (s *Server) requireUser(w http.ResponseWriter, r *http.Request) *store.User
 	return u
 }
 
-func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
+func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tmpl string) {
 	u := s.requireUser(w, r)
 	if u == nil {
 		return
 	}
 	data := s.buildDashboard(r.Context(), u)
-	if c, err := r.Cookie("takan_install"); err == nil && c.Value != "" {
-		if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
-			data.InstallCmd = string(raw)
+	data.ActiveNav = nav
+	data.Title = title
+	if nav == "machines" {
+		if c, err := r.Cookie("takan_install"); err == nil && c.Value != "" {
+			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
+				data.InstallCmd = string(raw)
+			}
+			http.SetCookie(w, &http.Cookie{Name: "takan_install", Value: "", Path: "/", MaxAge: -1})
 		}
-		http.SetCookie(w, &http.Cookie{Name: "takan_install", Value: "", Path: "/", MaxAge: -1})
 	}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		data.Flash = f
@@ -242,7 +252,23 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			strings.Contains(lf, "required") ||
 			strings.Contains(lf, "re-enter")
 	}
-	s.page(w, "dashboard.html", data)
+	s.page(w, tmpl, data)
+}
+
+func (s *Server) dashOverview(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "overview", "Overview", "dashboard.html")
+}
+func (s *Server) dashConnect(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "connect", "Connect AI", "connect.html")
+}
+func (s *Server) dashModules(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "modules", "Modules", "modules.html")
+}
+func (s *Server) dashMachines(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "machines", "Machines", "machines.html")
+}
+func (s *Server) dashMercadona(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "mercadona", "Mercadona", "mercadona.html")
 }
 
 func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
@@ -318,7 +344,7 @@ func (s *Server) toggleModule(w http.ResponseWriter, r *http.Request) {
 	if s.OnToolsChanged != nil {
 		s.OnToolsChanged(u.ID)
 	}
-	http.Redirect(w, r, "/dashboard", http.StatusFound)
+	http.Redirect(w, r, "/dashboard/modules", http.StatusFound)
 }
 
 func (s *Server) createMachine(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +355,7 @@ func (s *Server) createMachine(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	_, raw, err := s.Store.CreateMachine(r.Context(), u.ID, r.FormValue("name"))
 	if err != nil {
-		http.Redirect(w, r, "/dashboard?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
 		return
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "machine", true)
@@ -343,7 +369,7 @@ func (s *Server) createMachine(w http.ResponseWriter, r *http.Request) {
 		Path: "/", MaxAge: 300, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.PublicURL, "https"),
 	})
-	http.Redirect(w, r, "/dashboard#machine", http.StatusFound)
+	http.Redirect(w, r, "/dashboard/machines", http.StatusFound)
 }
 
 func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request) {
@@ -352,7 +378,7 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.Store.DeleteMachine(r.Context(), u.ID, r.PathValue("id"))
-	http.Redirect(w, r, "/dashboard#machine", http.StatusFound)
+	http.Redirect(w, r, "/dashboard/machines", http.StatusFound)
 }
 
 func (s *Server) saveMercadona(w http.ResponseWriter, r *http.Request) {
@@ -367,28 +393,28 @@ func (s *Server) saveMercadona(w http.ResponseWriter, r *http.Request) {
 	if pass == "" {
 		_, oldEnc, _, ok, _ := s.Store.GetMercadonaCreds(r.Context(), u.ID)
 		if !ok {
-			http.Redirect(w, r, "/dashboard?flash="+urlQuery("password required"), http.StatusFound)
+			http.Redirect(w, r, "/dashboard/mercadona?flash="+urlQuery("password required"), http.StatusFound)
 			return
 		}
 		plain, err := s.Box.Open(oldEnc)
 		if err != nil {
-			http.Redirect(w, r, "/dashboard?flash="+urlQuery("re-enter password"), http.StatusFound)
+			http.Redirect(w, r, "/dashboard/mercadona?flash="+urlQuery("re-enter password"), http.StatusFound)
 			return
 		}
 		pass = plain
 	}
 	enc, err := s.Box.Seal(pass)
 	if err != nil {
-		http.Redirect(w, r, "/dashboard?flash="+urlQuery(err.Error()), http.StatusFound)
+		http.Redirect(w, r, "/dashboard/mercadona?flash="+urlQuery(err.Error()), http.StatusFound)
 		return
 	}
 	if err := s.Store.SaveMercadonaCreds(r.Context(), u.ID, email, enc, postal); err != nil {
-		http.Redirect(w, r, "/dashboard?flash="+urlQuery(err.Error()), http.StatusFound)
+		http.Redirect(w, r, "/dashboard/mercadona?flash="+urlQuery(err.Error()), http.StatusFound)
 		return
 	}
 	if s.OnMercadonaSave != nil {
 		if err := s.OnMercadonaSave(r.Context(), u.ID, email, pass, postal); err != nil {
-			http.Redirect(w, r, "/dashboard?flash="+urlQuery("Mercadona login failed: "+err.Error()), http.StatusFound)
+			http.Redirect(w, r, "/dashboard/mercadona?flash="+urlQuery("Mercadona login failed: "+err.Error()), http.StatusFound)
 			return
 		}
 	}
@@ -396,7 +422,7 @@ func (s *Server) saveMercadona(w http.ResponseWriter, r *http.Request) {
 	if s.OnToolsChanged != nil {
 		s.OnToolsChanged(u.ID)
 	}
-	http.Redirect(w, r, "/dashboard?flash=Mercadona+linked#mercadona", http.StatusFound)
+	http.Redirect(w, r, "/dashboard/mercadona?flash=Mercadona+linked", http.StatusFound)
 }
 
 func (s *Server) clearMercadona(w http.ResponseWriter, r *http.Request) {
@@ -411,7 +437,7 @@ func (s *Server) clearMercadona(w http.ResponseWriter, r *http.Request) {
 	if s.OnToolsChanged != nil {
 		s.OnToolsChanged(u.ID)
 	}
-	http.Redirect(w, r, "/dashboard#mercadona", http.StatusFound)
+	http.Redirect(w, r, "/dashboard/mercadona", http.StatusFound)
 }
 
 func urlQuery(s string) string {

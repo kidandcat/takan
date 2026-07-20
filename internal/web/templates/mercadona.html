@@ -1,0 +1,61 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Mercadona</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Link your account so cart tools (search, add, list…) work in your AI client.</p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+{{if .Error}}
+  <div class="flash err">{{.Error}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Account link</h3>
+        <p class="muted">Credentials are stored encrypted. Login is verified when you save.</p>
+      </div>
+      {{if .MercadonaConfigured}}
+        <span class="pill on"><span class="live"></span> Linked</span>
+      {{else}}
+        <span class="pill off">Not linked</span>
+      {{end}}
+    </div>
+
+    {{if .MercadonaConfigured}}
+    <div class="machine-row" style="margin-bottom:1rem">
+      <div>
+        <div class="name">{{.MercadonaEmail}}</div>
+        <div class="faint">Postal code {{.MercadonaPostal}}</div>
+      </div>
+      <form method="post" action="/dashboard/mercadona/clear">
+        <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Unlink</button>
+      </form>
+    </div>
+    {{end}}
+
+    <form method="post" action="/dashboard/mercadona" class="form-stack">
+      <div>
+        <label for="m-email">Email</label>
+        <input id="m-email" type="email" name="email" required value="{{.MercadonaEmail}}"/>
+      </div>
+      <div>
+        <label for="m-pass">Password</label>
+        <input id="m-pass" type="password" name="password" {{if not .MercadonaConfigured}}required{{end}} placeholder="{{if .MercadonaConfigured}}leave blank to keep{{end}}"/>
+      </div>
+      <div>
+        <label for="m-postal">Postal code</label>
+        <input id="m-postal" name="postal_code" required pattern="[0-9]{5}" value="{{.MercadonaPostal}}" placeholder="28001"/>
+      </div>
+      <div class="row">
+        <button type="submit">{{if .MercadonaConfigured}}Update credentials{{else}}Save &amp; link{{end}}</button>
+      </div>
+    </form>
+  </div>
+</section>
+{{end}}

@@ -1,0 +1,29 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Connect your AI</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Paste this URL as a custom connector. The client discovers OAuth, opens login, and stores tokens.</p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>MCP endpoint</h3>
+        <p class="muted">One URL is enough — no client ID or secret to copy for public PKCE clients.</p>
+      </div>
+      <span class="pill neutral">OAuth · PKCE</span>
+    </div>
+    <div class="code-wrap">
+      <pre id="mcp-url">{{.MCPURL}}</pre>
+      <button type="button" class="copy-btn" onclick="copyText('mcp-url', this)">Copy</button>
+    </div>
+    <p class="faint" style="margin-top:.75rem">Grok → Connectors → Custom · Claude / Cursor → same idea</p>
+  </div>
+</section>
+{{end}}
