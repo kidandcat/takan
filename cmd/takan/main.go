@@ -17,6 +17,7 @@ import (
 	"github.com/kidandcat/takan/internal/modules"
 	"github.com/kidandcat/takan/internal/modules/machine"
 	"github.com/kidandcat/takan/internal/modules/mercadona"
+	"github.com/kidandcat/takan/internal/oauth"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/internal/web"
 )
@@ -64,10 +65,17 @@ func main() {
 		Mercadona: mercadona.Factory(st),
 	}
 
+	webSrv, err := web.New(st, hub, box, cfg.PublicURL)
+	if err != nil {
+		log.Fatalf("web: %v", err)
+	}
+
 	mcpSrv := &mcp.Server{
-		Name: "takan",
+		Name:      "takan",
+		PublicURL: cfg.PublicURL,
 		Resolve: func(ctx context.Context, bearer string) (string, error) {
-			u, err := st.UserByMCPToken(ctx, bearer)
+			// OAuth access tokens only (no long-lived static API keys).
+			u, err := st.UserByAccessToken(ctx, bearer)
 			if err != nil {
 				return "", err
 			}
@@ -76,13 +84,17 @@ func main() {
 		ToolsFor: prov.ToolsFor,
 	}
 
-	webSrv, err := web.New(st, hub, box, cfg.PublicURL)
-	if err != nil {
-		log.Fatalf("web: %v", err)
+	oauthSrv := &oauth.Server{
+		Store:            st,
+		PublicURL:        cfg.PublicURL,
+		UserFromSession:  webSrv.CurrentUser,
+		CreateSession:    webSrv.CreateWebSession,
+		SetSessionCookie: webSrv.SetSessionCookie,
 	}
 
 	mux := http.NewServeMux()
 	webSrv.Routes(mux)
+	oauthSrv.Routes(mux)
 	mux.HandleFunc("POST /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("GET /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("DELETE /mcp", mcpSrv.HandleHTTP)

@@ -127,6 +127,37 @@ CREATE TABLE IF NOT EXISTS mercadona_creds (
   postal_code TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS oauth_codes (
+  code_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+  scope TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens(user_id);
+
+CREATE TABLE IF NOT EXISTS oauth_refresh (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT '',
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `)
 	return err
 }
@@ -140,14 +171,14 @@ type User struct {
 	CreatedAt    time.Time
 }
 
-func (s *Store) CreateUser(ctx context.Context, email, password string) (*User, string, error) {
+func (s *Store) CreateUser(ctx context.Context, email, password string) (*User, error) {
 	email = normalizeEmail(email)
 	if email == "" || len(password) < 8 {
-		return nil, "", fmt.Errorf("email required and password min 8 chars")
+		return nil, fmt.Errorf("email required and password min 8 chars")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	id := uuid.NewString()
 	now := time.Now().UTC()
@@ -155,20 +186,14 @@ func (s *Store) CreateUser(ctx context.Context, email, password string) (*User, 
 		`INSERT INTO users (id, email, password_hash, created_at) VALUES (?,?,?,?)`,
 		id, email, string(hash), now.Format(time.RFC3339))
 	if err != nil {
-		return nil, "", fmt.Errorf("create user: %w", err)
+		return nil, fmt.Errorf("create user: %w", err)
 	}
-	// default modules rows (disabled)
 	for _, mid := range []string{"machine", "mercadona"} {
 		_, _ = s.db.ExecContext(ctx,
 			`INSERT OR IGNORE INTO user_modules (user_id, module_id, enabled) VALUES (?,?,0)`,
 			id, mid)
 	}
-	// issue MCP token
-	raw, err := s.CreateMCPToken(ctx, id, "default")
-	if err != nil {
-		return nil, "", err
-	}
-	return &User{ID: id, Email: email, PasswordHash: string(hash), CreatedAt: now}, raw, nil
+	return &User{ID: id, Email: email, PasswordHash: string(hash), CreatedAt: now}, nil
 }
 
 func (s *Store) Authenticate(ctx context.Context, email, password string) (*User, error) {
@@ -239,42 +264,115 @@ func (s *Store) DeleteWebSession(ctx context.Context, token string) error {
 	return err
 }
 
-// --- MCP tokens ---
+// --- OAuth access tokens (MCP Authorization: Bearer) ---
 
-func (s *Store) CreateMCPToken(ctx context.Context, userID, name string) (string, error) {
+// SaveAuthCode stores a one-time authorization code (hashed).
+func (s *Store) SaveAuthCode(ctx context.Context, rawCode, userID, clientID, redirectURI, challenge, method, scope string, ttl time.Duration) error {
+	exp := time.Now().UTC().Add(ttl)
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO oauth_codes (code_hash, user_id, client_id, redirect_uri, code_challenge, code_challenge_method, scope, expires_at, used)
+VALUES (?,?,?,?,?,?,?,?,0)`,
+		hashToken(rawCode), userID, clientID, redirectURI, challenge, method, scope, exp.Format(time.RFC3339))
+	return err
+}
+
+// ConsumeAuthCode validates and marks a code used. Returns userID, clientID, redirectURI, challenge, method, scope.
+func (s *Store) ConsumeAuthCode(ctx context.Context, rawCode string) (userID, clientID, redirectURI, challenge, method, scope string, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", "", "", "", "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var exp string
+	var used int
+	err = tx.QueryRowContext(ctx, `
+SELECT user_id, client_id, redirect_uri, code_challenge, code_challenge_method, scope, expires_at, used
+FROM oauth_codes WHERE code_hash = ?`, hashToken(rawCode)).
+		Scan(&userID, &clientID, &redirectURI, &challenge, &method, &scope, &exp, &used)
+	if err != nil {
+		return "", "", "", "", "", "", fmt.Errorf("invalid code")
+	}
+	if used != 0 {
+		return "", "", "", "", "", "", fmt.Errorf("code already used")
+	}
+	t, _ := time.Parse(time.RFC3339, exp)
+	if time.Now().UTC().After(t) {
+		return "", "", "", "", "", "", fmt.Errorf("code expired")
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE oauth_codes SET used = 1 WHERE code_hash = ? AND used = 0`, hashToken(rawCode))
+	if err != nil {
+		return "", "", "", "", "", "", err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return "", "", "", "", "", "", fmt.Errorf("code already used")
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", "", "", "", "", err
+	}
+	return userID, clientID, redirectURI, challenge, method, scope, nil
+}
+
+// IssueAccessToken stores and returns a raw access token.
+func (s *Store) IssueAccessToken(ctx context.Context, userID, clientID, scope string, ttl time.Duration) (string, time.Time, error) {
+	raw, err := randomHex(32)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	exp := time.Now().UTC().Add(ttl)
+	now := time.Now().UTC()
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO oauth_tokens (token_hash, user_id, client_id, scope, expires_at, created_at) VALUES (?,?,?,?,?,?)`,
+		hashToken(raw), userID, clientID, scope, exp.Format(time.RFC3339), now.Format(time.RFC3339))
+	return raw, exp, err
+}
+
+// IssueRefreshToken stores and returns a raw refresh token.
+func (s *Store) IssueRefreshToken(ctx context.Context, userID, clientID, scope string, ttl time.Duration) (string, error) {
 	raw, err := randomHex(32)
 	if err != nil {
 		return "", err
 	}
-	id := uuid.NewString()
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO mcp_tokens (id, user_id, token_hash, name, created_at) VALUES (?,?,?,?,?)`,
-		id, userID, hashToken(raw), name, time.Now().UTC().Format(time.RFC3339))
-	if err != nil {
-		return "", err
-	}
-	return raw, nil
+	exp := time.Now().UTC().Add(ttl)
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO oauth_refresh (token_hash, user_id, client_id, scope, expires_at, created_at) VALUES (?,?,?,?,?,?)`,
+		hashToken(raw), userID, clientID, scope, exp.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	return raw, err
 }
 
-func (s *Store) UserByMCPToken(ctx context.Context, raw string) (*User, error) {
+// ConsumeRefreshToken validates a refresh token.
+func (s *Store) ConsumeRefreshToken(ctx context.Context, raw string) (userID, clientID, scope string, err error) {
+	var exp string
+	err = s.db.QueryRowContext(ctx, `
+SELECT user_id, client_id, scope, expires_at FROM oauth_refresh WHERE token_hash = ?`, hashToken(raw)).
+		Scan(&userID, &clientID, &scope, &exp)
+	if err != nil {
+		return "", "", "", fmt.Errorf("invalid refresh token")
+	}
+	t, _ := time.Parse(time.RFC3339, exp)
+	if time.Now().UTC().After(t) {
+		return "", "", "", fmt.Errorf("refresh token expired")
+	}
+	return userID, clientID, scope, nil
+}
+
+// UserByAccessToken resolves an OAuth access token to a user.
+func (s *Store) UserByAccessToken(ctx context.Context, raw string) (*User, error) {
 	if raw == "" {
 		return nil, sql.ErrNoRows
 	}
-	var userID string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT user_id FROM mcp_tokens WHERE token_hash = ?`, hashToken(raw)).
-		Scan(&userID)
+	var userID, exp string
+	err := s.db.QueryRowContext(ctx, `
+SELECT user_id, expires_at FROM oauth_tokens WHERE token_hash = ?`, hashToken(raw)).
+		Scan(&userID, &exp)
 	if err != nil {
 		return nil, err
 	}
+	t, _ := time.Parse(time.RFC3339, exp)
+	if time.Now().UTC().After(t) {
+		return nil, sql.ErrNoRows
+	}
 	return s.UserByID(ctx, userID)
-}
-
-func (s *Store) LatestMCPTokenHint(ctx context.Context, userID string) (createdAt string, err error) {
-	err = s.db.QueryRowContext(ctx,
-		`SELECT created_at FROM mcp_tokens WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`, userID).
-		Scan(&createdAt)
-	return
 }
 
 // --- modules ---

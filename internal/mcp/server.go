@@ -30,9 +30,10 @@ type RegisteredTool struct {
 
 // Server is multi-tenant Streamable HTTP MCP.
 type Server struct {
-	Name     string
-	Resolve  UserResolver
-	ToolsFor ToolProvider
+	Name         string
+	PublicURL    string // for WWW-Authenticate resource_metadata
+	Resolve      UserResolver
+	ToolsFor     ToolProvider
 }
 
 func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +57,9 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	bearer := bearerFrom(r)
 	userID, err := s.Resolve(r.Context(), bearer)
 	if err != nil || userID == "" {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="takan"`)
+		meta := strings.TrimRight(s.PublicURL, "/") + "/.well-known/oauth-protected-resource"
+		w.Header().Set("WWW-Authenticate",
+			`Bearer realm="takan", resource_metadata="`+meta+`"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

@@ -2,16 +2,23 @@
 <div class="card">
   <h1>Dashboard</h1>
   <p class="muted">Connect your AI client once. Toggle modules below.</p>
-  <h2>MCP connection</h2>
-  <p class="muted">URL</p>
+  <h2>MCP connection (OAuth)</h2>
+  <p class="muted">Add a Custom MCP connector in Grok / Claude. Auth is OAuth — no static token.</p>
+  <p class="muted">MCP URL</p>
   <pre>{{.MCPURL}}</pre>
-  <p class="muted">Bearer token (keep secret)</p>
-  <pre id="token">{{.MCPToken}}</pre>
-  <p class="muted">Header: <code>Authorization: Bearer &lt;token&gt;</code></p>
-  {{if .TokenNote}}<p class="ok">{{.TokenNote}}</p>{{end}}
-  <form method="post" action="/dashboard/rotate-token" style="display:inline">
-    <button type="submit" class="secondary">Rotate MCP token</button>
-  </form>
+  <p class="muted">Client ID</p>
+  <pre>{{.OAuthClientID}}</pre>
+  <p class="muted">Client Secret</p>
+  <pre>(leave empty — PKCE only)</pre>
+  <p class="muted">Authorization Endpoint</p>
+  <pre>{{.OAuthAuthorize}}</pre>
+  <p class="muted">Token Endpoint</p>
+  <pre>{{.OAuthToken}}</pre>
+  <p class="muted">Token Auth Method</p>
+  <pre>none (PKCE only)</pre>
+  <p class="muted">Scopes (optional)</p>
+  <pre>mcp</pre>
+  <p class="muted">AS metadata: <code>{{.OAuthMetadata}}</code></p>
 </div>
 
 <div class="card" id="modules">

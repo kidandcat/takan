@@ -50,7 +50,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/machines/{id}/delete", s.deleteMachine)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
 	mux.HandleFunc("POST /dashboard/mercadona/clear", s.clearMercadona)
-	mux.HandleFunc("POST /dashboard/rotate-token", s.rotateToken)
 }
 
 type pageData struct {
@@ -59,8 +58,10 @@ type pageData struct {
 	Error               string
 	Flash               string
 	MCPURL              string
-	MCPToken            string
-	TokenNote           string
+	OAuthClientID       string
+	OAuthAuthorize      string
+	OAuthToken          string
+	OAuthMetadata       string
 	Modules             []modView
 	Machines            []machView
 	InstallCmd          string
@@ -178,7 +179,7 @@ func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
-	u, mcpTok, err := s.Store.CreateUser(r.Context(), r.FormValue("email"), r.FormValue("password"))
+	u, err := s.Store.CreateUser(r.Context(), r.FormValue("email"), r.FormValue("password"))
 	if err != nil {
 		s.page(w, "register.html", pageData{Title: "Register", Error: err.Error()})
 		return
@@ -189,11 +190,6 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSession(w, tok)
-	// stash mcp token once in flash cookie
-	http.SetCookie(w, &http.Cookie{
-		Name: "takan_mcp_once", Value: mcpTok, Path: "/", MaxAge: 300, HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.PublicURL, "https"),
-	})
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
@@ -220,11 +216,6 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := s.buildDashboard(r.Context(), u)
-	if c, err := r.Cookie("takan_mcp_once"); err == nil && c.Value != "" {
-		data.MCPToken = c.Value
-		data.TokenNote = "This is the only time the full MCP token is shown (or after rotate)."
-		http.SetCookie(w, &http.Cookie{Name: "takan_mcp_once", Value: "", Path: "/", MaxAge: -1})
-	}
 	if c, err := r.Cookie("takan_install"); err == nil && c.Value != "" {
 		if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
 			data.InstallCmd = string(raw)
@@ -239,9 +230,13 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data := pageData{
-		Title:  "Dashboard",
-		User:   u,
-		MCPURL: s.PublicURL + "/mcp",
+		Title:          "Dashboard",
+		User:           u,
+		MCPURL:         s.PublicURL + "/mcp",
+		OAuthClientID:  "takan",
+		OAuthAuthorize: s.PublicURL + "/oauth/authorize",
+		OAuthToken:     s.PublicURL + "/oauth/token",
+		OAuthMetadata:  s.PublicURL + "/.well-known/oauth-authorization-server",
 	}
 	mods, _ := s.Store.ListModules(ctx, u.ID)
 	cat := map[string]modules.Info{}
@@ -281,9 +276,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data.MercadonaConfigured = ok
 	data.MercadonaEmail = email
 	data.MercadonaPostal = postal
-	if data.MCPToken == "" {
-		data.MCPToken = "(hidden — rotate to generate a new token)"
-	}
 	return data
 }
 
@@ -368,23 +360,21 @@ func (s *Server) clearMercadona(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard#mercadona", http.StatusFound)
 }
 
-func (s *Server) rotateToken(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	raw, err := s.Store.CreateMCPToken(r.Context(), u.ID, "rotated")
-	if err != nil {
-		http.Redirect(w, r, "/dashboard", http.StatusFound)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "takan_mcp_once", Value: raw, Path: "/", MaxAge: 300, HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.PublicURL, "https"),
-	})
-	http.Redirect(w, r, "/dashboard", http.StatusFound)
-}
-
 func urlQuery(s string) string {
 	return url.QueryEscape(s)
+}
+
+// CurrentUser is used by OAuth authorize to reuse the panel session.
+func (s *Server) CurrentUser(r *http.Request) *store.User {
+	return s.currentUser(r)
+}
+
+// CreateWebSession exposes session creation for OAuth login.
+func (s *Server) CreateWebSession(ctx context.Context, userID string) (string, error) {
+	return s.Store.CreateWebSession(ctx, userID, 30*24*time.Hour)
+}
+
+// SetSessionCookie is used after OAuth login.
+func (s *Server) SetSessionCookie(w http.ResponseWriter, token string) {
+	s.setSession(w, token)
 }
