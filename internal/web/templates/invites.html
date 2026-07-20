@@ -1,10 +1,22 @@
 {{define "content"}}
 <section class="section hero">
-  <div>
-    <h1>Invites</h1>
-    <p class="muted" style="margin-top:.4rem;max-width:52ch">
-      Share invite codes so others can create a Takan account. Each code works once.
-    </p>
+  <div class="row" style="justify-content:space-between;align-items:flex-start;width:100%">
+    <div>
+      <h1>Invites</h1>
+      <p class="muted" style="margin-top:.4rem;max-width:52ch">
+        Share invite codes so others can create a Takan account. Each code works once.
+      </p>
+    </div>
+    <div class="row" style="gap:.55rem;align-items:center">
+      {{if .InviteQuota}}
+        {{if .InviteQuota.Unlimited}}
+        <span class="pill on">∞ · {{.InviteQuota.Created}} issued</span>
+        {{else}}
+        <span class="pill neutral">{{.InviteQuota.Remaining}} left · {{.InviteQuota.Created}}/{{.InviteQuota.Quota}}</span>
+        {{end}}
+      {{end}}
+      <button type="button" class="btn" style="margin-top:0" onclick="openInviteModal()">Create invite</button>
+    </div>
   </div>
 </section>
 
@@ -32,38 +44,6 @@
   </p>
 </div>
 {{end}}
-
-<section class="section">
-  <div class="section-title"><span class="dot"></span><h2>Your budget</h2></div>
-  <div class="card">
-    {{if .InviteQuota}}
-      {{if .InviteQuota.Unlimited}}
-        <p><span class="pill on">Unlimited</span> You can create as many invites as you need.</p>
-        <p class="muted" style="margin-top:.4rem">Issued so far: <strong>{{.InviteQuota.Created}}</strong></p>
-      {{else}}
-        <p>
-          <strong>{{.InviteQuota.Remaining}}</strong> remaining
-          · <span class="muted">{{.InviteQuota.Created}} / {{.InviteQuota.Quota}} used</span>
-        </p>
-      {{end}}
-    {{else}}
-      <p class="muted">Could not load invite quota.</p>
-    {{end}}
-  </div>
-</section>
-
-<section class="section">
-  <div class="section-title"><span class="dot"></span><h2>Create invite</h2></div>
-  <div class="card">
-    <form method="post" action="/dashboard/invites">
-      <label for="note">Note (optional)</label>
-      <input id="note" name="note" placeholder="e.g. for Alex"/>
-      <label for="days">Expires in (days)</label>
-      <input id="days" name="days" type="number" min="1" max="365" value="30"/>
-      <button type="submit" style="margin-top:1rem">Create invite</button>
-    </form>
-  </div>
-</section>
 
 <section class="section">
   <div class="section-title"><span class="dot"></span><h2>Issued codes</h2></div>
@@ -103,7 +83,48 @@
     </table>
   </div>
   {{else}}
-  <div class="card"><p class="muted">No invites yet.</p></div>
+  <div class="card">
+    <div class="empty">No invites yet. <button type="button" class="ghost" onclick="openInviteModal()" style="font-size:.9rem">Create one</button></div>
+  </div>
   {{end}}
 </section>
+
+<div class="modal-backdrop" id="invite-modal" hidden onclick="if(event.target===this)closeInviteModal()">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="invite-modal-title" style="max-width:28rem">
+    <div class="modal-head">
+      <h3 id="invite-modal-title">Create invite</h3>
+      <button type="button" class="icon-btn" aria-label="Close" onclick="closeInviteModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <form method="post" action="/dashboard/invites" id="invite-form">
+      <label for="invite-note">Note <span class="faint">(optional)</span></label>
+      <input id="invite-note" name="note" placeholder="e.g. for Alex" autocomplete="off"/>
+      <label for="invite-days">Expires in (days)</label>
+      <input id="invite-days" name="days" type="number" min="1" max="365" value="30"/>
+      <div class="row" style="gap:.55rem;margin-top:1.1rem;justify-content:flex-end">
+        <button type="button" class="btn secondary" style="margin:0" onclick="closeInviteModal()">Cancel</button>
+        <button type="submit" style="margin:0">Create invite</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var modal = document.getElementById('invite-modal');
+  window.openInviteModal = function () {
+    if (!modal) return;
+    modal.hidden = false;
+    var note = document.getElementById('invite-note');
+    if (note) { note.value = ''; note.focus(); }
+  };
+  window.closeInviteModal = function () {
+    if (modal) modal.hidden = true;
+  };
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && modal && !modal.hidden) closeInviteModal();
+  });
+})();
+</script>
 {{end}}
