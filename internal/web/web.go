@@ -254,24 +254,16 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
+// Public registration is closed; accounts are invitation-only for now.
+const registerClosedMsg = "Registration is closed. Takan is invitation-only for now."
+
 func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
-	s.page(w, "register.html", pageData{Title: "Register"})
+	s.page(w, "register.html", pageData{Title: "Register", Error: registerClosedMsg})
 }
 
 func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	u, err := s.Store.CreateUser(r.Context(), r.FormValue("email"), r.FormValue("password"))
-	if err != nil {
-		s.page(w, "register.html", pageData{Title: "Register", Error: err.Error()})
-		return
-	}
-	tok, err := s.Store.CreateWebSession(r.Context(), u.ID, 30*24*time.Hour)
-	if err != nil {
-		s.page(w, "register.html", pageData{Title: "Register", Error: err.Error()})
-		return
-	}
-	s.setSession(w, tok)
-	http.Redirect(w, r, "/dashboard", http.StatusFound)
+	w.WriteHeader(http.StatusForbidden)
+	s.page(w, "register.html", pageData{Title: "Register", Error: registerClosedMsg})
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {

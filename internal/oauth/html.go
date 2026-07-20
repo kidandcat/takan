@@ -22,7 +22,7 @@ func (s *Server) renderLogin(w http.ResponseWriter, q url.Values, errMsg string)
     <input type="password" name="password" required autocomplete="current-password"/>
     <button type="submit">Sign in &amp; authorize</button>
   </form>
-  <p class="muted">No account? <a href="/register">Create one</a> first, then come back.</p>
+  <p class="muted">Accounts are invitation-only for now.</p>
 `))
 }
 
