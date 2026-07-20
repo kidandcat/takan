@@ -91,7 +91,7 @@ type pageData struct {
 	MercadonaEmail      string
 	MercadonaPostal     string
 	EmailConfigured     bool
-	EmailFrom           string
+	EmailDomains        []string
 	EmailKeySet         bool
 	MemoryContent       string
 	MemoryUpdated       string
@@ -361,9 +361,9 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data.MercadonaConfigured = ok
 	data.MercadonaEmail = email
 	data.MercadonaPostal = postal
-	if _, from, eok, _ := s.Store.GetEmailSettings(ctx, u.ID); eok {
+	if _, domains, eok, _ := s.Store.GetEmailSettings(ctx, u.ID); eok {
 		data.EmailConfigured = true
-		data.EmailFrom = from
+		data.EmailDomains = domains
 		data.EmailKeySet = true
 	}
 	if content, updated, mok, _ := s.Store.GetMemory(ctx, u.ID); mok {
@@ -516,35 +516,38 @@ func (s *Server) saveEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	from := strings.TrimSpace(r.FormValue("from"))
+	domainsRaw := r.FormValue("domains")
+	var domains []string
+	for _, line := range strings.Split(domainsRaw, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			domains = append(domains, line)
+		}
+	}
+	if len(domains) == 0 {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("at least one domain required"), http.StatusFound)
+		return
+	}
 	key := strings.TrimSpace(r.FormValue("api_key"))
+	var enc string
 	if key == "" {
-		oldEnc, oldFrom, ok, _ := s.Store.GetEmailSettings(r.Context(), u.ID)
+		oldEnc, _, ok, _ := s.Store.GetEmailSettings(r.Context(), u.ID)
 		if !ok {
 			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("api key required"), http.StatusFound)
 			return
 		}
-		if from == "" {
-			from = oldFrom
-		}
-		if err := s.Store.SaveEmailSettings(r.Context(), u.ID, oldEnc, from); err != nil {
-			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
-			return
-		}
+		enc = oldEnc
 	} else {
-		if from == "" {
-			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery("from address required"), http.StatusFound)
-			return
-		}
-		enc, err := s.Box.Seal(key)
+		var err error
+		enc, err = s.Box.Seal(key)
 		if err != nil {
 			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
 			return
 		}
-		if err := s.Store.SaveEmailSettings(r.Context(), u.ID, enc, from); err != nil {
-			http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
-			return
-		}
+	}
+	if err := s.Store.SaveEmailSettings(r.Context(), u.ID, enc, domains); err != nil {
+		http.Redirect(w, r, "/dashboard/email?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "email", true)
 	if s.OnToolsChanged != nil {

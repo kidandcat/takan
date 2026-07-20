@@ -18,7 +18,7 @@ type Info struct {
 var Catalog = []Info{
 	{ID: "machine", Name: "Machine", Description: "Remote shell on your computers via takan-agent (outbound)."},
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
-	{ID: "email", Name: "Email", Description: "Send email via Resend (you bring the API key)."},
+	{ID: "email", Name: "Email", Description: "Send email via Resend (API key + allowed domains in panel)."},
 	{ID: "memory", Name: "Memory", Description: "Short-lived working memory for your AI client (per account)."},
 }
 

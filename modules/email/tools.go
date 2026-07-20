@@ -16,79 +16,163 @@ import (
 	"github.com/kidandcat/takan/internal/store"
 )
 
-// Factory returns email_* tools. API keys are per-user (panel).
+// Factory returns email_* tools. API key + allowed domains are per-user (panel).
 func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID string) []mcp.RegisteredTool {
 	return func(ctx context.Context, userID string) []mcp.RegisteredTool {
 		return []mcp.RegisteredTool{
 			{
 				Tool: mcp.Tool{
+					Name: "email_available_domains",
+					Description: "List Resend domains configured for this account. " +
+						"Call this before email_send if you do not know which domain/sender to use — " +
+						"then ask the user which domain and local sender name they want.",
+					InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+				},
+				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					_, domains, ok, err := st.GetEmailSettings(ctx, userID)
+					if err != nil {
+						return "", err
+					}
+					if !ok || len(domains) == 0 {
+						return "", fmt.Errorf("email not configured — open Takan panel → Email, add Resend API key and domains")
+					}
+					return marshal(map[string]any{
+						"domains": domains,
+						"hint":    "Use email_send with domain + sender (local part, e.g. hello). Ask the user if unsure.",
+					})
+				},
+			},
+			{
+				Tool: mcp.Tool{
 					Name: "email_send",
-					Description: "Send an email via the user's Resend API key. " +
-						"Requires Email module configured in the Takan panel (API key + default from).",
+					Description: "Send an email via Resend. Requires domain and sender (local part). " +
+						"If domain/sender are unknown, call email_available_domains and ask the user. " +
+						"Example: domain=example.com sender=hello → From: hello@example.com",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
+							"domain": map[string]any{
+								"type":        "string",
+								"description": "Allowed sending domain from email_available_domains (e.g. example.com)",
+							},
+							"sender": map[string]any{
+								"type":        "string",
+								"description": "Local part of From (e.g. hello or noreply). Not a full address.",
+							},
 							"to":      map[string]any{"type": "string", "description": "Recipient email"},
 							"subject": map[string]any{"type": "string"},
 							"body":    map[string]any{"type": "string", "description": "Plain-text body"},
 							"html":    map[string]any{"type": "string", "description": "Optional HTML body"},
-							"from":    map[string]any{"type": "string", "description": "Override from address"},
 						},
-						"required": []string{"to", "subject", "body"},
+						"required": []string{"domain", "sender", "to", "subject", "body"},
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-					keyEnc, defaultFrom, ok, err := st.GetEmailSettings(ctx, userID)
+					keyEnc, domains, ok, err := st.GetEmailSettings(ctx, userID)
 					if err != nil {
 						return "", err
 					}
-					if !ok {
-						return "", fmt.Errorf("email not configured — open Takan panel → Email and save your Resend API key")
+					if !ok || len(domains) == 0 {
+						return "", fmt.Errorf("email not configured — open Takan panel → Email and save Resend API key + domains")
 					}
 					apiKey, err := box.Open(keyEnc)
 					if err != nil {
 						return "", fmt.Errorf("decrypt api key: %w", err)
 					}
+					domain, _ := args["domain"].(string)
+					sender, _ := args["sender"].(string)
 					to, _ := args["to"].(string)
 					subject, _ := args["subject"].(string)
 					body, _ := args["body"].(string)
 					html, _ := args["html"].(string)
-					from, _ := args["from"].(string)
+
+					from, err := buildFrom(domain, sender, domains)
+					if err != nil {
+						return "", err
+					}
 					to = strings.TrimSpace(to)
 					subject = strings.TrimSpace(subject)
-					from = strings.TrimSpace(from)
-					if from == "" {
-						from = defaultFrom
-					}
-					if to == "" || subject == "" || from == "" {
-						return "", fmt.Errorf("to, subject and from are required (set default from in panel)")
+					if to == "" || subject == "" {
+						return "", fmt.Errorf("to and subject are required")
 					}
 					id, err := sendResend(ctx, apiKey, from, to, subject, body, html)
 					if err != nil {
 						return "", err
 					}
-					return marshal(map[string]any{"status": "sent", "id": id, "to": to, "from": from})
+					return marshal(map[string]any{
+						"status": "sent",
+						"id":     id,
+						"to":     to,
+						"from":   from,
+						"domain": normalizeDomain(domain),
+					})
 				},
 			},
 			{
 				Tool: mcp.Tool{
 					Name:        "email_status",
-					Description: "Check whether Resend email is configured for this account.",
+					Description: "Check whether Resend email is configured and list allowed domains.",
 					InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-					_, from, ok, err := st.GetEmailSettings(ctx, userID)
+					_, domains, ok, err := st.GetEmailSettings(ctx, userID)
 					if err != nil {
 						return "", err
 					}
-					if !ok {
-						return "Email module ON but not configured. Add Resend API key in the panel.", nil
+					if !ok || len(domains) == 0 {
+						return "Email module ON but not configured. Add Resend API key and domains in the panel.", nil
 					}
-					return fmt.Sprintf("Email ready. Default from: %s", from), nil
+					return marshal(map[string]any{
+						"status":  "ready",
+						"domains": domains,
+					})
 				},
 			},
 		}
 	}
+}
+
+func buildFrom(domain, sender string, allowed []string) (string, error) {
+	domain = normalizeDomain(domain)
+	sender = strings.TrimSpace(sender)
+	if domain == "" {
+		return "", fmt.Errorf("domain required — call email_available_domains and ask the user which domain to use")
+	}
+	if sender == "" {
+		return "", fmt.Errorf("sender required — local part only (e.g. hello). Ask the user if unsure")
+	}
+	// If AI passed full email as sender, extract local + verify domain.
+	if strings.Contains(sender, "@") {
+		parts := strings.SplitN(sender, "@", 2)
+		sender = strings.TrimSpace(parts[0])
+		sd := normalizeDomain(parts[1])
+		if sd != "" && sd != domain {
+			return "", fmt.Errorf("sender domain %q does not match domain %q", sd, domain)
+		}
+	}
+	sender = strings.Trim(sender, "<>\"' ")
+	if sender == "" || strings.ContainsAny(sender, " @<>") {
+		return "", fmt.Errorf("invalid sender local part %q", sender)
+	}
+	ok := false
+	for _, d := range allowed {
+		if d == domain {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return "", fmt.Errorf("domain %q is not allowed; available: %s — ask the user which to use",
+			domain, strings.Join(allowed, ", "))
+	}
+	return sender + "@" + domain, nil
+}
+
+func normalizeDomain(d string) string {
+	d = strings.ToLower(strings.TrimSpace(d))
+	d = strings.TrimPrefix(d, "@")
+	d = strings.TrimSuffix(d, ".")
+	return d
 }
 
 func sendResend(ctx context.Context, apiKey, from, to, subject, text, html string) (string, error) {

@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,6 +58,10 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 	}
 	s := &Store{node: node, db: node.DB()}
 	if err := s.migrate(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
+	if err := s.migrateEmailSettings(); err != nil {
 		_ = node.Close()
 		return nil, err
 	}
@@ -162,7 +168,7 @@ CREATE TABLE IF NOT EXISTS oauth_refresh (
 CREATE TABLE IF NOT EXISTS email_settings (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   api_key_enc TEXT NOT NULL,
-  from_addr TEXT NOT NULL DEFAULT '',
+  domains TEXT NOT NULL DEFAULT '[]',
   updated_at TEXT NOT NULL
 );
 
@@ -591,33 +597,147 @@ func (s *Store) DeleteMercadonaCreds(ctx context.Context, userID string) error {
 
 // --- email (Resend) ---
 
-func (s *Store) SaveEmailSettings(ctx context.Context, userID, apiKeyEnc, fromAddr string) error {
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO email_settings (user_id, api_key_enc, from_addr, updated_at) VALUES (?,?,?,?)
+// migrateEmailSettings upgrades from_addr → domains JSON list.
+func (s *Store) migrateEmailSettings() error {
+	rows, err := s.db.Query(`PRAGMA table_info(email_settings)`)
+	if err != nil {
+		return err
+	}
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		cols[name] = true
+	}
+	rows.Close()
+	if len(cols) == 0 {
+		return nil // table created fresh with domains
+	}
+	if cols["domains"] {
+		return nil
+	}
+	if cols["from_addr"] {
+		if _, err := s.db.Exec(`ALTER TABLE email_settings ADD COLUMN domains TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return err
+		}
+		// Convert single from addresses to domain list.
+		r2, err := s.db.Query(`SELECT user_id, from_addr FROM email_settings`)
+		if err != nil {
+			return err
+		}
+		type row struct{ uid, from string }
+		var list []row
+		for r2.Next() {
+			var u, f string
+			if err := r2.Scan(&u, &f); err != nil {
+				r2.Close()
+				return err
+			}
+			list = append(list, row{u, f})
+		}
+		r2.Close()
+		for _, it := range list {
+			dom := domainFromEmail(it.from)
+			raw := "[]"
+			if dom != "" {
+				b, _ := json.Marshal([]string{dom})
+				raw = string(b)
+			}
+			if _, err := s.db.Exec(`UPDATE email_settings SET domains = ? WHERE user_id = ?`, raw, it.uid); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func domainFromEmail(addr string) string {
+	addr = strings.TrimSpace(strings.ToLower(addr))
+	if i := strings.LastIndexByte(addr, '@'); i >= 0 && i+1 < len(addr) {
+		return addr[i+1:]
+	}
+	// bare domain
+	if strings.Contains(addr, ".") && !strings.Contains(addr, " ") {
+		return strings.TrimPrefix(addr, "@")
+	}
+	return ""
+}
+
+func (s *Store) SaveEmailSettings(ctx context.Context, userID, apiKeyEnc string, domains []string) error {
+	clean := normalizeDomains(domains)
+	raw, err := json.Marshal(clean)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO email_settings (user_id, api_key_enc, domains, updated_at) VALUES (?,?,?,?)
 ON CONFLICT(user_id) DO UPDATE SET
   api_key_enc = excluded.api_key_enc,
-  from_addr = excluded.from_addr,
+  domains = excluded.domains,
   updated_at = excluded.updated_at`,
-		userID, apiKeyEnc, fromAddr, time.Now().UTC().Format(time.RFC3339))
+		userID, apiKeyEnc, string(raw), time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 
-func (s *Store) GetEmailSettings(ctx context.Context, userID string) (apiKeyEnc, fromAddr string, ok bool, err error) {
+func (s *Store) GetEmailSettings(ctx context.Context, userID string) (apiKeyEnc string, domains []string, ok bool, err error) {
+	var raw string
 	err = s.db.QueryRowContext(ctx,
-		`SELECT api_key_enc, from_addr FROM email_settings WHERE user_id = ?`, userID).
-		Scan(&apiKeyEnc, &fromAddr)
+		`SELECT api_key_enc, domains FROM email_settings WHERE user_id = ?`, userID).
+		Scan(&apiKeyEnc, &raw)
 	if err == sql.ErrNoRows {
-		return "", "", false, nil
+		return "", nil, false, nil
 	}
 	if err != nil {
-		return "", "", false, err
+		return "", nil, false, err
 	}
-	return apiKeyEnc, fromAddr, true, nil
+	domains = parseDomainsJSON(raw)
+	return apiKeyEnc, domains, true, nil
 }
 
 func (s *Store) DeleteEmailSettings(ctx context.Context, userID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM email_settings WHERE user_id = ?`, userID)
 	return err
+}
+
+func normalizeDomains(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range in {
+		d = strings.ToLower(strings.TrimSpace(d))
+		d = strings.TrimPrefix(d, "@")
+		d = strings.TrimSuffix(d, ".")
+		if d == "" || !strings.Contains(d, ".") {
+			continue
+		}
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
+}
+
+func parseDomainsJSON(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err == nil {
+		return normalizeDomains(list)
+	}
+	// fallback: newline / comma separated
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == ',' || r == ';' || r == ' '
+	})
+	return normalizeDomains(parts)
 }
 
 // --- memory ---
