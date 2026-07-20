@@ -1,14 +1,19 @@
 {{define "content"}}
-<div class="card" style="max-width:420px">
-  <h1>Create account</h1>
+<div class="card auth-card">
+  <div class="card-head">
+    <div>
+      <h1>Create account</h1>
+      <p class="muted" style="margin-top:.35rem">Start wiring modules into your AI client.</p>
+    </div>
+  </div>
   {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
   <form method="post" action="/register">
-    <label>Email</label>
-    <input type="email" name="email" required autocomplete="username"/>
-    <label>Password (min 8)</label>
-    <input type="password" name="password" required minlength="8" autocomplete="new-password"/>
-    <button type="submit">Create account</button>
+    <label for="email">Email</label>
+    <input id="email" type="email" name="email" required autocomplete="username"/>
+    <label for="password">Password (min 8)</label>
+    <input id="password" type="password" name="password" required minlength="8" autocomplete="new-password"/>
+    <button type="submit" style="width:100%">Create account</button>
   </form>
-  <p class="muted" style="margin-top:1rem">Already have one? <a href="/login">Log in</a></p>
+  <p class="muted" style="margin-top:1.1rem;text-align:center">Already have one? <a href="/login">Log in</a></p>
 </div>
 {{end}}

@@ -63,6 +63,7 @@ type pageData struct {
 	User                *store.User
 	Error               string
 	Flash               string
+	FlashIsError        bool
 	MCPURL              string
 	OAuthClientID       string
 	OAuthAuthorize      string
@@ -74,6 +75,11 @@ type pageData struct {
 	MercadonaConfigured bool
 	MercadonaEmail      string
 	MercadonaPostal     string
+	// Dashboard stats (precomputed for templates)
+	ModEnabledCount  int
+	ModTotalCount    int
+	MachOnlineCount  int
+	MachTotalCount   int
 }
 
 type modView struct {
@@ -230,6 +236,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		data.Flash = f
+		lf := strings.ToLower(f)
+		data.FlashIsError = strings.Contains(lf, "error") ||
+			strings.Contains(lf, "fail") ||
+			strings.Contains(lf, "required") ||
+			strings.Contains(lf, "re-enter")
 	}
 	s.page(w, "dashboard.html", data)
 }
@@ -274,11 +285,20 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			mv.Ready = m.Enabled && ok
 		}
 		data.Modules = append(data.Modules, mv)
+		if m.Enabled {
+			data.ModEnabledCount++
+		}
 	}
+	data.ModTotalCount = len(data.Modules)
 	ms, _ := s.Store.ListMachines(ctx, u.ID)
 	for _, m := range ms {
-		data.Machines = append(data.Machines, machView{ID: m.ID, Name: m.Name, Online: s.Hub.Online(m.ID)})
+		online := s.Hub.Online(m.ID)
+		data.Machines = append(data.Machines, machView{ID: m.ID, Name: m.Name, Online: online})
+		if online {
+			data.MachOnlineCount++
+		}
 	}
+	data.MachTotalCount = len(data.Machines)
 	email, _, postal, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
 	data.MercadonaConfigured = ok
 	data.MercadonaEmail = email

@@ -1,84 +1,204 @@
 {{define "content"}}
-<div class="card">
-  <h1>Dashboard</h1>
-  <p class="muted">Connect your AI client once. Toggle modules below.</p>
-  <h2>Connect your AI</h2>
-  <p class="muted">Paste this URL as a custom MCP / connector. The client discovers OAuth, opens a login, and stores tokens — nothing else to copy.</p>
-  <pre id="mcp-url">{{.MCPURL}}</pre>
-  <p class="muted">Grok: Connectors → Custom → this URL. Claude / Cursor: same idea.</p>
-</div>
-
-<div class="card" id="modules">
-  <h1>Modules</h1>
-  {{range .Modules}}
-  <div class="module">
-    <div>
-      <div class="row">
-        <strong>{{.Name}}</strong>
-        {{if .Enabled}}<span class="pill on">ON</span>{{else}}<span class="pill off">OFF</span>{{end}}
-        {{if .Ready}}<span class="pill on">ready</span>{{else if .Enabled}}<span class="pill off">needs setup</span>{{end}}
-      </div>
-      <p class="muted" style="margin:.35rem 0 0">{{.Description}}</p>
+<section class="section hero" id="overview">
+  <div>
+    <h1>Control panel</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:42ch">One MCP connection. Enable modules and wire your life into the AI client.</p>
+  </div>
+  <div class="stats">
+    <div class="stat">
+      <div class="label">Modules</div>
+      <div class="value">{{.ModEnabledCount}}<span class="muted" style="font-size:1rem;font-weight:500"> / {{.ModTotalCount}}</span></div>
+      <div class="hint">enabled</div>
     </div>
-    <form method="post" action="/dashboard/modules/{{.ID}}/toggle">
-      <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
-      <button type="submit" class="{{if .Enabled}}secondary{{end}}">{{if .Enabled}}Disable{{else}}Enable{{end}}</button>
+    <div class="stat">
+      <div class="label">Machines</div>
+      <div class="value">{{.MachOnlineCount}}<span class="muted" style="font-size:1rem;font-weight:500"> / {{.MachTotalCount}}</span></div>
+      <div class="hint">online now</div>
+    </div>
+    <div class="stat">
+      <div class="label">MCP</div>
+      <div class="value" style="font-size:1.1rem;padding-top:.2rem">Live</div>
+      <div class="hint">{{.MCPURL}}</div>
+    </div>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+{{if .Error}}
+  <div class="flash err">{{.Error}}</div>
+{{end}}
+
+<section class="section" id="connect">
+  <div class="section-title"><span class="dot"></span><h2>Connect your AI</h2></div>
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>MCP endpoint</h3>
+        <p class="muted">Paste this URL as a custom connector. The client discovers OAuth, opens login, and stores tokens.</p>
+      </div>
+      <span class="pill neutral">OAuth · PKCE</span>
+    </div>
+    <div class="code-wrap">
+      <pre id="mcp-url">{{.MCPURL}}</pre>
+      <button type="button" class="copy-btn" onclick="copyText('mcp-url', this)">Copy</button>
+    </div>
+    <p class="faint" style="margin-top:.75rem">Grok → Connectors → Custom · Claude / Cursor → same idea</p>
+  </div>
+</section>
+
+<section class="section" id="modules">
+  <div class="section-title"><span class="dot"></span><h2>Modules</h2></div>
+  <div class="module-grid">
+    {{range .Modules}}
+    <article class="mod-card{{if .Enabled}} enabled{{end}}">
+      <div class="mod-top">
+        <div class="mod-icon {{.ID}}">
+          {{if eq .ID "machine"}}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+          {{else if eq .ID "mercadona"}}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg>
+          {{else}}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6"/></svg>
+          {{end}}
+        </div>
+        <form method="post" action="/dashboard/modules/{{.ID}}/toggle" title="{{if .Enabled}}Disable{{else}}Enable{{end}}">
+          <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
+          <label class="switch">
+            <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.submit()"/>
+            <span class="slider"></span>
+          </label>
+        </form>
+      </div>
+      <div class="mod-body">
+        <div class="row" style="gap:.45rem">
+          <h3>{{.Name}}</h3>
+          {{if .Enabled}}<span class="pill on">On</span>{{else}}<span class="pill off">Off</span>{{end}}
+          {{if .Ready}}<span class="pill on"><span class="live"></span> Ready</span>
+          {{else if .Enabled}}<span class="pill warn">Needs setup</span>{{end}}
+        </div>
+        <p>{{.Description}}</p>
+      </div>
+      <div class="mod-foot">
+        {{if eq .ID "machine"}}
+          <a href="#machine">Configure machines →</a>
+        {{else if eq .ID "mercadona"}}
+          <a href="#mercadona">Configure account →</a>
+        {{else}}
+          <span class="faint">—</span>
+        {{end}}
+        <span class="faint">{{.ID}}</span>
+      </div>
+    </article>
+    {{else}}
+    <div class="empty" style="grid-column:1/-1">No modules in catalog yet.</div>
+    {{end}}
+  </div>
+</section>
+
+<section class="section" id="machine">
+  <div class="section-title"><span class="dot"></span><h2>Machines</h2></div>
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Remote shell agents</h3>
+        <p class="muted">Outbound agent on each computer. No inbound SSH required.</p>
+      </div>
+      <span class="pill {{if gt .MachOnlineCount 0}}on{{else}}neutral{{end}}">
+        {{if gt .MachOnlineCount 0}}<span class="live"></span>{{end}}
+        {{.MachOnlineCount}} online
+      </span>
+    </div>
+
+    {{if .Machines}}
+    <div class="machine-list">
+      {{range .Machines}}
+      <div class="machine-row">
+        <div class="row" style="gap:.6rem">
+          <span class="name">{{.Name}}</span>
+          {{if .Online}}
+            <span class="pill on"><span class="live"></span> Online</span>
+          {{else}}
+            <span class="pill off">Offline</span>
+          {{end}}
+        </div>
+        <form method="post" action="/dashboard/machines/{{.ID}}/delete" onsubmit="return confirm('Remove machine {{.Name}}?')">
+          <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Remove</button>
+        </form>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">No machines yet. Create one and run the install command on the host.</div>
+    {{end}}
+
+    <h3 style="margin-top:1.25rem;margin-bottom:.35rem">Add machine</h3>
+    <p class="muted" style="margin-bottom:.65rem">Name is stored on the server. The install token is shown once.</p>
+    <form method="post" action="/dashboard/machines" class="form-grid">
+      <div>
+        <label for="mach-name">Name</label>
+        <input id="mach-name" name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="mac, vps1, laptop…"/>
+      </div>
+      <button type="submit">Create + install cmd</button>
+    </form>
+
+    {{if .InstallCmd}}
+    <div style="margin-top:1.15rem;padding:1rem;border-radius:12px;border:1px solid rgba(52,211,153,.28);background:var(--ok-bg)">
+      <p class="ok" style="margin:0 0 .5rem;font-weight:600">Run on the target machine (token shown once)</p>
+      <div class="code-wrap">
+        <pre id="install-cmd">{{.InstallCmd}}</pre>
+        <button type="button" class="copy-btn" onclick="copyText('install-cmd', this)">Copy</button>
+      </div>
+    </div>
+    {{end}}
+  </div>
+</section>
+
+<section class="section" id="mercadona">
+  <div class="section-title"><span class="dot"></span><h2>Mercadona</h2></div>
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Account link</h3>
+        <p class="muted">Saves credentials, logs into Mercadona, and enables cart tools in your AI client.</p>
+      </div>
+      {{if .MercadonaConfigured}}
+        <span class="pill on"><span class="live"></span> Linked</span>
+      {{else}}
+        <span class="pill off">Not linked</span>
+      {{end}}
+    </div>
+
+    {{if .MercadonaConfigured}}
+    <div class="machine-row" style="margin-bottom:1rem">
+      <div>
+        <div class="name">{{.MercadonaEmail}}</div>
+        <div class="faint">Postal code {{.MercadonaPostal}}</div>
+      </div>
+      <form method="post" action="/dashboard/mercadona/clear">
+        <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Unlink</button>
+      </form>
+    </div>
+    {{end}}
+
+    <form method="post" action="/dashboard/mercadona" class="form-stack">
+      <div>
+        <label for="m-email">Email</label>
+        <input id="m-email" type="email" name="email" required value="{{.MercadonaEmail}}"/>
+      </div>
+      <div>
+        <label for="m-pass">Password</label>
+        <input id="m-pass" type="password" name="password" {{if not .MercadonaConfigured}}required{{end}} placeholder="{{if .MercadonaConfigured}}leave blank to keep{{end}}"/>
+      </div>
+      <div>
+        <label for="m-postal">Postal code</label>
+        <input id="m-postal" name="postal_code" required pattern="[0-9]{5}" value="{{.MercadonaPostal}}" placeholder="28001"/>
+      </div>
+      <div class="row">
+        <button type="submit">{{if .MercadonaConfigured}}Update credentials{{else}}Save &amp; link{{end}}</button>
+      </div>
     </form>
   </div>
-  {{end}}
-</div>
-
-<div class="card" id="machine">
-  <h1>Machine</h1>
-  <p class="muted">Outbound agent on each computer. No inbound SSH required.</p>
-  <h2>Registered machines</h2>
-  {{if .Machines}}
-    <ul>
-    {{range .Machines}}
-      <li>
-        <strong>{{.Name}}</strong>
-        {{if .Online}}<span class="pill on">online</span>{{else}}<span class="pill off">offline</span>{{end}}
-        <form method="post" action="/dashboard/machines/{{.ID}}/delete" style="display:inline" onsubmit="return confirm('Remove machine?')">
-          <button type="submit" class="danger" style="margin-top:0;padding:.2rem .5rem;font-size:.75rem">Remove</button>
-        </form>
-      </li>
-    {{end}}
-    </ul>
-  {{else}}
-    <p class="muted">No machines yet.</p>
-  {{end}}
-
-  <h2>Add machine</h2>
-  <form method="post" action="/dashboard/machines">
-    <label>Name (e.g. mac, laptop)</label>
-    <input name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="mac"/>
-    <button type="submit">Create + show install command</button>
-  </form>
-  {{if .InstallCmd}}
-  <p class="ok" style="margin-top:1rem">Run on the target machine (token shown once):</p>
-  <pre>{{.InstallCmd}}</pre>
-  {{end}}
-</div>
-
-<div class="card" id="mercadona">
-  <h1>Mercadona</h1>
-  <p class="muted">Saves credentials, logs into Mercadona, and enables cart tools (search, add, list, …) in your AI client.</p>
-  {{if .MercadonaConfigured}}
-    <p class="ok">Configured for {{.MercadonaEmail}} · CP {{.MercadonaPostal}}</p>
-    <form method="post" action="/dashboard/mercadona/clear">
-      <button type="submit" class="secondary">Clear credentials</button>
-    </form>
-  {{end}}
-  <form method="post" action="/dashboard/mercadona">
-    <label>Email</label>
-    <input type="email" name="email" required value="{{.MercadonaEmail}}"/>
-    <label>Password</label>
-    <input type="password" name="password" {{if not .MercadonaConfigured}}required{{end}} placeholder="{{if .MercadonaConfigured}}leave blank to keep{{end}}"/>
-    <label>Postal code</label>
-    <input name="postal_code" required pattern="[0-9]{5}" value="{{.MercadonaPostal}}"/>
-    <button type="submit">Save credentials</button>
-  </form>
-  {{if .Flash}}<p class="ok">{{.Flash}}</p>{{end}}
-  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-</div>
+</section>
 {{end}}
