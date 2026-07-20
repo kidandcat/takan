@@ -1,0 +1,101 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>People</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:52ch">Directory of people you know — relationship, context, notes. Tools: <code>people_list</code>, <code>people_get</code>, <code>people_add</code>, <code>people_update</code>, <code>people_delete</code>.</p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Add person</h3>
+        <p class="muted">Capture how you know them and what matters in the relationship.</p>
+      </div>
+      <span class="pill neutral">{{.PeopleCount}} total</span>
+    </div>
+    <form method="post" action="/dashboard/people" class="form-stack" style="max-width:100%">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="name">Name</label>
+          <input id="name" name="name" required placeholder="Ana García"/>
+        </div>
+        <div>
+          <label for="relationship">Relationship</label>
+          <input id="relationship" name="relationship" placeholder="friend, coworker, client…"/>
+        </div>
+      </div>
+      <div>
+        <label for="context">Context (how you relate)</label>
+        <input id="context" name="context" placeholder="Met at work; helps with design reviews"/>
+      </div>
+      <div>
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" rows="3" style="width:100%" placeholder="Facts, history, preferences…"></textarea>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="aliases">Aliases (comma-separated)</label>
+          <input id="aliases" name="aliases" placeholder="Anita, A.G."/>
+        </div>
+        <div>
+          <label for="tags">Tags (comma-separated)</label>
+          <input id="tags" name="tags" placeholder="work, madrid"/>
+        </div>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="contact">Contact</label>
+          <input id="contact" name="contact" placeholder="email, phone, @handle"/>
+        </div>
+        <div>
+          <label for="birthday">Birthday</label>
+          <input id="birthday" name="birthday" placeholder="YYYY-MM-DD or free text"/>
+        </div>
+      </div>
+      <button type="submit">Add &amp; enable module</button>
+    </form>
+  </div>
+</section>
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Directory</h3>
+        <p class="muted">Your people. The AI can search and update these via MCP.</p>
+      </div>
+    </div>
+    {{if .People}}
+    <div class="machine-list">
+      {{range .People}}
+      <div class="machine-row" style="align-items:flex-start">
+        <div style="min-width:0;flex:1">
+          <div class="name">{{.Name}}{{if .Relationship}} <span class="faint">· {{.Relationship}}</span>{{end}}</div>
+          {{if .Context}}<div class="faint" style="margin-top:.15rem">{{.Context}}</div>{{end}}
+          {{if .Notes}}<div class="muted" style="margin-top:.25rem;font-size:.85rem;white-space:pre-wrap">{{.Notes}}</div>{{end}}
+          {{if or .TagsLine .Contact}}
+          <div class="faint" style="margin-top:.3rem">
+            {{if .TagsLine}}{{.TagsLine}}{{end}}
+            {{if and .TagsLine .Contact}} · {{end}}
+            {{if .Contact}}{{.Contact}}{{end}}
+          </div>
+          {{end}}
+        </div>
+        <form method="post" action="/dashboard/people/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?')">
+          <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Delete</button>
+        </form>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">No people yet. Add someone above or via <code>people_add</code>.</div>
+    {{end}}
+  </div>
+</section>
+{{end}}

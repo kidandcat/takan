@@ -23,6 +23,7 @@ import (
 	"github.com/kidandcat/takan/modules/machine"
 	"github.com/kidandcat/takan/modules/memory"
 	"github.com/kidandcat/takan/modules/mercadona"
+	"github.com/kidandcat/takan/modules/people"
 )
 
 func main() {
@@ -80,6 +81,7 @@ func main() {
 		Mercadona: mercMod.Factory(),
 		Email:     email.Factory(st, box),
 		Memory:    memory.Factory(st),
+		People:    people.Factory(st),
 	}
 
 	webSrv, err := web.New(st, hub, box, cfg.PublicURL)

@@ -57,6 +57,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
 	mux.HandleFunc("GET /dashboard/memory", s.dashMemory)
+	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
 	// Old routes → overview / integrations
 	mux.HandleFunc("GET /dashboard/connect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -74,6 +75,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/email/clear", s.clearEmail)
 	mux.HandleFunc("POST /dashboard/email/domains/toggle", s.toggleEmailDomain)
 	mux.HandleFunc("POST /dashboard/memory", s.saveMemory)
+	mux.HandleFunc("POST /dashboard/people", s.createPerson)
+	mux.HandleFunc("POST /dashboard/people/{id}/delete", s.deletePerson)
 }
 
 type pageData struct {
@@ -98,6 +101,8 @@ type pageData struct {
 	EmailKeySet         bool
 	MemoryContent       string
 	MemoryUpdated       string
+	People              []personView
+	PeopleCount         int
 	// Dashboard stats (precomputed for templates)
 	ModEnabledCount int
 	ModTotalCount   int
@@ -110,6 +115,10 @@ type pageData struct {
 type emailDomainView struct {
 	Name, Status, Sending, Receiving string
 	Enabled                          bool
+}
+
+type personView struct {
+	ID, Name, Relationship, Context, Notes, Contact, TagsLine string
 }
 
 type modView struct {
@@ -312,6 +321,9 @@ func (s *Server) dashEmail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashMemory(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "memory", "Memory", "memory.html")
 }
+func (s *Server) dashPeople(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "people", "People", "people.html")
+}
 
 func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data := pageData{
@@ -405,6 +417,28 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.DetailsLine = strings.Join(bits, " · ")
 			}
 			mv.Ready = m.Enabled
+		case "people":
+			mv.Path = "/dashboard/people"
+			n, _ := s.Store.CountPeople(ctx, u.ID)
+			if n == 0 {
+				mv.Summary = "No people yet"
+			} else {
+				mv.Summary = fmt.Sprintf("%d people", n)
+				list, _ := s.Store.ListPeople(ctx, u.ID, "", 8)
+				var names []string
+				for _, p := range list {
+					if p.Relationship != "" {
+						names = append(names, p.Name+" ("+p.Relationship+")")
+					} else {
+						names = append(names, p.Name)
+					}
+				}
+				mv.DetailsLine = strings.Join(names, ", ")
+				if n > len(list) {
+					mv.DetailsLine += fmt.Sprintf(" · +%d more", n-len(list))
+				}
+			}
+			mv.Ready = m.Enabled
 		default:
 			mv.Path = "/dashboard/" + m.ModuleID
 		}
@@ -445,6 +479,19 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		data.MemoryContent = content
 		if !updated.IsZero() {
 			data.MemoryUpdated = updated.UTC().Format(time.RFC3339)
+		}
+	}
+	if plist, err := s.Store.ListPeople(ctx, u.ID, "", 100); err == nil {
+		data.PeopleCount = len(plist)
+		for _, p := range plist {
+			pv := personView{
+				ID: p.ID, Name: p.Name, Relationship: p.Relationship,
+				Context: p.Context, Notes: p.Notes, Contact: p.Contact,
+			}
+			if len(p.Tags) > 0 {
+				pv.TagsLine = strings.Join(p.Tags, ", ")
+			}
+			data.People = append(data.People, pv)
 		}
 	}
 	return data
@@ -746,6 +793,53 @@ func (s *Server) saveMemory(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/memory?flash=Memory+saved", http.StatusFound)
+}
+
+func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	splitCSV := func(s string) []string {
+		var out []string
+		for _, p := range strings.Split(s, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	p := store.Person{
+		UserID:       u.ID,
+		Name:         r.FormValue("name"),
+		Relationship: r.FormValue("relationship"),
+		Context:      r.FormValue("context"),
+		Notes:        r.FormValue("notes"),
+		Contact:      r.FormValue("contact"),
+		Birthday:     r.FormValue("birthday"),
+		Aliases:      splitCSV(r.FormValue("aliases")),
+		Tags:         splitCSV(r.FormValue("tags")),
+	}
+	if _, err := s.Store.CreatePerson(r.Context(), p); err != nil {
+		http.Redirect(w, r, "/dashboard/people?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "people", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/people?flash=Person+added", http.StatusFound)
+}
+
+func (s *Server) deletePerson(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = s.Store.DeletePerson(r.Context(), u.ID, r.PathValue("id"))
+	http.Redirect(w, r, "/dashboard/people", http.StatusFound)
 }
 
 func urlQuery(s string) string {

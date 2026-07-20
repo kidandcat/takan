@@ -17,6 +17,7 @@ Integrations live under `modules/` as subpackages (add new ones there):
 | **Mercadona** | `modules/mercadona` | search, add, list, remove, clear, … | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get`, `email_status` | Resend API key; enable domains in panel |
 | **Memory** | `modules/memory` | `memory_get`, `memory_set` | Enable module |
+| **People** | `modules/people` | `people_list/get/add/update/delete` | Personal CRM in panel |
 | **meta** | `modules` | `takan_status` | Always available |
 
 ## MCP

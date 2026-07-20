@@ -178,6 +178,23 @@ CREATE TABLE IF NOT EXISTS user_memory (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS people (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  aliases TEXT NOT NULL DEFAULT '[]',
+  relationship TEXT NOT NULL DEFAULT '',
+  context TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '[]',
+  birthday TEXT NOT NULL DEFAULT '',
+  contact TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_people_user ON people(user_id);
+CREATE INDEX IF NOT EXISTS idx_people_user_name ON people(user_id, name);
+
 `)
 	return err
 }
@@ -404,7 +421,7 @@ type ModuleState struct {
 }
 
 // defaultModuleIDs must stay in sync with modules.Catalog.
-var defaultModuleIDs = []string{"machine", "mercadona", "email", "memory"}
+var defaultModuleIDs = []string{"machine", "mercadona", "email", "memory", "people"}
 
 func (s *Store) ListModules(ctx context.Context, userID string) ([]ModuleState, error) {
 	// ensure defaults exist
@@ -822,6 +839,252 @@ func MergeEmailDomains(prev, fromAPI []EmailDomain) []EmailDomain {
 			d.Enabled = d.Status == "verified" || d.Sending == "enabled"
 		}
 		out = append(out, d)
+	}
+	return out
+}
+
+// --- people ---
+
+// Person is someone the user knows (relationship CRM lite).
+type Person struct {
+	ID           string
+	UserID       string
+	Name         string
+	Aliases      []string
+	Relationship string // friend, family, coworker, client, …
+	Context      string // how you relate / role in your life
+	Notes        string // freeform facts, history
+	Tags         []string
+	Birthday     string
+	Contact      string // email, phone, social — free text
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (s *Store) CreatePerson(ctx context.Context, p Person) (*Person, error) {
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" {
+		return nil, fmt.Errorf("name required")
+	}
+	if p.ID == "" {
+		p.ID = uuid.NewString()
+	}
+	now := time.Now().UTC()
+	p.CreatedAt = now
+	p.UpdatedAt = now
+	aliases, _ := json.Marshal(normalizeStringList(p.Aliases))
+	tags, _ := json.Marshal(normalizeStringList(p.Tags))
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO people (id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.UserID, p.Name, string(aliases), strings.TrimSpace(p.Relationship),
+		p.Context, p.Notes, string(tags), strings.TrimSpace(p.Birthday), strings.TrimSpace(p.Contact),
+		now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// UpdatePersonFields applies selective updates. Keys present in fields replace the value (including empty).
+func (s *Store) UpdatePersonFields(ctx context.Context, userID, id string, fields map[string]string, aliases, tags []string, setAliases, setTags bool) (*Person, error) {
+	cur, err := s.GetPerson(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	if v, ok := fields["name"]; ok && strings.TrimSpace(v) != "" {
+		cur.Name = strings.TrimSpace(v)
+	}
+	if v, ok := fields["relationship"]; ok {
+		cur.Relationship = strings.TrimSpace(v)
+	}
+	if v, ok := fields["context"]; ok {
+		cur.Context = v
+	}
+	if v, ok := fields["notes"]; ok {
+		cur.Notes = v
+	}
+	if v, ok := fields["append_notes"]; ok && strings.TrimSpace(v) != "" {
+		if strings.TrimSpace(cur.Notes) == "" {
+			cur.Notes = strings.TrimSpace(v)
+		} else {
+			cur.Notes = strings.TrimSpace(cur.Notes) + "\n" + strings.TrimSpace(v)
+		}
+	}
+	if v, ok := fields["birthday"]; ok {
+		cur.Birthday = strings.TrimSpace(v)
+	}
+	if v, ok := fields["contact"]; ok {
+		cur.Contact = strings.TrimSpace(v)
+	}
+	if setAliases {
+		cur.Aliases = normalizeStringList(aliases)
+	}
+	if setTags {
+		cur.Tags = normalizeStringList(tags)
+	}
+	cur.UpdatedAt = time.Now().UTC()
+	aJSON, _ := json.Marshal(cur.Aliases)
+	tJSON, _ := json.Marshal(cur.Tags)
+	_, err = s.db.ExecContext(ctx, `
+UPDATE people SET name=?, aliases=?, relationship=?, context=?, notes=?, tags=?, birthday=?, contact=?, updated_at=?
+WHERE id=? AND user_id=?`,
+		cur.Name, string(aJSON), cur.Relationship, cur.Context, cur.Notes, string(tJSON),
+		cur.Birthday, cur.Contact, cur.UpdatedAt.Format(time.RFC3339), id, userID)
+	if err != nil {
+		return nil, err
+	}
+	return cur, nil
+}
+
+func (s *Store) GetPerson(ctx context.Context, userID, id string) (*Person, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at
+FROM people WHERE id = ? AND user_id = ?`, id, userID)
+	return scanPerson(row)
+}
+
+func (s *Store) FindPersonByName(ctx context.Context, userID, name string) (*Person, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, sql.ErrNoRows
+	}
+	// exact name first
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at
+FROM people WHERE user_id = ? AND lower(name) = lower(?) LIMIT 1`, userID, name)
+	p, err := scanPerson(row)
+	if err == nil {
+		return p, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+	// alias match
+	list, err := s.ListPeople(ctx, userID, "", 500)
+	if err != nil {
+		return nil, err
+	}
+	ln := strings.ToLower(name)
+	for i := range list {
+		if strings.ToLower(list[i].Name) == ln {
+			return &list[i], nil
+		}
+		for _, a := range list[i].Aliases {
+			if strings.ToLower(a) == ln {
+				return &list[i], nil
+			}
+		}
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (s *Store) ListPeople(ctx context.Context, userID, query string, limit int) ([]Person, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	query = strings.TrimSpace(query)
+	var rows *sql.Rows
+	var err error
+	if query == "" {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at
+FROM people WHERE user_id = ? ORDER BY lower(name) LIMIT ?`, userID, limit)
+	} else {
+		q := "%" + strings.ToLower(query) + "%"
+		rows, err = s.db.QueryContext(ctx, `
+SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at
+FROM people WHERE user_id = ? AND (
+  lower(name) LIKE ? OR lower(relationship) LIKE ? OR lower(context) LIKE ?
+  OR lower(notes) LIKE ? OR lower(aliases) LIKE ? OR lower(tags) LIKE ? OR lower(contact) LIKE ?
+) ORDER BY lower(name) LIMIT ?`, userID, q, q, q, q, q, q, q, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Person
+	for rows.Next() {
+		p, err := scanPersonRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeletePerson(ctx context.Context, userID, id string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM people WHERE id = ? AND user_id = ?`, id, userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) CountPeople(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM people WHERE user_id = ?`, userID).Scan(&n)
+	return n, err
+}
+
+type personScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPerson(row personScanner) (*Person, error) {
+	var p Person
+	var aliases, tags string
+	var created, updated string
+	err := row.Scan(&p.ID, &p.UserID, &p.Name, &aliases, &p.Relationship, &p.Context, &p.Notes,
+		&tags, &p.Birthday, &p.Contact, &created, &updated)
+	if err != nil {
+		return nil, err
+	}
+	p.Aliases = parseJSONStringList(aliases)
+	p.Tags = parseJSONStringList(tags)
+	p.CreatedAt, _ = time.Parse(time.RFC3339, created)
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
+	return &p, nil
+}
+
+func scanPersonRows(rows *sql.Rows) (*Person, error) {
+	return scanPerson(rows)
+}
+
+func parseJSONStringList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil
+	}
+	return normalizeStringList(list)
+}
+
+func normalizeStringList(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		k := strings.ToLower(s)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, s)
 	}
 	return out
 }
