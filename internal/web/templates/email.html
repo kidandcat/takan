@@ -1,0 +1,52 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Email</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Send email from your AI client via Resend. You bring the API key.</p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Resend credentials</h3>
+        <p class="muted">Stored encrypted. Create a key at resend.com and a verified domain/from address.</p>
+      </div>
+      {{if .EmailConfigured}}
+        <span class="pill on"><span class="live"></span> Configured</span>
+      {{else}}
+        <span class="pill off">Not configured</span>
+      {{end}}
+    </div>
+
+    {{if .EmailConfigured}}
+    <div class="machine-row" style="margin-bottom:1rem">
+      <div>
+        <div class="name">{{.EmailFrom}}</div>
+        <div class="faint">API key on file</div>
+      </div>
+      <form method="post" action="/dashboard/email/clear">
+        <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Clear</button>
+      </form>
+    </div>
+    {{end}}
+
+    <form method="post" action="/dashboard/email" class="form-stack">
+      <div>
+        <label for="from">From address</label>
+        <input id="from" name="from" type="email" required value="{{.EmailFrom}}" placeholder="you@yourdomain.com"/>
+      </div>
+      <div>
+        <label for="api_key">Resend API key</label>
+        <input id="api_key" name="api_key" type="password" {{if not .EmailConfigured}}required{{end}} placeholder="{{if .EmailConfigured}}leave blank to keep{{end}}" autocomplete="off"/>
+      </div>
+      <button type="submit">{{if .EmailConfigured}}Update{{else}}Save &amp; enable{{end}}</button>
+    </form>
+  </div>
+</section>
+{{end}}

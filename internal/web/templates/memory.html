@@ -1,0 +1,28 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Memory</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Short-lived working memory for your AI client. Full replace via <code>memory_set</code>.</p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Current content</h3>
+        <p class="muted">{{if .MemoryUpdated}}Last updated {{.MemoryUpdated}}{{else}}Empty — save below or use tools from the MCP client.{{end}}</p>
+      </div>
+    </div>
+    <form method="post" action="/dashboard/memory">
+      <label for="content">Memory</label>
+      <textarea id="content" name="content" rows="12" style="width:100%;min-height:12rem;font-family:var(--mono);font-size:.85rem">{{.MemoryContent}}</textarea>
+      <button type="submit">Save &amp; enable module</button>
+    </form>
+  </div>
+</section>
+{{end}}

@@ -15,6 +15,9 @@ Integrations live under `modules/` as subpackages (add new ones there):
 |--------|------|--------|--------|
 | **Machine** | `modules/machine` | `machine_list`, `machine_bash` | Install `takan-agent` on each PC (outbound WSS) |
 | **Mercadona** | `modules/mercadona` | search, add, list, remove, clear, … | Credentials in panel |
+| **Email** | `modules/email` | `email_send`, `email_status` | Resend API key + from in panel |
+| **Memory** | `modules/memory` | `memory_get`, `memory_set` | Enable module |
+| **Files** | `modules/files` | `files_upload`, `files_upload_url`, `files_list`, `files_delete` | Server `TAKAN_FILES_*` (OVH S3) |
 | **meta** | `modules` | `takan_status` | Always available |
 
 ## MCP
