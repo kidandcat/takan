@@ -59,7 +59,7 @@
         </form>
       </div>
       <div class="mod-body">
-        <div class="row" style="gap:.45rem">
+        <div class="row" style="gap:.45rem;flex-wrap:wrap">
           <h3>{{.Name}}</h3>
           {{if .Enabled}}<span class="pill on">On</span>{{else}}<span class="pill off">Off</span>{{end}}
           {{if .Ready}}<span class="pill on"><span class="live"></span> Ready</span>
@@ -70,10 +70,18 @@
         {{else}}
         <p class="muted" style="margin-top:.35rem">{{.Description}}</p>
         {{end}}
-        {{if .Details}}
-        <ul class="mod-details">
-          {{range .Details}}
-          <li>{{.}}</li>
+        {{if .DetailsLine}}
+        <p class="mod-meta">{{.DetailsLine}}</p>
+        {{end}}
+        {{if .Facts}}
+        <ul class="mod-facts">
+          {{range .Facts}}
+          <li>
+            {{if eq .Kind "online"}}<span class="status-dot on" title="online"></span>
+            {{else if eq .Kind "offline"}}<span class="status-dot off" title="offline"></span>
+            {{end}}
+            <span>{{.Label}}</span>
+          </li>
           {{end}}
         </ul>
         {{end}}
