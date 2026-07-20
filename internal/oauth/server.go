@@ -33,9 +33,12 @@ type Server struct {
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
+	// RFC 9728 discovery variants (clients probe several of these).
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.protectedResourceMetadata)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource/{path...}", s.protectedResourceMetadata)
+	mux.HandleFunc("GET /mcp/.well-known/oauth-protected-resource", s.protectedResourceMetadata)
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.asMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-authorization-server/{path...}", s.asMetadata)
 	mux.HandleFunc("GET /.well-known/openid-configuration", s.asMetadata)
 	mux.HandleFunc("GET /oauth/authorize", s.authorizeGET)
 	mux.HandleFunc("POST /oauth/authorize", s.authorizePOST)

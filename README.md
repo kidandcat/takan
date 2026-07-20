@@ -17,9 +17,10 @@ Connect Grok / Claude / Cursor once to Takan. From the web panel, enable modules
 
 ## MCP
 
+Only the URL is needed. Clients discover OAuth automatically (PKCE), open a browser login, and attach the access token:
+
 ```
-POST https://takan.es/mcp
-Authorization: Bearer <token from panel>
+https://takan.es/mcp
 ```
 
 ## Dev
