@@ -65,7 +65,18 @@
           {{if .Ready}}<span class="pill on"><span class="live"></span> Ready</span>
           {{else if .Enabled}}<span class="pill warn">Needs setup</span>{{end}}
         </div>
-        <p>{{.Description}}</p>
+        {{if .Summary}}
+        <p class="mod-summary">{{.Summary}}</p>
+        {{else}}
+        <p class="muted" style="margin-top:.35rem">{{.Description}}</p>
+        {{end}}
+        {{if .Details}}
+        <ul class="mod-details">
+          {{range .Details}}
+          <li>{{.}}</li>
+          {{end}}
+        </ul>
+        {{end}}
       </div>
       <div class="mod-foot">
         {{if .Path}}

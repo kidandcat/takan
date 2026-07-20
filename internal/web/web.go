@@ -117,6 +117,10 @@ type modView struct {
 	Enabled, Ready        bool
 	// Path is the module settings page (e.g. /dashboard/machines).
 	Path string
+	// Summary is a one-line key status for overview cards.
+	Summary string
+	// Details are short facts shown under the summary (names, domains…).
+	Details []string
 }
 
 type machView struct {
@@ -327,28 +331,84 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		case "machine":
 			mv.Path = "/dashboard/machines"
 			ms, _ := s.Store.ListMachines(ctx, u.ID)
-			online := false
+			onlineN := 0
 			for _, mac := range ms {
-				if s.Hub.Online(mac.ID) {
-					online = true
-					break
+				on := s.Hub.Online(mac.ID)
+				if on {
+					onlineN++
+					mv.Details = append(mv.Details, mac.Name+" · online")
+				} else {
+					mv.Details = append(mv.Details, mac.Name+" · offline")
 				}
 			}
-			mv.Ready = m.Enabled && online
+			if len(ms) == 0 {
+				mv.Summary = "No machines registered"
+			} else {
+				mv.Summary = fmt.Sprintf("%d online · %d total", onlineN, len(ms))
+			}
+			mv.Ready = m.Enabled && onlineN > 0
 		case "mercadona":
 			mv.Path = "/dashboard/mercadona"
-			_, _, _, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
-			// Ready when creds exist; session link is verified when tools run.
+			em, _, postal, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
+			if ok {
+				mv.Summary = "Linked"
+				mv.Details = []string{em, "CP " + postal}
+			} else {
+				mv.Summary = "Not linked"
+			}
 			mv.Ready = m.Enabled && ok
 		case "email":
 			mv.Path = "/dashboard/email"
 			_, domains, ok, _ := s.Store.GetEmailSettings(ctx, u.ID)
-			mv.Ready = m.Enabled && ok && len(store.EnabledEmailDomains(domains)) > 0
+			en := store.EnabledEmailDomains(domains)
+			if !ok {
+				mv.Summary = "No API key"
+			} else if len(en) == 0 {
+				mv.Summary = fmt.Sprintf("0 enabled · %d discovered", len(domains))
+				for _, d := range domains {
+					mv.Details = append(mv.Details, d.Name+" · off")
+				}
+			} else {
+				mv.Summary = fmt.Sprintf("%d enabled · %d total", len(en), len(domains))
+				for _, d := range domains {
+					if d.Enabled {
+						mv.Details = append(mv.Details, d.Name)
+					}
+				}
+			}
+			mv.Ready = m.Enabled && ok && len(en) > 0
 		case "memory":
 			mv.Path = "/dashboard/memory"
-			mv.Ready = m.Enabled // always ready once enabled
+			content, updated, mok, _ := s.Store.GetMemory(ctx, u.ID)
+			if !mok || strings.TrimSpace(content) == "" {
+				mv.Summary = "Empty"
+			} else {
+				lines := strings.Count(content, "\n") + 1
+				mv.Summary = fmt.Sprintf("%d lines · %d chars", lines, len(content))
+				if !updated.IsZero() {
+					mv.Details = []string{"updated " + updated.UTC().Format("2006-01-02 15:04")}
+				}
+				// first non-empty line as preview
+				for _, line := range strings.Split(content, "\n") {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					if len(line) > 72 {
+						line = line[:69] + "…"
+					}
+					mv.Details = append(mv.Details, line)
+					break
+				}
+			}
+			mv.Ready = m.Enabled
 		default:
 			mv.Path = "/dashboard/" + m.ModuleID
+		}
+		// Cap detail lines on overview cards.
+		if len(mv.Details) > 5 {
+			extra := len(mv.Details) - 4
+			mv.Details = append(mv.Details[:4], fmt.Sprintf("+%d more", extra))
 		}
 		data.Modules = append(data.Modules, mv)
 		if m.Enabled {
