@@ -65,6 +65,10 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		_ = node.Close()
 		return nil, err
 	}
+	if err := s.migratePeopleContactFields(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -188,6 +192,8 @@ CREATE TABLE IF NOT EXISTS people (
   notes TEXT NOT NULL DEFAULT '',
   tags TEXT NOT NULL DEFAULT '[]',
   birthday TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
   contact TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -856,9 +862,46 @@ type Person struct {
 	Notes        string // freeform facts, history
 	Tags         []string
 	Birthday     string
-	Contact      string // email, phone, social — free text
+	Email        string
+	Phone        string
+	Contact      string // other handles / free text
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+// migratePeopleContactFields adds email/phone columns when upgrading older DBs.
+func (s *Store) migratePeopleContactFields() error {
+	rows, err := s.db.Query(`PRAGMA table_info(people)`)
+	if err != nil {
+		return err
+	}
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		cols[name] = true
+	}
+	rows.Close()
+	if len(cols) == 0 {
+		return nil
+	}
+	if !cols["email"] {
+		if _, err := s.db.Exec(`ALTER TABLE people ADD COLUMN email TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !cols["phone"] {
+		if _, err := s.db.Exec(`ALTER TABLE people ADD COLUMN phone TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) CreatePerson(ctx context.Context, p Person) (*Person, error) {
@@ -875,10 +918,11 @@ func (s *Store) CreatePerson(ctx context.Context, p Person) (*Person, error) {
 	aliases, _ := json.Marshal(normalizeStringList(p.Aliases))
 	tags, _ := json.Marshal(normalizeStringList(p.Tags))
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO people (id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+INSERT INTO people (id, user_id, name, aliases, relationship, context, notes, tags, birthday, email, phone, contact, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.UserID, p.Name, string(aliases), strings.TrimSpace(p.Relationship),
-		p.Context, p.Notes, string(tags), strings.TrimSpace(p.Birthday), strings.TrimSpace(p.Contact),
+		p.Context, p.Notes, string(tags), strings.TrimSpace(p.Birthday),
+		strings.TrimSpace(p.Email), strings.TrimSpace(p.Phone), strings.TrimSpace(p.Contact),
 		now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		return nil, err
@@ -914,6 +958,12 @@ func (s *Store) UpdatePersonFields(ctx context.Context, userID, id string, field
 	if v, ok := fields["birthday"]; ok {
 		cur.Birthday = strings.TrimSpace(v)
 	}
+	if v, ok := fields["email"]; ok {
+		cur.Email = strings.TrimSpace(v)
+	}
+	if v, ok := fields["phone"]; ok {
+		cur.Phone = strings.TrimSpace(v)
+	}
 	if v, ok := fields["contact"]; ok {
 		cur.Contact = strings.TrimSpace(v)
 	}
@@ -927,10 +977,10 @@ func (s *Store) UpdatePersonFields(ctx context.Context, userID, id string, field
 	aJSON, _ := json.Marshal(cur.Aliases)
 	tJSON, _ := json.Marshal(cur.Tags)
 	_, err = s.db.ExecContext(ctx, `
-UPDATE people SET name=?, aliases=?, relationship=?, context=?, notes=?, tags=?, birthday=?, contact=?, updated_at=?
+UPDATE people SET name=?, aliases=?, relationship=?, context=?, notes=?, tags=?, birthday=?, email=?, phone=?, contact=?, updated_at=?
 WHERE id=? AND user_id=?`,
 		cur.Name, string(aJSON), cur.Relationship, cur.Context, cur.Notes, string(tJSON),
-		cur.Birthday, cur.Contact, cur.UpdatedAt.Format(time.RFC3339), id, userID)
+		cur.Birthday, cur.Email, cur.Phone, cur.Contact, cur.UpdatedAt.Format(time.RFC3339), id, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -939,7 +989,7 @@ WHERE id=? AND user_id=?`,
 
 func (s *Store) GetPerson(ctx context.Context, userID, id string) (*Person, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at
+SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, email, phone, contact, created_at, updated_at
 FROM people WHERE id = ? AND user_id = ?`, id, userID)
 	return scanPerson(row)
 }
@@ -951,7 +1001,7 @@ func (s *Store) FindPersonByName(ctx context.Context, userID, name string) (*Per
 	}
 	// exact name first
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at
+SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, email, phone, contact, created_at, updated_at
 FROM people WHERE user_id = ? AND lower(name) = lower(?) LIMIT 1`, userID, name)
 	p, err := scanPerson(row)
 	if err == nil {
@@ -991,16 +1041,17 @@ func (s *Store) ListPeople(ctx context.Context, userID, query string, limit int)
 	var err error
 	if query == "" {
 		rows, err = s.db.QueryContext(ctx, `
-SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at
+SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, email, phone, contact, created_at, updated_at
 FROM people WHERE user_id = ? ORDER BY lower(name) LIMIT ?`, userID, limit)
 	} else {
 		q := "%" + strings.ToLower(query) + "%"
 		rows, err = s.db.QueryContext(ctx, `
-SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, contact, created_at, updated_at
+SELECT id, user_id, name, aliases, relationship, context, notes, tags, birthday, email, phone, contact, created_at, updated_at
 FROM people WHERE user_id = ? AND (
   lower(name) LIKE ? OR lower(relationship) LIKE ? OR lower(context) LIKE ?
-  OR lower(notes) LIKE ? OR lower(aliases) LIKE ? OR lower(tags) LIKE ? OR lower(contact) LIKE ?
-) ORDER BY lower(name) LIMIT ?`, userID, q, q, q, q, q, q, q, limit)
+  OR lower(notes) LIKE ? OR lower(aliases) LIKE ? OR lower(tags) LIKE ?
+  OR lower(contact) LIKE ? OR lower(email) LIKE ? OR lower(phone) LIKE ?
+) ORDER BY lower(name) LIMIT ?`, userID, q, q, q, q, q, q, q, q, q, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -1044,7 +1095,7 @@ func scanPerson(row personScanner) (*Person, error) {
 	var aliases, tags string
 	var created, updated string
 	err := row.Scan(&p.ID, &p.UserID, &p.Name, &aliases, &p.Relationship, &p.Context, &p.Notes,
-		&tags, &p.Birthday, &p.Contact, &created, &updated)
+		&tags, &p.Birthday, &p.Email, &p.Phone, &p.Contact, &created, &updated)
 	if err != nil {
 		return nil, err
 	}

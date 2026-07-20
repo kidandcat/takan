@@ -54,7 +54,7 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 				Tool: mcp.Tool{
 					Name: "people_get",
 					Description: "Get full profile for a person by id or exact name/alias. " +
-						"Includes relationship, context, notes, contact, tags.",
+						"Includes relationship, context, notes, email, phone, contact, tags.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -75,7 +75,7 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 				Tool: mcp.Tool{
 					Name: "people_add",
 					Description: "Add a person you know. Capture name, relationship (friend/family/coworker/client/…), " +
-						"context (how you relate), notes, aliases, tags, contact, birthday if known.",
+						"context (how you relate), notes, aliases, tags, email, phone, other contact, birthday if known.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -85,7 +85,9 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 							"notes":        map[string]any{"type": "string"},
 							"aliases":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 							"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-							"contact":      map[string]any{"type": "string", "description": "Email, phone, social handles…"},
+							"email":        map[string]any{"type": "string"},
+							"phone":        map[string]any{"type": "string"},
+							"contact":      map[string]any{"type": "string", "description": "Other handles / free text"},
 							"birthday":     map[string]any{"type": "string"},
 						},
 						"required": []string{"name"},
@@ -99,6 +101,8 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 						Relationship: strArg(args, "relationship"),
 						Context:      strArg(args, "context"),
 						Notes:        strArg(args, "notes"),
+						Email:        strArg(args, "email"),
+						Phone:        strArg(args, "phone"),
 						Contact:      strArg(args, "contact"),
 						Birthday:     strArg(args, "birthday"),
 						Aliases:      strListArg(args, "aliases"),
@@ -210,7 +214,8 @@ func personOut(p *store.Person) map[string]any {
 	return map[string]any{
 		"id": p.ID, "name": p.Name, "aliases": p.Aliases, "relationship": p.Relationship,
 		"context": p.Context, "notes": p.Notes, "tags": p.Tags, "birthday": p.Birthday,
-		"contact": p.Contact, "updated_at": p.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		"email": p.Email, "phone": p.Phone, "contact": p.Contact,
+		"updated_at": p.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 

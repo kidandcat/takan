@@ -119,8 +119,8 @@ type emailDomainView struct {
 }
 
 type personView struct {
-	ID, Name, Relationship, Context, Notes, Contact, Birthday string
-	TagsLine, AliasesLine, Initial                            string
+	ID, Name, Relationship, Context, Notes, Email, Phone, Contact, Birthday string
+	TagsLine, AliasesLine, Initial                                          string
 }
 
 type modView struct {
@@ -488,8 +488,8 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		for _, p := range plist {
 			pv := personView{
 				ID: p.ID, Name: p.Name, Relationship: p.Relationship,
-				Context: p.Context, Notes: p.Notes, Contact: p.Contact, Birthday: p.Birthday,
-				Initial: personInitial(p.Name),
+				Context: p.Context, Notes: p.Notes, Email: p.Email, Phone: p.Phone,
+				Contact: p.Contact, Birthday: p.Birthday, Initial: personInitial(p.Name),
 			}
 			if len(p.Tags) > 0 {
 				pv.TagsLine = strings.Join(p.Tags, ", ")
@@ -835,6 +835,8 @@ func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
 		Relationship: r.FormValue("relationship"),
 		Context:      r.FormValue("context"),
 		Notes:        r.FormValue("notes"),
+		Email:        r.FormValue("email"),
+		Phone:        r.FormValue("phone"),
 		Contact:      r.FormValue("contact"),
 		Birthday:     r.FormValue("birthday"),
 		Aliases:      splitCSV(r.FormValue("aliases")),
@@ -863,6 +865,8 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request) {
 		"relationship": r.FormValue("relationship"),
 		"context":      r.FormValue("context"),
 		"notes":        r.FormValue("notes"),
+		"email":        r.FormValue("email"),
+		"phone":        r.FormValue("phone"),
 		"contact":      r.FormValue("contact"),
 		"birthday":     r.FormValue("birthday"),
 	}

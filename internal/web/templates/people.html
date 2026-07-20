@@ -31,14 +31,16 @@
       <div class="person-card-body">
         {{if .Context}}<div class="ctx">{{.Context}}</div>{{end}}
         {{if .Notes}}<div class="notes">{{.Notes}}</div>{{end}}
-        {{if or .TagsLine .Contact .AliasesLine .Birthday}}
+        {{if or .Email .Phone .Contact .TagsLine .AliasesLine .Birthday}}
         <div class="person-card-meta" style="margin-top:.4rem">
-          {{if .AliasesLine}}aka {{.AliasesLine}}{{end}}
-          {{if and .AliasesLine .TagsLine}} · {{end}}
-          {{if .TagsLine}}{{.TagsLine}}{{end}}
-          {{if and (or .AliasesLine .TagsLine) .Contact}} · {{end}}
+          {{if .Email}}✉ {{.Email}}{{end}}
+          {{if and .Email .Phone}} · {{end}}
+          {{if .Phone}}☎ {{.Phone}}{{end}}
+          {{if and (or .Email .Phone) .Contact}} · {{end}}
           {{if .Contact}}{{.Contact}}{{end}}
-          {{if .Birthday}}{{if or .AliasesLine .TagsLine .Contact}} · {{end}}🎂 {{.Birthday}}{{end}}
+          {{if .AliasesLine}}{{if or .Email .Phone .Contact}} · {{end}}aka {{.AliasesLine}}{{end}}
+          {{if .TagsLine}}{{if or .Email .Phone .Contact .AliasesLine}} · {{end}}{{.TagsLine}}{{end}}
+          {{if .Birthday}}{{if or .Email .Phone .Contact .AliasesLine .TagsLine}} · {{end}}🎂 {{.Birthday}}{{end}}
         </div>
         {{end}}
       </div>
@@ -49,6 +51,8 @@
           data-relationship="{{.Relationship}}"
           data-context="{{.Context}}"
           data-notes="{{.Notes}}"
+          data-email="{{.Email}}"
+          data-phone="{{.Phone}}"
           data-contact="{{.Contact}}"
           data-birthday="{{.Birthday}}"
           data-aliases="{{.AliasesLine}}"
@@ -89,11 +93,31 @@
       </div>
       <div>
         <label for="p-context">Context (how you relate)</label>
-        <input id="p-context" name="context" placeholder="Met at work; helps with design reviews"/>
+        <textarea id="p-context" name="context" rows="3" style="width:100%" placeholder="Met at work; helps with design reviews…"></textarea>
       </div>
       <div>
         <label for="p-notes">Notes</label>
         <textarea id="p-notes" name="notes" rows="4" style="width:100%" placeholder="Facts, history, preferences…"></textarea>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="p-email">Email</label>
+          <input id="p-email" name="email" type="email" placeholder="ana@example.com" autocomplete="off"/>
+        </div>
+        <div>
+          <label for="p-phone">Phone</label>
+          <input id="p-phone" name="phone" type="tel" placeholder="+34 600 000 000" autocomplete="off"/>
+        </div>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="p-contact">Other (social, etc.)</label>
+          <input id="p-contact" name="contact" placeholder="@handle, LinkedIn…"/>
+        </div>
+        <div>
+          <label for="p-birthday">Birthday</label>
+          <input id="p-birthday" name="birthday" placeholder="YYYY-MM-DD or free text"/>
+        </div>
       </div>
       <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
         <div>
@@ -103,16 +127,6 @@
         <div>
           <label for="p-tags">Tags (comma-separated)</label>
           <input id="p-tags" name="tags" placeholder="work, madrid"/>
-        </div>
-      </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="p-contact">Contact</label>
-          <input id="p-contact" name="contact" placeholder="email, phone, @handle"/>
-        </div>
-        <div>
-          <label for="p-birthday">Birthday</label>
-          <input id="p-birthday" name="birthday" placeholder="YYYY-MM-DD or free text"/>
         </div>
       </div>
       <div class="row" style="justify-content:flex-end;margin-top:.5rem">
@@ -144,6 +158,8 @@
       setVal('p-relationship', btn.dataset.relationship);
       setVal('p-context', btn.dataset.context);
       setVal('p-notes', btn.dataset.notes);
+      setVal('p-email', btn.dataset.email);
+      setVal('p-phone', btn.dataset.phone);
       setVal('p-contact', btn.dataset.contact);
       setVal('p-birthday', btn.dataset.birthday);
       setVal('p-aliases', btn.dataset.aliases);
