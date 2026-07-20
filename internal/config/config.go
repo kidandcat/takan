@@ -12,6 +12,8 @@ type Config struct {
 	PublicURL  string // https://takan.es
 	DataDir    string
 	SessionKey string // cookie signing
+	// AllowRegister enables public self-signup (GET/POST /register). Default false (invitation-only).
+	AllowRegister bool
 	// Optional Colmena S3 backup
 	BackupEndpoint  string
 	BackupRegion    string
@@ -27,6 +29,7 @@ func Load() Config {
 		PublicURL:       strings.TrimRight(env("TAKAN_PUBLIC_URL", "http://127.0.0.1:8090"), "/"),
 		DataDir:         env("TAKAN_DATA_DIR", "./data"),
 		SessionKey:      env("TAKAN_SESSION_KEY", ""),
+		AllowRegister:   envBool("TAKAN_ALLOW_REGISTER", false),
 		BackupEndpoint:  os.Getenv("TAKAN_BACKUP_ENDPOINT"),
 		BackupRegion:    env("TAKAN_BACKUP_REGION", "gra"),
 		BackupBucket:    os.Getenv("TAKAN_BACKUP_BUCKET"),
@@ -57,4 +60,20 @@ func EnvInt(k string, def int) int {
 		return def
 	}
 	return n
+}
+
+// envBool parses common truthy/falsey strings; empty uses def.
+func envBool(k string, def bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(k)))
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }

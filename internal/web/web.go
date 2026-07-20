@@ -33,6 +33,8 @@ type Server struct {
 	PublicURL string
 	// DataDir is the Colmena/data root (people photos live under people-photos/).
 	DataDir string
+	// AllowRegister enables public self-signup (default false = invitation-only).
+	AllowRegister bool
 	// OnMercadonaSave logs into Mercadona and stores session tokens (optional).
 	OnMercadonaSave func(ctx context.Context, userID, email, password, postal string) error
 	// OnMercadonaClear unlinks Mercadona session for the user.
@@ -42,12 +44,12 @@ type Server struct {
 	tmpl           *template.Template
 }
 
-func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL, dataDir string) (*Server, error) {
+func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL, dataDir string, allowRegister bool) (*Server, error) {
 	t, err := template.ParseFS(tmplFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	return &Server{Store: st, Hub: hub, Box: box, PublicURL: publicURL, DataDir: dataDir, tmpl: t}, nil
+	return &Server{Store: st, Hub: hub, Box: box, PublicURL: publicURL, DataDir: dataDir, AllowRegister: allowRegister, tmpl: t}, nil
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
@@ -118,6 +120,8 @@ type pageData struct {
 	MachTotalCount  int
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
+	// AllowRegister controls public signup CTAs and /register form.
+	AllowRegister bool
 }
 
 type emailDomainView struct {
@@ -185,6 +189,7 @@ func (s *Server) page(w http.ResponseWriter, contentFile string, data pageData) 
 	if data.Title == "" {
 		data.Title = "Takan"
 	}
+	data.AllowRegister = s.AllowRegister
 	t, err := template.ParseFS(tmplFS, "templates/layout.html", "templates/"+contentFile)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -254,16 +259,36 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
-// Public registration is closed; accounts are invitation-only for now.
+// registerClosedMsg is shown when TAKAN_ALLOW_REGISTER is off.
 const registerClosedMsg = "Registration is closed. Takan is invitation-only for now."
 
 func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
-	s.page(w, "register.html", pageData{Title: "Register", Error: registerClosedMsg})
+	if !s.AllowRegister {
+		s.page(w, "register.html", pageData{Title: "Register", Error: registerClosedMsg})
+		return
+	}
+	s.page(w, "register.html", pageData{Title: "Register"})
 }
 
 func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusForbidden)
-	s.page(w, "register.html", pageData{Title: "Register", Error: registerClosedMsg})
+	if !s.AllowRegister {
+		w.WriteHeader(http.StatusForbidden)
+		s.page(w, "register.html", pageData{Title: "Register", Error: registerClosedMsg})
+		return
+	}
+	_ = r.ParseForm()
+	u, err := s.Store.CreateUser(r.Context(), r.FormValue("email"), r.FormValue("password"))
+	if err != nil {
+		s.page(w, "register.html", pageData{Title: "Register", Error: err.Error()})
+		return
+	}
+	tok, err := s.Store.CreateWebSession(r.Context(), u.ID, 30*24*time.Hour)
+	if err != nil {
+		s.page(w, "register.html", pageData{Title: "Register", Error: err.Error()})
+		return
+	}
+	s.setSession(w, tok)
+	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {

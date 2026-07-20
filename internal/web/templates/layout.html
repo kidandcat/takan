@@ -1006,7 +1006,10 @@
         <span class="brand-text">Takan<small>MCP hub</small></span>
       </a>
       <nav class="row">
-        <a class="btn" href="/login" style="margin-top:0;padding:.45rem .85rem;font-size:.85rem">Log in</a>
+        <a class="btn secondary" href="/login" style="margin-top:0;padding:.45rem .85rem;font-size:.85rem">Log in</a>
+        {{if .AllowRegister}}
+        <a class="btn" href="/register" style="margin-top:0;padding:.45rem .85rem;font-size:.85rem">Sign up</a>
+        {{end}}
       </nav>
     </header>
     <div class="public-main{{if eq .Title "Home"}} wide{{end}}">

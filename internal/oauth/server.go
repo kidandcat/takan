@@ -24,6 +24,8 @@ const PublicClientID = "takan"
 type Server struct {
 	Store     *store.Store
 	PublicURL string // https://takan.es
+	// AllowRegister shows the signup link on the OAuth login page.
+	AllowRegister bool
 	// UserFromSession returns the logged-in panel user for a request, if any.
 	UserFromSession func(r *http.Request) *store.User
 	// CreateSession logs the user in on the panel after authorize login.

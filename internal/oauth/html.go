@@ -9,6 +9,10 @@ import (
 
 func (s *Server) renderLogin(w http.ResponseWriter, q url.Values, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	footer := `<p class="muted">Accounts are invitation-only for now.</p>`
+	if s.AllowRegister {
+		footer = `<p class="muted">No account? <a href="/register">Create one</a> first, then come back.</p>`
+	}
 	fmt.Fprint(w, pageShell("Sign in to Takan", `
   <h1>Sign in to connect Takan</h1>
   <p class="muted">Authorize your AI client (Grok, Claude, …) to use your Takan modules.</p>
@@ -22,7 +26,7 @@ func (s *Server) renderLogin(w http.ResponseWriter, q url.Values, errMsg string)
     <input type="password" name="password" required autocomplete="current-password"/>
     <button type="submit">Sign in &amp; authorize</button>
   </form>
-  <p class="muted">Accounts are invitation-only for now.</p>
+  `+footer+`
 `))
 }
 

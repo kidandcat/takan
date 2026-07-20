@@ -84,7 +84,7 @@ func main() {
 		People:    people.Factory(st),
 	}
 
-	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir)
+	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir, cfg.AllowRegister)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}
@@ -114,6 +114,7 @@ func main() {
 	oauthSrv := &oauth.Server{
 		Store:            st,
 		PublicURL:        cfg.PublicURL,
+		AllowRegister:    cfg.AllowRegister,
 		UserFromSession:  webSrv.CurrentUser,
 		CreateSession:    webSrv.CreateWebSession,
 		SetSessionCookie: webSrv.SetSessionCookie,
@@ -149,7 +150,7 @@ func main() {
 		_ = httpSrv.Shutdown(ctx)
 	}()
 
-	log.Printf("takan listening on %s public=%s", cfg.Listen, cfg.PublicURL)
+	log.Printf("takan listening on %s public=%s allow_register=%v", cfg.Listen, cfg.PublicURL, cfg.AllowRegister)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
