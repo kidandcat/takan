@@ -78,6 +78,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/memory", s.dashMemory)
 	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
 	mux.HandleFunc("GET /dashboard/invites", s.dashInvites)
+	mux.HandleFunc("GET /dashboard/admin", s.dashAdmin)
 	// Old routes → overview / integrations
 	mux.HandleFunc("GET /dashboard/connect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -88,6 +89,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/modules/{id}/toggle", s.toggleModule)
 	mux.HandleFunc("POST /dashboard/invites", s.createInvite)
 	mux.HandleFunc("POST /dashboard/invites/{id}/revoke", s.revokeInvite)
+	mux.HandleFunc("POST /dashboard/admin/users", s.adminInvitePolicy)
+	// Legacy admin POST path
 	mux.HandleFunc("POST /dashboard/invites/admin", s.adminInvitePolicy)
 	mux.HandleFunc("POST /dashboard/machines", s.createMachine)
 	mux.HandleFunc("POST /dashboard/machines/{id}/delete", s.deleteMachine)
@@ -434,6 +437,17 @@ func (s *Server) dashPeople(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashInvites(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "invites", "Invites", "invites.html")
 }
+func (s *Server) dashAdmin(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	if !u.IsAdmin {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	s.dashPage(w, r, "admin", "Admin", "admin.html")
+}
 
 func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data := pageData{
@@ -749,10 +763,10 @@ func (s *Server) adminInvitePolicy(w http.ResponseWriter, r *http.Request) {
 	unlimited := r.FormValue("unlimited") == "1"
 	isAdmin := r.FormValue("is_admin") == "1"
 	if err := s.Store.SetUserInvitePolicy(r.Context(), target, quota, unlimited, isAdmin); err != nil {
-		http.Redirect(w, r, "/dashboard/invites?flash="+urlQuery(err.Error()), http.StatusFound)
+		http.Redirect(w, r, "/dashboard/admin?flash="+urlQuery(err.Error()), http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, "/dashboard/invites?flash=User+invite+policy+updated", http.StatusFound)
+	http.Redirect(w, r, "/dashboard/admin?flash=User+updated", http.StatusFound)
 }
 
 // redirectBack sends the browser to Referer when it is on this host, else fallback.

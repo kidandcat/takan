@@ -106,37 +106,4 @@
   <div class="card"><p class="muted">No invites yet.</p></div>
   {{end}}
 </section>
-
-{{if .IsAdmin}}
-<section class="section">
-  <div class="section-title"><span class="dot"></span><h2>Admin · user invite policy</h2></div>
-  <p class="muted" style="margin-bottom:.75rem">Grant unlimited invites or change quotas. Only admins see this.</p>
-  {{range .AdminUsers}}
-  <div class="card">
-    <div class="card-head">
-      <div>
-        <h3>{{.Email}}</h3>
-        <p class="faint">issued {{.Created}} · quota {{.Quota}}{{if .Unlimited}} · unlimited{{end}}{{if .Admin}} · admin{{end}}</p>
-      </div>
-    </div>
-    <form method="post" action="/dashboard/invites/admin" class="row" style="gap:.75rem;flex-wrap:wrap;align-items:flex-end">
-      <input type="hidden" name="user_id" value="{{.ID}}"/>
-      <div style="flex:1;min-width:8rem">
-        <label>Quota</label>
-        <input name="quota" type="number" min="0" value="{{.Quota}}"/>
-      </div>
-      <label style="display:flex;align-items:center;gap:.4rem;margin:0">
-        <input type="checkbox" name="unlimited" value="1" {{if .Unlimited}}checked{{end}} style="width:auto"/>
-        Unlimited
-      </label>
-      <label style="display:flex;align-items:center;gap:.4rem;margin:0">
-        <input type="checkbox" name="is_admin" value="1" {{if .Admin}}checked{{end}} style="width:auto"/>
-        Admin
-      </label>
-      <button type="submit">Save</button>
-    </form>
-  </div>
-  {{end}}
-</section>
-{{end}}
 {{end}}

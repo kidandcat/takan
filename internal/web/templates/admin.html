@@ -1,0 +1,145 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Admin</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:52ch">
+      Users and invite policy. Only admins can open this page.
+    </p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="section-title">
+    <span class="dot"></span>
+    <h2>Users</h2>
+    <span class="faint" style="margin-left:auto">{{len .AdminUsers}} total</span>
+  </div>
+
+  {{if .AdminUsers}}
+  <div class="card" style="padding:0;overflow:hidden">
+    <ul class="admin-user-list">
+      {{range .AdminUsers}}
+      <li class="admin-user-row">
+        <div class="admin-user-main">
+          <span class="admin-user-email" title="{{.Email}}">{{.Email}}</span>
+          <span class="admin-user-meta">
+            {{if .Admin}}<span class="pill on">admin</span>{{end}}
+            {{if .Unlimited}}<span class="pill on">∞ invites</span>
+            {{else}}<span class="pill neutral">{{.Created}}/{{.Quota}}</span>{{end}}
+          </span>
+        </div>
+        <form method="post" action="/dashboard/admin/users" class="admin-user-form">
+          <input type="hidden" name="user_id" value="{{.ID}}"/>
+          <label class="admin-field">
+            <span>Quota</span>
+            <input name="quota" type="number" min="0" value="{{.Quota}}" {{if .Unlimited}}disabled{{end}}/>
+          </label>
+          <label class="admin-check">
+            <input type="checkbox" name="unlimited" value="1" {{if .Unlimited}}checked{{end}}/>
+            ∞
+          </label>
+          <label class="admin-check">
+            <input type="checkbox" name="is_admin" value="1" {{if .Admin}}checked{{end}}/>
+            Admin
+          </label>
+          <button type="submit" class="btn secondary admin-save">Save</button>
+        </form>
+      </li>
+      {{end}}
+    </ul>
+  </div>
+  {{else}}
+  <div class="card"><p class="muted">No users.</p></div>
+  {{end}}
+</section>
+
+<style>
+  .admin-user-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .admin-user-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem 1rem;
+    padding: 0.55rem 0.9rem;
+    border-top: 1px solid var(--border);
+  }
+  .admin-user-row:first-child { border-top: none; }
+  .admin-user-main {
+    flex: 1 1 12rem;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .admin-user-email {
+    font-size: 0.88rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .admin-user-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    align-items: center;
+  }
+  .admin-user-meta .pill {
+    font-size: 0.62rem;
+    padding: 0.08rem 0.4rem;
+  }
+  .admin-user-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem 0.75rem;
+    margin: 0;
+  }
+  .admin-field {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  .admin-field input {
+    width: 4.2rem;
+    padding: 0.35rem 0.45rem;
+    font-size: 0.85rem;
+    margin: 0;
+  }
+  .admin-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .admin-check input {
+    width: auto;
+    margin: 0;
+  }
+  .admin-save {
+    padding: 0.35rem 0.7rem !important;
+    font-size: 0.8rem !important;
+    margin: 0 !important;
+  }
+  @media (max-width: 640px) {
+    .admin-user-form { width: 100%; }
+    .admin-save { margin-left: auto !important; }
+  }
+</style>
+{{end}}
