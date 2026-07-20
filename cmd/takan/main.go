@@ -322,9 +322,17 @@ KillMode=mixed
 WantedBy=multi-user.target
 EOF
     # Stop user unit if a previous install used it (avoid two agents, same token).
-    systemctl --user disable --now takan-agent 2>/dev/null || true
+    # Old units lacked TimeoutStopSec; SIGTERM can hang — kill hard, then disable.
+    if systemctl --user is-active takan-agent >/dev/null 2>&1; then
+      systemctl --user kill -s SIGKILL takan-agent 2>/dev/null || true
+      timeout 3 systemctl --user stop takan-agent 2>/dev/null || true
+    fi
+    systemctl --user disable takan-agent 2>/dev/null || true
     rm -f "$HOME/.config/systemd/user/takan-agent.service" 2>/dev/null || true
     systemctl --user daemon-reload 2>/dev/null || true
+    # Also stop any leftover binary (user or previous system install).
+    "${AS_ROOT[@]}" systemctl stop takan-agent 2>/dev/null || true
+    pkill -9 -x takan-agent 2>/dev/null || true
     "${AS_ROOT[@]}" systemctl daemon-reload
     "${AS_ROOT[@]}" systemctl enable --now takan-agent
     echo "takan-agent started (systemd system)"

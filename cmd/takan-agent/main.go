@@ -83,12 +83,24 @@ func runOnce(ctx context.Context, base, token string) error {
 	defer c.Close()
 	log.Printf("connected to %s", base)
 
+	// Unblock ReadMessage promptly on SIGTERM/SIGINT.
+	go func() {
+		<-ctx.Done()
+		_ = c.Close()
+	}()
+
 	_ = c.WriteJSON(wireMsg{Type: "hello"})
 
 	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		_ = c.SetReadDeadline(time.Now().Add(120 * time.Second))
 		_, raw, err := c.ReadMessage()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		}
 		var msg wireMsg
@@ -97,7 +109,7 @@ func runOnce(ctx context.Context, base, token string) error {
 		}
 		switch msg.Type {
 		case "bash":
-			res := runBash(msg.Command)
+			res := runBash(ctx, msg.Command)
 			res.Type = "bash_result"
 			res.TaskID = msg.TaskID
 			if err := c.WriteJSON(res); err != nil {
@@ -108,8 +120,8 @@ func runOnce(ctx context.Context, base, token string) error {
 	}
 }
 
-func runBash(command string) wireMsg {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+func runBash(parent context.Context, command string) wireMsg {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
 	var stdout, stderr bytes.Buffer
