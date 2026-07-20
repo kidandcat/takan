@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,6 +31,8 @@ type Server struct {
 	Hub       *agenthub.Hub
 	Box       *cryptox.Box
 	PublicURL string
+	// DataDir is the Colmena/data root (people photos live under people-photos/).
+	DataDir string
 	// OnMercadonaSave logs into Mercadona and stores session tokens (optional).
 	OnMercadonaSave func(ctx context.Context, userID, email, password, postal string) error
 	// OnMercadonaClear unlinks Mercadona session for the user.
@@ -37,12 +42,12 @@ type Server struct {
 	tmpl           *template.Template
 }
 
-func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL string) (*Server, error) {
+func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL, dataDir string) (*Server, error) {
 	t, err := template.ParseFS(tmplFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	return &Server{Store: st, Hub: hub, Box: box, PublicURL: publicURL, tmpl: t}, nil
+	return &Server{Store: st, Hub: hub, Box: box, PublicURL: publicURL, DataDir: dataDir, tmpl: t}, nil
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
@@ -79,6 +84,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/people", s.createPerson)
 	mux.HandleFunc("POST /dashboard/people/{id}", s.updatePerson)
 	mux.HandleFunc("POST /dashboard/people/{id}/delete", s.deletePerson)
+	mux.HandleFunc("GET /dashboard/people/{id}/photo", s.personPhoto)
 }
 
 type pageData struct {
@@ -121,9 +127,9 @@ type emailDomainView struct {
 
 type personView struct {
 	ID, Name, Relationship, Context, Notes, Email, Phone, Birthday string
-	TagsLine, AliasesLine, Initial, ContactsJSON                   string
+	TagsLine, AliasesLine, Initial, ContactsJSON, PhotoURL         string
 	Contacts                                                       []personContactView
-	HasContacts                                                    bool
+	HasContacts, HasPhoto                                          bool
 }
 
 type personContactView struct {
@@ -513,6 +519,11 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			} else {
 				pv.ContactsJSON = "{}"
 			}
+			if p.Photo != "" {
+				pv.HasPhoto = true
+				// Cache-bust when the person row is updated (photo change updates updated_at).
+				pv.PhotoURL = fmt.Sprintf("/dashboard/people/%s/photo?v=%d", url.PathEscape(p.ID), p.UpdatedAt.Unix())
+			}
 			data.People = append(data.People, pv)
 		}
 	}
@@ -839,12 +850,16 @@ func personInitial(name string) string {
 	return "?"
 }
 
+const maxPersonPhotoBytes = 3 << 20 // 3 MiB
+
 func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
 	u := s.requireUser(w, r)
 	if u == nil {
 		return
 	}
-	_ = r.ParseForm()
+	if err := r.ParseMultipartForm(maxPersonPhotoBytes + (1 << 20)); err != nil {
+		_ = r.ParseForm()
+	}
 	p := store.Person{
 		UserID:       u.ID,
 		Name:         r.FormValue("name"),
@@ -858,8 +873,13 @@ func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
 		Aliases:      splitCSV(r.FormValue("aliases")),
 		Tags:         splitCSV(r.FormValue("tags")),
 	}
-	if _, err := s.Store.CreatePerson(r.Context(), p); err != nil {
+	out, err := s.Store.CreatePerson(r.Context(), p)
+	if err != nil {
 		http.Redirect(w, r, "/dashboard/people?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if _, err := s.savePersonPhotoFromForm(r, u.ID, out.ID); err != nil {
+		http.Redirect(w, r, "/dashboard/people?flash="+urlQuery("person saved but photo: "+err.Error()), http.StatusFound)
 		return
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "people", true)
@@ -874,7 +894,9 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	_ = r.ParseForm()
+	if err := r.ParseMultipartForm(maxPersonPhotoBytes + (1 << 20)); err != nil {
+		_ = r.ParseForm()
+	}
 	id := r.PathValue("id")
 	fields := map[string]string{
 		"name":         r.FormValue("name"),
@@ -892,6 +914,15 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.Store.UpdatePersonFields(r.Context(), u.ID, id, fields,
 		splitCSV(r.FormValue("aliases")), splitCSV(r.FormValue("tags")), true, true,
 		parseFormContacts(r), true); err != nil {
+		http.Redirect(w, r, "/dashboard/people?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if r.FormValue("remove_photo") == "1" {
+		if err := s.clearPersonPhoto(r.Context(), u.ID, id); err != nil {
+			http.Redirect(w, r, "/dashboard/people?flash="+urlQuery(err.Error()), http.StatusFound)
+			return
+		}
+	} else if _, err := s.savePersonPhotoFromForm(r, u.ID, id); err != nil {
 		http.Redirect(w, r, "/dashboard/people?flash="+urlQuery(err.Error()), http.StatusFound)
 		return
 	}
@@ -931,8 +962,154 @@ func (s *Server) deletePerson(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	_ = s.Store.DeletePerson(r.Context(), u.ID, r.PathValue("id"))
+	id := r.PathValue("id")
+	if p, err := s.Store.GetPerson(r.Context(), u.ID, id); err == nil && p != nil {
+		s.removePersonPhotoFiles(u.ID, p.ID, p.Photo)
+	}
+	_ = s.Store.DeletePerson(r.Context(), u.ID, id)
 	http.Redirect(w, r, "/dashboard/people", http.StatusFound)
+}
+
+func (s *Server) personPhoto(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	id := r.PathValue("id")
+	p, err := s.Store.GetPerson(r.Context(), u.ID, id)
+	if err != nil || p == nil || p.Photo == "" {
+		http.NotFound(w, r)
+		return
+	}
+	path := s.personPhotoPath(u.ID, p.ID, p.Photo)
+	f, err := os.Open(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", photoContentType(p.Photo))
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	http.ServeContent(w, r, "photo."+p.Photo, st.ModTime(), f)
+}
+
+func (s *Server) personPhotoDir(userID string) string {
+	return filepath.Join(s.DataDir, "people-photos", userID)
+}
+
+func (s *Server) personPhotoPath(userID, personID, ext string) string {
+	ext = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(ext)), ".")
+	return filepath.Join(s.personPhotoDir(userID), personID+"."+ext)
+}
+
+// savePersonPhotoFromForm stores an uploaded photo if present. Returns (saved, err).
+func (s *Server) savePersonPhotoFromForm(r *http.Request, userID, personID string) (bool, error) {
+	file, hdr, err := r.FormFile("photo")
+	if err == http.ErrMissingFile || err == http.ErrNotMultipart {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("photo upload: %w", err)
+	}
+	defer file.Close()
+	if hdr.Size > maxPersonPhotoBytes {
+		return false, fmt.Errorf("photo too large (max 3 MB)")
+	}
+	// Read limited bytes + sniff type.
+	limited := io.LimitReader(file, maxPersonPhotoBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return false, fmt.Errorf("read photo: %w", err)
+	}
+	if len(data) > maxPersonPhotoBytes {
+		return false, fmt.Errorf("photo too large (max 3 MB)")
+	}
+	if len(data) == 0 {
+		return false, nil
+	}
+	ct := http.DetectContentType(data)
+	ext, ok := photoExtForContentType(ct)
+	if !ok {
+		return false, fmt.Errorf("unsupported image type (use JPEG, PNG, WebP or GIF)")
+	}
+	dir := s.personPhotoDir(userID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false, err
+	}
+	// Drop previous extension if different.
+	if cur, err := s.Store.GetPerson(r.Context(), userID, personID); err == nil && cur != nil && cur.Photo != "" && cur.Photo != ext {
+		_ = os.Remove(s.personPhotoPath(userID, personID, cur.Photo))
+	}
+	path := s.personPhotoPath(userID, personID, ext)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return false, err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return false, err
+	}
+	if _, err := s.Store.UpdatePersonFields(r.Context(), userID, personID, map[string]string{"photo": ext},
+		nil, nil, false, false, nil, false); err != nil {
+		_ = os.Remove(path)
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Server) clearPersonPhoto(ctx context.Context, userID, personID string) error {
+	p, err := s.Store.GetPerson(ctx, userID, personID)
+	if err != nil {
+		return err
+	}
+	s.removePersonPhotoFiles(userID, personID, p.Photo)
+	_, err = s.Store.UpdatePersonFields(ctx, userID, personID, map[string]string{"photo": ""},
+		nil, nil, false, false, nil, false)
+	return err
+}
+
+func (s *Server) removePersonPhotoFiles(userID, personID, knownExt string) {
+	if knownExt != "" {
+		_ = os.Remove(s.personPhotoPath(userID, personID, knownExt))
+	}
+	for _, ext := range []string{"jpg", "jpeg", "png", "webp", "gif"} {
+		_ = os.Remove(s.personPhotoPath(userID, personID, ext))
+	}
+}
+
+func photoExtForContentType(ct string) (string, bool) {
+	switch {
+	case strings.HasPrefix(ct, "image/jpeg"):
+		return "jpg", true
+	case strings.HasPrefix(ct, "image/png"):
+		return "png", true
+	case strings.HasPrefix(ct, "image/webp"):
+		return "webp", true
+	case strings.HasPrefix(ct, "image/gif"):
+		return "gif", true
+	default:
+		return "", false
+	}
+}
+
+func photoContentType(ext string) string {
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "jpg", "jpeg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "webp":
+		return "image/webp"
+	case "gif":
+		return "image/gif"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 func urlQuery(s string) string {

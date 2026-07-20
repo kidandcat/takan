@@ -84,7 +84,7 @@ func main() {
 		People:    people.Factory(st),
 	}
 
-	webSrv, err := web.New(st, hub, box, cfg.PublicURL)
+	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}

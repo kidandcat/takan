@@ -22,7 +22,11 @@
     {{range .People}}
     <article class="person-card">
       <div class="person-card-top">
+        {{if .HasPhoto}}
+        <div class="person-avatar has-photo" aria-hidden="true"><img src="{{.PhotoURL}}" alt=""/></div>
+        {{else}}
         <div class="person-avatar" aria-hidden="true">{{.Initial}}</div>
+        {{end}}
         <div class="person-card-id">
           <div class="name">{{.Name}}</div>
           {{if .Relationship}}<div class="rel">{{.Relationship}}</div>{{end}}
@@ -59,6 +63,8 @@
           data-birthday="{{.Birthday}}"
           data-aliases="{{.AliasesLine}}"
           data-tags="{{.TagsLine}}"
+          data-photo="{{if .HasPhoto}}{{.PhotoURL}}{{end}}"
+          data-initial="{{.Initial}}"
           onclick="openPersonModal(this)">Edit</button>
         <form method="post" action="/dashboard/people/{{.ID}}/delete" style="flex:1;display:flex" onsubmit="return confirm('Delete {{.Name}}?')">
           <button type="submit" class="secondary" style="width:100%">Delete</button>
@@ -82,7 +88,21 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
-    <form method="post" action="/dashboard/people" id="person-form" class="form-stack" style="max-width:100%">
+    <form method="post" action="/dashboard/people" id="person-form" class="form-stack" style="max-width:100%" enctype="multipart/form-data">
+      <div>
+        <label>Photo <span class="faint">(panel only)</span></label>
+        <div class="photo-upload">
+          <div id="photo-preview" class="person-avatar" aria-hidden="true">?</div>
+          <div class="photo-upload-controls">
+            <input id="p-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif"/>
+            <label class="inline" id="remove-photo-wrap" hidden>
+              <input type="checkbox" id="p-remove-photo" name="remove_photo" value="1"/>
+              Remove current photo
+            </label>
+            <p class="muted" style="margin:0;font-size:.78rem">JPEG, PNG, WebP or GIF · max 3 MB · not sent to AI tools</p>
+          </div>
+        </div>
+      </div>
       <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
         <div>
           <label for="p-name">Name</label>
@@ -148,6 +168,11 @@
   var title = document.getElementById('person-modal-title');
   var submit = document.getElementById('person-submit');
   var contactsList = document.getElementById('contacts-list');
+  var photoInput = document.getElementById('p-photo');
+  var photoPreview = document.getElementById('photo-preview');
+  var removeWrap = document.getElementById('remove-photo-wrap');
+  var removeCb = document.getElementById('p-remove-photo');
+  var previewObjectURL = null;
 
   function setVal(id, v) {
     var el = document.getElementById(id);
@@ -205,6 +230,63 @@
     keys.forEach(function (k) { addContactRow(k, obj[k]); });
   }
 
+  function revokePreviewURL() {
+    if (previewObjectURL) {
+      URL.revokeObjectURL(previewObjectURL);
+      previewObjectURL = null;
+    }
+  }
+
+  function setPhotoPreview(url, initial) {
+    revokePreviewURL();
+    if (!photoPreview) return;
+    photoPreview.innerHTML = '';
+    if (url) {
+      photoPreview.classList.add('has-photo');
+      var img = document.createElement('img');
+      img.src = url;
+      img.alt = '';
+      photoPreview.appendChild(img);
+    } else {
+      photoPreview.classList.remove('has-photo');
+      photoPreview.textContent = initial || '?';
+    }
+  }
+
+  function resetPhotoField(hasExisting, existingURL, initial) {
+    if (photoInput) photoInput.value = '';
+    if (removeCb) {
+      removeCb.checked = false;
+      removeCb.disabled = false;
+    }
+    if (removeWrap) removeWrap.hidden = !hasExisting;
+    setPhotoPreview(hasExisting ? existingURL : '', initial || '?');
+  }
+
+  if (photoInput) {
+    photoInput.addEventListener('change', function () {
+      var f = photoInput.files && photoInput.files[0];
+      if (!f) return;
+      revokePreviewURL();
+      previewObjectURL = URL.createObjectURL(f);
+      setPhotoPreview(previewObjectURL, '?');
+      if (removeCb) {
+        removeCb.checked = false;
+        removeCb.disabled = true;
+      }
+    });
+  }
+  if (removeCb) {
+    removeCb.addEventListener('change', function () {
+      if (removeCb.checked) {
+        if (photoInput) photoInput.value = '';
+        setPhotoPreview('', document.getElementById('p-name') && document.getElementById('p-name').value
+          ? document.getElementById('p-name').value.trim().charAt(0).toUpperCase() || '?'
+          : '?');
+      }
+    });
+  }
+
   window.openPersonModal = function (btn) {
     if (btn && btn.dataset && btn.dataset.id) {
       title.textContent = 'Edit person';
@@ -220,12 +302,15 @@
       setVal('p-aliases', btn.dataset.aliases);
       setVal('p-tags', btn.dataset.tags);
       loadContacts(btn.dataset.contacts);
+      var hasPhoto = !!(btn.dataset.photo);
+      resetPhotoField(hasPhoto, btn.dataset.photo || '', btn.dataset.initial || '?');
     } else {
       title.textContent = 'Add person';
       submit.textContent = 'Add person';
       form.action = '/dashboard/people';
       form.reset();
       loadContacts('{}');
+      resetPhotoField(false, '', '?');
     }
     modal.hidden = false;
     document.body.style.overflow = 'hidden';
@@ -236,6 +321,7 @@
   window.closePersonModal = function () {
     modal.hidden = true;
     document.body.style.overflow = '';
+    revokePreviewURL();
   };
 
   document.addEventListener('keydown', function (e) {
