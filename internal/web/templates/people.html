@@ -3,9 +3,12 @@
   <div class="row" style="justify-content:space-between;align-items:flex-start;width:100%">
     <div>
       <h1>People</h1>
-      <p class="muted" style="margin-top:.4rem;max-width:52ch">Directory of people you know — relationship, context, notes. Tools: <code>people_list</code>, <code>people_get</code>, <code>people_add</code>, <code>people_update</code>, <code>people_delete</code>.</p>
+      <p class="muted" style="margin-top:.4rem;max-width:52ch">Directory of people you know — relationship, context, notes.</p>
     </div>
-    <button type="button" class="btn" style="margin-top:0" onclick="openPersonModal()">Add person</button>
+    <div class="row" style="gap:.55rem;align-items:center">
+      <span class="pill neutral">{{.PeopleCount}} total</span>
+      <button type="button" class="btn" style="margin-top:0" onclick="openPersonModal()">Add person</button>
+    </div>
   </div>
 </section>
 
@@ -14,55 +17,55 @@
 {{end}}
 
 <section class="section">
-  <div class="card">
-    <div class="card-head">
-      <div>
-        <h3>Directory</h3>
-        <p class="muted">Your people. The AI can search and update these via MCP.</p>
-      </div>
-      <span class="pill neutral">{{.PeopleCount}} total</span>
-    </div>
-    {{if .People}}
-    <div class="machine-list">
-      {{range .People}}
-      <div class="machine-row" style="align-items:flex-start">
-        <div style="min-width:0;flex:1">
-          <div class="name">{{.Name}}{{if .Relationship}} <span class="faint">· {{.Relationship}}</span>{{end}}</div>
-          {{if .Context}}<div class="faint" style="margin-top:.15rem">{{.Context}}</div>{{end}}
-          {{if .Notes}}<div class="muted" style="margin-top:.25rem;font-size:.85rem;white-space:pre-wrap">{{.Notes}}</div>{{end}}
-          {{if or .TagsLine .Contact .AliasesLine}}
-          <div class="faint" style="margin-top:.3rem">
-            {{if .AliasesLine}}aka {{.AliasesLine}}{{end}}
-            {{if and .AliasesLine .TagsLine}} · {{end}}
-            {{if .TagsLine}}{{.TagsLine}}{{end}}
-            {{if and (or .AliasesLine .TagsLine) .Contact}} · {{end}}
-            {{if .Contact}}{{.Contact}}{{end}}
-          </div>
-          {{end}}
-        </div>
-        <div class="row" style="gap:.4rem;flex-shrink:0">
-          <button type="button" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem"
-            data-id="{{.ID}}"
-            data-name="{{.Name}}"
-            data-relationship="{{.Relationship}}"
-            data-context="{{.Context}}"
-            data-notes="{{.Notes}}"
-            data-contact="{{.Contact}}"
-            data-birthday="{{.Birthday}}"
-            data-aliases="{{.AliasesLine}}"
-            data-tags="{{.TagsLine}}"
-            onclick="openPersonModal(this)">Edit</button>
-          <form method="post" action="/dashboard/people/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?')">
-            <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Delete</button>
-          </form>
+  {{if .People}}
+  <div class="people-grid">
+    {{range .People}}
+    <article class="person-card">
+      <div class="person-card-top">
+        <div class="person-avatar" aria-hidden="true">{{.Initial}}</div>
+        <div class="person-card-id">
+          <div class="name">{{.Name}}</div>
+          {{if .Relationship}}<div class="rel">{{.Relationship}}</div>{{end}}
         </div>
       </div>
-      {{end}}
-    </div>
-    {{else}}
-    <div class="empty">No people yet. <button type="button" class="ghost" onclick="openPersonModal()" style="font-size:.9rem">Add someone</button> or use <code>people_add</code>.</div>
+      <div class="person-card-body">
+        {{if .Context}}<div class="ctx">{{.Context}}</div>{{end}}
+        {{if .Notes}}<div class="notes">{{.Notes}}</div>{{end}}
+        {{if or .TagsLine .Contact .AliasesLine .Birthday}}
+        <div class="person-card-meta" style="margin-top:.4rem">
+          {{if .AliasesLine}}aka {{.AliasesLine}}{{end}}
+          {{if and .AliasesLine .TagsLine}} · {{end}}
+          {{if .TagsLine}}{{.TagsLine}}{{end}}
+          {{if and (or .AliasesLine .TagsLine) .Contact}} · {{end}}
+          {{if .Contact}}{{.Contact}}{{end}}
+          {{if .Birthday}}{{if or .AliasesLine .TagsLine .Contact}} · {{end}}🎂 {{.Birthday}}{{end}}
+        </div>
+        {{end}}
+      </div>
+      <div class="person-card-actions">
+        <button type="button" class="secondary"
+          data-id="{{.ID}}"
+          data-name="{{.Name}}"
+          data-relationship="{{.Relationship}}"
+          data-context="{{.Context}}"
+          data-notes="{{.Notes}}"
+          data-contact="{{.Contact}}"
+          data-birthday="{{.Birthday}}"
+          data-aliases="{{.AliasesLine}}"
+          data-tags="{{.TagsLine}}"
+          onclick="openPersonModal(this)">Edit</button>
+        <form method="post" action="/dashboard/people/{{.ID}}/delete" style="flex:1;display:flex" onsubmit="return confirm('Delete {{.Name}}?')">
+          <button type="submit" class="secondary" style="width:100%">Delete</button>
+        </form>
+      </div>
+    </article>
     {{end}}
   </div>
+  {{else}}
+  <div class="card">
+    <div class="empty">No people yet. <button type="button" class="ghost" onclick="openPersonModal()" style="font-size:.9rem">Add someone</button> or use <code>people_add</code>.</div>
+  </div>
+  {{end}}
 </section>
 
 <div class="modal-backdrop" id="person-modal" hidden onclick="if(event.target===this)closePersonModal()">

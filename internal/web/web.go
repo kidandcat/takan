@@ -120,7 +120,7 @@ type emailDomainView struct {
 
 type personView struct {
 	ID, Name, Relationship, Context, Notes, Contact, Birthday string
-	TagsLine, AliasesLine                                     string
+	TagsLine, AliasesLine, Initial                            string
 }
 
 type modView struct {
@@ -489,6 +489,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			pv := personView{
 				ID: p.ID, Name: p.Name, Relationship: p.Relationship,
 				Context: p.Context, Notes: p.Notes, Contact: p.Contact, Birthday: p.Birthday,
+				Initial: personInitial(p.Name),
 			}
 			if len(p.Tags) > 0 {
 				pv.TagsLine = strings.Join(p.Tags, ", ")
@@ -809,6 +810,17 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func personInitial(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "?"
+	}
+	for _, r := range name {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
 }
 
 func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
