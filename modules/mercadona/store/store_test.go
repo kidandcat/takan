@@ -99,7 +99,7 @@ func TestOpenRealHomeDBIfPresent(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	path := filepath.Join(home, ".mercadona-mcp", "data.db")
+	path := filepath.Join(home, ".takan", "data.db")
 	if _, err := os.Stat(path); err != nil {
 		t.Skip("no local data.db")
 	}
