@@ -175,6 +175,7 @@ func serveInstallSh(publicURL string) http.HandlerFunc {
 set -euo pipefail
 # Takan agent installer — only the agent token is required.
 #   curl -fsSL ` + publicURL + `/install.sh | bash -s -- <token>
+# Prefers a system (root) service when root/sudo is available; falls back to user.
 TOKEN="${TAKAN_AGENT_TOKEN:-}"
 NAME="${TAKAN_AGENT_NAME:-}"
 URL="${TAKAN_URL:-` + publicURL + `}"
@@ -199,8 +200,21 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-BIN_DIR="${HOME}/.local/bin"
-mkdir -p "$BIN_DIR"
+# Root helper: identity, passwordless sudo, or interactive sudo when a TTY is available.
+AS_ROOT=()
+if [ "$(id -u)" -eq 0 ]; then
+  AS_ROOT=()
+  USE_SYSTEM=1
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  AS_ROOT=(sudo)
+  USE_SYSTEM=1
+elif [ -t 0 ] && command -v sudo >/dev/null 2>&1 && sudo -v 2>/dev/null; then
+  AS_ROOT=(sudo)
+  USE_SYSTEM=1
+else
+  USE_SYSTEM=0
+fi
+
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -209,16 +223,52 @@ case "$ARCH" in
 esac
 TMP=$(mktemp)
 curl -fsSL "$URL/download/takan-agent-${OS}-${ARCH}" -o "$TMP" || {
-  echo "download failed — place takan-agent in $BIN_DIR manually" >&2
+  echo "download failed — cannot fetch takan-agent-${OS}-${ARCH}" >&2
   exit 1
 }
 chmod +x "$TMP"
-mv "$TMP" "$BIN_DIR/takan-agent"
-# launchd (mac) or systemd user
+
 if [ "$(uname -s)" = "Darwin" ]; then
-  PLIST="$HOME/Library/LaunchAgents/com.takan.agent.plist"
-  mkdir -p "$(dirname "$PLIST")"
-  cat > "$PLIST" <<EOF
+  if [ "$USE_SYSTEM" = "1" ]; then
+    BIN_DIR=/usr/local/bin
+    PLIST=/Library/LaunchDaemons/com.takan.agent.plist
+    LOG_DIR=/var/log/takan
+    "${AS_ROOT[@]}" mkdir -p "$BIN_DIR" "$LOG_DIR"
+    "${AS_ROOT[@]}" mv "$TMP" "$BIN_DIR/takan-agent"
+    "${AS_ROOT[@]}" chmod 755 "$BIN_DIR/takan-agent"
+    # Drop user LaunchAgent if a previous install used it.
+    launchctl bootout "gui/$(id -u)/com.takan.agent" 2>/dev/null || true
+    launchctl unload "$HOME/Library/LaunchAgents/com.takan.agent.plist" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/com.takan.agent.plist" 2>/dev/null || true
+    "${AS_ROOT[@]}" tee "$PLIST" >/dev/null <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.takan.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$BIN_DIR/takan-agent</string>
+    <string>--url</string><string>$URL</string>
+    <string>--token</string><string>$TOKEN</string>
+    <string>--name</string><string>$NAME</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>$LOG_DIR/agent.log</string>
+  <key>StandardErrorPath</key><string>$LOG_DIR/agent.log</string>
+</dict></plist>
+EOF
+    "${AS_ROOT[@]}" launchctl bootout system/com.takan.agent 2>/dev/null || true
+    "${AS_ROOT[@]}" launchctl unload "$PLIST" 2>/dev/null || true
+    "${AS_ROOT[@]}" launchctl load "$PLIST" 2>/dev/null || "${AS_ROOT[@]}" launchctl bootstrap system "$PLIST"
+    echo "takan-agent loaded (launchd system). log: $LOG_DIR/agent.log"
+  else
+    BIN_DIR="${HOME}/.local/bin"
+    mkdir -p "$BIN_DIR" "$HOME/.takan"
+    mv "$TMP" "$BIN_DIR/takan-agent"
+    PLIST="$HOME/Library/LaunchAgents/com.takan.agent.plist"
+    mkdir -p "$(dirname "$PLIST")"
+    cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -236,18 +286,59 @@ if [ "$(uname -s)" = "Darwin" ]; then
   <key>StandardErrorPath</key><string>$HOME/.takan/agent.log</string>
 </dict></plist>
 EOF
-  mkdir -p "$HOME/.takan"
-  launchctl unload "$PLIST" 2>/dev/null || true
-  launchctl load "$PLIST"
-  echo "takan-agent loaded (launchd). log: ~/.takan/agent.log"
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load "$PLIST"
+    echo "takan-agent loaded (launchd user). log: ~/.takan/agent.log"
+  fi
 else
-  mkdir -p "$HOME/.config/takan" "$HOME/.config/systemd/user"
-  cat > "$HOME/.config/takan/agent.env" <<EOF
+  # Linux: system unit when root/sudo available, else systemd --user.
+  if [ "$USE_SYSTEM" = "1" ]; then
+    BIN_DIR=/usr/local/bin
+    ENV_DIR=/etc/takan
+    UNIT=/etc/systemd/system/takan-agent.service
+    "${AS_ROOT[@]}" mkdir -p "$BIN_DIR" "$ENV_DIR"
+    "${AS_ROOT[@]}" mv "$TMP" "$BIN_DIR/takan-agent"
+    "${AS_ROOT[@]}" chmod 755 "$BIN_DIR/takan-agent"
+    "${AS_ROOT[@]}" tee "$ENV_DIR/agent.env" >/dev/null <<EOF
 TAKAN_URL=$URL
 TAKAN_AGENT_TOKEN=$TOKEN
 TAKAN_AGENT_NAME=$NAME
 EOF
-  cat > "$HOME/.config/systemd/user/takan-agent.service" <<EOF
+    "${AS_ROOT[@]}" chmod 600 "$ENV_DIR/agent.env"
+    "${AS_ROOT[@]}" tee "$UNIT" >/dev/null <<'EOF'
+[Unit]
+Description=Takan machine agent
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+EnvironmentFile=/etc/takan/agent.env
+ExecStart=/usr/local/bin/takan-agent --url ${TAKAN_URL} --token ${TAKAN_AGENT_TOKEN} --name ${TAKAN_AGENT_NAME}
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+KillMode=mixed
+[Install]
+WantedBy=multi-user.target
+EOF
+    # Stop user unit if a previous install used it (avoid two agents, same token).
+    systemctl --user disable --now takan-agent 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/takan-agent.service" 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
+    "${AS_ROOT[@]}" systemctl daemon-reload
+    "${AS_ROOT[@]}" systemctl enable --now takan-agent
+    echo "takan-agent started (systemd system)"
+  else
+    BIN_DIR="${HOME}/.local/bin"
+    mkdir -p "$BIN_DIR" "$HOME/.config/takan" "$HOME/.config/systemd/user"
+    mv "$TMP" "$BIN_DIR/takan-agent"
+    cat > "$HOME/.config/takan/agent.env" <<EOF
+TAKAN_URL=$URL
+TAKAN_AGENT_TOKEN=$TOKEN
+TAKAN_AGENT_NAME=$NAME
+EOF
+    chmod 600 "$HOME/.config/takan/agent.env"
+    cat > "$HOME/.config/systemd/user/takan-agent.service" <<EOF
 [Unit]
 Description=Takan machine agent
 After=network-online.target
@@ -256,12 +347,25 @@ EnvironmentFile=%h/.config/takan/agent.env
 ExecStart=%h/.local/bin/takan-agent --url \${TAKAN_URL} --token \${TAKAN_AGENT_TOKEN} --name \${TAKAN_AGENT_NAME}
 Restart=always
 RestartSec=5
+TimeoutStopSec=10
+KillMode=mixed
 [Install]
 WantedBy=default.target
 EOF
-  systemctl --user daemon-reload
-  systemctl --user enable --now takan-agent
-  echo "takan-agent started (systemd user)"
+    systemctl --user daemon-reload
+    systemctl --user enable --now takan-agent
+    # Headless VPS: keep user services after logout (no root needed for linger).
+    if command -v loginctl >/dev/null 2>&1; then
+      if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" != "yes" ]; then
+        if command -v sudo >/dev/null 2>&1 && sudo -n loginctl enable-linger "$(id -un)" 2>/dev/null; then
+          echo "enabled systemd linger for $(id -un)"
+        else
+          echo "note: enable linger so the agent survives logout: sudo loginctl enable-linger $(id -un)" >&2
+        fi
+      fi
+    fi
+    echo "takan-agent started (systemd user)"
+  fi
 fi
 `
 		// strip windows line endings if any
