@@ -54,7 +54,7 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 				Tool: mcp.Tool{
 					Name: "people_get",
 					Description: "Get full profile for a person by id or exact name/alias. " +
-						"Includes relationship, context, notes, email, phone, contact, tags.",
+						"Includes relationship, context, notes, email, phone, contacts (key→value), tags.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -75,7 +75,7 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 				Tool: mcp.Tool{
 					Name: "people_add",
 					Description: "Add a person you know. Capture name, relationship (friend/family/coworker/client/…), " +
-						"context (how you relate), notes, aliases, tags, email, phone, other contact, birthday if known.",
+						"context (how you relate), notes, aliases, tags, email, phone, contacts (arbitrary key→value), birthday if known.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -87,8 +87,12 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 							"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 							"email":        map[string]any{"type": "string"},
 							"phone":        map[string]any{"type": "string"},
-							"contact":      map[string]any{"type": "string", "description": "Other handles / free text"},
-							"birthday":     map[string]any{"type": "string"},
+							"contacts": map[string]any{
+								"type":                 "object",
+								"description":          "Arbitrary contact channels as key→value (e.g. {\"linkedin\":\"…\", \"telegram\":\"@x\", \"whatsapp\":\"+34…\"})",
+								"additionalProperties": map[string]any{"type": "string"},
+							},
+							"birthday": map[string]any{"type": "string"},
 						},
 						"required": []string{"name"},
 					},
@@ -103,7 +107,7 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 						Notes:        strArg(args, "notes"),
 						Email:        strArg(args, "email"),
 						Phone:        strArg(args, "phone"),
-						Contact:      strArg(args, "contact"),
+						Contacts:     mapArg(args, "contacts"),
 						Birthday:     strArg(args, "birthday"),
 						Aliases:      strListArg(args, "aliases"),
 						Tags:         strListArg(args, "tags"),
@@ -123,7 +127,8 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 				Tool: mcp.Tool{
 					Name: "people_update",
 					Description: "Update a person by id or name. Only provided fields change. " +
-						"Use append_notes to add a dated fact without wiping notes.",
+						"Use append_notes to add a dated fact without wiping notes. " +
+						"contacts replaces the whole map when provided; use contacts_merge to set/overwrite individual keys without clearing others.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -134,10 +139,21 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 							"context":      map[string]any{"type": "string"},
 							"notes":        map[string]any{"type": "string", "description": "Replace notes entirely"},
 							"append_notes": map[string]any{"type": "string", "description": "Append a note line"},
-							"contact":      map[string]any{"type": "string"},
-							"birthday":     map[string]any{"type": "string"},
-							"aliases":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-							"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"email":        map[string]any{"type": "string"},
+							"phone":        map[string]any{"type": "string"},
+							"contacts": map[string]any{
+								"type":                 "object",
+								"description":          "Replace all contacts (key→value). Pass {} to clear.",
+								"additionalProperties": map[string]any{"type": "string"},
+							},
+							"contacts_merge": map[string]any{
+								"type":                 "object",
+								"description":          "Merge into existing contacts (overwrite keys present; omit others). Empty string value deletes a key.",
+								"additionalProperties": map[string]any{"type": "string"},
+							},
+							"birthday": map[string]any{"type": "string"},
+							"aliases":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"tags":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 						},
 					},
 				},
@@ -150,14 +166,38 @@ func Factory(st *store.Store) func(ctx context.Context, userID string) []mcp.Reg
 					if v, ok := args["new_name"].(string); ok && strings.TrimSpace(v) != "" {
 						fields["name"] = v
 					}
-					for _, k := range []string{"relationship", "context", "notes", "append_notes", "contact", "birthday"} {
+					for _, k := range []string{"relationship", "context", "notes", "append_notes", "email", "phone", "birthday"} {
 						if v, ok := args[k].(string); ok {
 							fields[k] = v
 						}
 					}
 					_, setAliases := args["aliases"]
 					_, setTags := args["tags"]
-					out, err := st.UpdatePersonFields(ctx, userID, p.ID, fields, strListArg(args, "aliases"), strListArg(args, "tags"), setAliases, setTags)
+
+					var contacts map[string]string
+					setContacts := false
+					if _, ok := args["contacts"]; ok {
+						contacts = mapArg(args, "contacts")
+						if contacts == nil {
+							contacts = map[string]string{}
+						}
+						setContacts = true
+					} else if _, ok := args["contacts_merge"]; ok {
+						contacts = map[string]string{}
+						for k, v := range p.Contacts {
+							contacts[k] = v
+						}
+						for k, v := range mapArg(args, "contacts_merge") {
+							if strings.TrimSpace(v) == "" {
+								delete(contacts, k)
+							} else {
+								contacts[k] = v
+							}
+						}
+						setContacts = true
+					}
+
+					out, err := st.UpdatePersonFields(ctx, userID, p.ID, fields, strListArg(args, "aliases"), strListArg(args, "tags"), setAliases, setTags, contacts, setContacts)
 					if err != nil {
 						return "", err
 					}
@@ -211,10 +251,14 @@ func resolvePerson(ctx context.Context, st *store.Store, userID string, args map
 }
 
 func personOut(p *store.Person) map[string]any {
+	contacts := map[string]string{}
+	for k, v := range p.Contacts {
+		contacts[k] = v
+	}
 	return map[string]any{
 		"id": p.ID, "name": p.Name, "aliases": p.Aliases, "relationship": p.Relationship,
 		"context": p.Context, "notes": p.Notes, "tags": p.Tags, "birthday": p.Birthday,
-		"email": p.Email, "phone": p.Phone, "contact": p.Contact,
+		"email": p.Email, "phone": p.Phone, "contacts": contacts,
 		"updated_at": p.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
@@ -222,6 +266,51 @@ func personOut(p *store.Person) map[string]any {
 func strArg(args map[string]any, k string) string {
 	v, _ := args[k].(string)
 	return v
+}
+
+func mapArg(args map[string]any, k string) map[string]string {
+	raw, ok := args[k]
+	if !ok || raw == nil {
+		return nil
+	}
+	out := map[string]string{}
+	switch v := raw.(type) {
+	case map[string]any:
+		for key, val := range v {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			switch s := val.(type) {
+			case string:
+				if strings.TrimSpace(s) != "" {
+					out[key] = strings.TrimSpace(s)
+				}
+			case float64:
+				out[key] = fmt.Sprintf("%v", s)
+			case bool:
+				out[key] = fmt.Sprintf("%v", s)
+			default:
+				if val != nil {
+					out[key] = strings.TrimSpace(fmt.Sprint(val))
+				}
+			}
+		}
+	case map[string]string:
+		for key, val := range v {
+			key = strings.TrimSpace(key)
+			val = strings.TrimSpace(val)
+			if key != "" && val != "" {
+				out[key] = val
+			}
+		}
+	default:
+		return nil
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func strListArg(args map[string]any, k string) []string {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -864,9 +865,11 @@ type Person struct {
 	Birthday     string
 	Email        string
 	Phone        string
-	Contact      string // other handles / free text
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Contacts is arbitrary key→value contact info (linkedin, telegram, whatsapp…).
+	// Stored as JSON object in the contact column.
+	Contacts  map[string]string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // migratePeopleContactFields adds email/phone columns when upgrading older DBs.
@@ -917,21 +920,24 @@ func (s *Store) CreatePerson(ctx context.Context, p Person) (*Person, error) {
 	p.UpdatedAt = now
 	aliases, _ := json.Marshal(normalizeStringList(p.Aliases))
 	tags, _ := json.Marshal(normalizeStringList(p.Tags))
+	contacts := marshalContacts(p.Contacts)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO people (id, user_id, name, aliases, relationship, context, notes, tags, birthday, email, phone, contact, created_at, updated_at)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.UserID, p.Name, string(aliases), strings.TrimSpace(p.Relationship),
 		p.Context, p.Notes, string(tags), strings.TrimSpace(p.Birthday),
-		strings.TrimSpace(p.Email), strings.TrimSpace(p.Phone), strings.TrimSpace(p.Contact),
+		strings.TrimSpace(p.Email), strings.TrimSpace(p.Phone), contacts,
 		now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
+	p.Contacts = normalizeContacts(p.Contacts)
 	return &p, nil
 }
 
 // UpdatePersonFields applies selective updates. Keys present in fields replace the value (including empty).
-func (s *Store) UpdatePersonFields(ctx context.Context, userID, id string, fields map[string]string, aliases, tags []string, setAliases, setTags bool) (*Person, error) {
+// When setContacts is true, contacts replaces the whole map (pass empty map to clear).
+func (s *Store) UpdatePersonFields(ctx context.Context, userID, id string, fields map[string]string, aliases, tags []string, setAliases, setTags bool, contacts map[string]string, setContacts bool) (*Person, error) {
 	cur, err := s.GetPerson(ctx, userID, id)
 	if err != nil {
 		return nil, err
@@ -964,23 +970,24 @@ func (s *Store) UpdatePersonFields(ctx context.Context, userID, id string, field
 	if v, ok := fields["phone"]; ok {
 		cur.Phone = strings.TrimSpace(v)
 	}
-	if v, ok := fields["contact"]; ok {
-		cur.Contact = strings.TrimSpace(v)
-	}
 	if setAliases {
 		cur.Aliases = normalizeStringList(aliases)
 	}
 	if setTags {
 		cur.Tags = normalizeStringList(tags)
 	}
+	if setContacts {
+		cur.Contacts = normalizeContacts(contacts)
+	}
 	cur.UpdatedAt = time.Now().UTC()
 	aJSON, _ := json.Marshal(cur.Aliases)
 	tJSON, _ := json.Marshal(cur.Tags)
+	cJSON := marshalContacts(cur.Contacts)
 	_, err = s.db.ExecContext(ctx, `
 UPDATE people SET name=?, aliases=?, relationship=?, context=?, notes=?, tags=?, birthday=?, email=?, phone=?, contact=?, updated_at=?
 WHERE id=? AND user_id=?`,
 		cur.Name, string(aJSON), cur.Relationship, cur.Context, cur.Notes, string(tJSON),
-		cur.Birthday, cur.Email, cur.Phone, cur.Contact, cur.UpdatedAt.Format(time.RFC3339), id, userID)
+		cur.Birthday, cur.Email, cur.Phone, cJSON, cur.UpdatedAt.Format(time.RFC3339), id, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -1092,15 +1099,16 @@ type personScanner interface {
 
 func scanPerson(row personScanner) (*Person, error) {
 	var p Person
-	var aliases, tags string
+	var aliases, tags, contact string
 	var created, updated string
 	err := row.Scan(&p.ID, &p.UserID, &p.Name, &aliases, &p.Relationship, &p.Context, &p.Notes,
-		&tags, &p.Birthday, &p.Email, &p.Phone, &p.Contact, &created, &updated)
+		&tags, &p.Birthday, &p.Email, &p.Phone, &contact, &created, &updated)
 	if err != nil {
 		return nil, err
 	}
 	p.Aliases = parseJSONStringList(aliases)
 	p.Tags = parseJSONStringList(tags)
+	p.Contacts = parseContactsJSON(contact)
 	p.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	p.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
 	return &p, nil
@@ -1120,6 +1128,70 @@ func parseJSONStringList(raw string) []string {
 		return nil
 	}
 	return normalizeStringList(list)
+}
+
+// parseContactsJSON loads contacts from the contact column.
+// Accepts a JSON object, or legacy free-text (stored under key "other").
+func parseContactsJSON(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "{}" || raw == "null" {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(raw), &m); err == nil {
+		return normalizeContacts(m)
+	}
+	// Legacy free-text single field.
+	return map[string]string{"other": raw}
+}
+
+func normalizeContacts(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func marshalContacts(m map[string]string) string {
+	m = normalizeContacts(m)
+	if len(m) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+// ContactPairs returns contacts as sorted key/value pairs for stable display.
+func ContactPairs(m map[string]string) [][2]string {
+	m = normalizeContacts(m)
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([][2]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, [2]string{k, m[k]})
+	}
+	return out
 }
 
 func normalizeStringList(in []string) []string {

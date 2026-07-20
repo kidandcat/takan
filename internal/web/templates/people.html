@@ -31,16 +31,18 @@
       <div class="person-card-body">
         {{if .Context}}<div class="ctx">{{.Context}}</div>{{end}}
         {{if .Notes}}<div class="notes">{{.Notes}}</div>{{end}}
-        {{if or .Email .Phone .Contact .TagsLine .AliasesLine .Birthday}}
+        {{if or .Email .Phone .HasContacts .TagsLine .AliasesLine .Birthday}}
         <div class="person-card-meta" style="margin-top:.4rem">
           {{if .Email}}✉ {{.Email}}{{end}}
           {{if and .Email .Phone}} · {{end}}
           {{if .Phone}}☎ {{.Phone}}{{end}}
-          {{if and (or .Email .Phone) .Contact}} · {{end}}
-          {{if .Contact}}{{.Contact}}{{end}}
-          {{if .AliasesLine}}{{if or .Email .Phone .Contact}} · {{end}}aka {{.AliasesLine}}{{end}}
-          {{if .TagsLine}}{{if or .Email .Phone .Contact .AliasesLine}} · {{end}}{{.TagsLine}}{{end}}
-          {{if .Birthday}}{{if or .Email .Phone .Contact .AliasesLine .TagsLine}} · {{end}}🎂 {{.Birthday}}{{end}}
+          {{if .HasContacts}}
+            {{if or .Email .Phone}} · {{end}}
+            {{range $i, $c := .Contacts}}{{if $i}} · {{end}}{{$c.Key}}: {{$c.Value}}{{end}}
+          {{end}}
+          {{if .AliasesLine}}{{if or .Email .Phone .HasContacts}} · {{end}}aka {{.AliasesLine}}{{end}}
+          {{if .TagsLine}}{{if or .Email .Phone .HasContacts .AliasesLine}} · {{end}}{{.TagsLine}}{{end}}
+          {{if .Birthday}}{{if or .Email .Phone .HasContacts .AliasesLine .TagsLine}} · {{end}}🎂 {{.Birthday}}{{end}}
         </div>
         {{end}}
       </div>
@@ -53,7 +55,7 @@
           data-notes="{{.Notes}}"
           data-email="{{.Email}}"
           data-phone="{{.Phone}}"
-          data-contact="{{.Contact}}"
+          data-contacts="{{.ContactsJSON}}"
           data-birthday="{{.Birthday}}"
           data-aliases="{{.AliasesLine}}"
           data-tags="{{.TagsLine}}"
@@ -109,25 +111,27 @@
           <input id="p-phone" name="phone" type="tel" placeholder="+34 600 000 000" autocomplete="off"/>
         </div>
       </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="p-contact">Other (social, etc.)</label>
-          <input id="p-contact" name="contact" placeholder="@handle, LinkedIn…"/>
+      <div>
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:.35rem">
+          <label style="margin:0">Contacts</label>
+          <button type="button" class="ghost" style="margin:0;font-size:.85rem" onclick="addContactRow()">+ Add</button>
         </div>
+        <div id="contacts-list" class="contacts-list"></div>
+        <p class="muted" style="margin:.35rem 0 0;font-size:.8rem">Any key → value (linkedin, telegram, whatsapp, slack…).</p>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
         <div>
           <label for="p-birthday">Birthday</label>
           <input id="p-birthday" name="birthday" placeholder="YYYY-MM-DD or free text"/>
         </div>
-      </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
         <div>
           <label for="p-aliases">Aliases (comma-separated)</label>
           <input id="p-aliases" name="aliases" placeholder="Anita, A.G."/>
         </div>
-        <div>
-          <label for="p-tags">Tags (comma-separated)</label>
-          <input id="p-tags" name="tags" placeholder="work, madrid"/>
-        </div>
+      </div>
+      <div>
+        <label for="p-tags">Tags (comma-separated)</label>
+        <input id="p-tags" name="tags" placeholder="work, madrid"/>
       </div>
       <div class="row" style="justify-content:flex-end;margin-top:.5rem">
         <button type="button" class="secondary" style="margin-top:0" onclick="closePersonModal()">Cancel</button>
@@ -143,10 +147,62 @@
   var form = document.getElementById('person-form');
   var title = document.getElementById('person-modal-title');
   var submit = document.getElementById('person-submit');
+  var contactsList = document.getElementById('contacts-list');
 
   function setVal(id, v) {
     var el = document.getElementById(id);
     if (el) el.value = v || '';
+  }
+
+  function clearContacts() {
+    if (contactsList) contactsList.innerHTML = '';
+  }
+
+  function addContactRow(key, value) {
+    if (!contactsList) return;
+    var row = document.createElement('div');
+    row.className = 'contact-row';
+    row.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;gap:.4rem;margin-bottom:.4rem;align-items:center';
+    var keyIn = document.createElement('input');
+    keyIn.name = 'contact_key';
+    keyIn.placeholder = 'key (linkedin…)';
+    keyIn.autocomplete = 'off';
+    keyIn.value = key || '';
+    var valIn = document.createElement('input');
+    valIn.name = 'contact_value';
+    valIn.placeholder = 'value';
+    valIn.autocomplete = 'off';
+    valIn.value = value || '';
+    var rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'icon-btn';
+    rm.setAttribute('aria-label', 'Remove');
+    rm.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    rm.onclick = function () { row.remove(); };
+    row.appendChild(keyIn);
+    row.appendChild(valIn);
+    row.appendChild(rm);
+    contactsList.appendChild(row);
+    if (!key) keyIn.focus();
+  }
+
+  window.addContactRow = function () { addContactRow('', ''); };
+
+  function loadContacts(jsonStr) {
+    clearContacts();
+    var obj = {};
+    try {
+      obj = JSON.parse(jsonStr || '{}') || {};
+    } catch (e) {
+      obj = {};
+    }
+    var keys = Object.keys(obj);
+    if (keys.length === 0) {
+      addContactRow('', '');
+      return;
+    }
+    keys.sort();
+    keys.forEach(function (k) { addContactRow(k, obj[k]); });
   }
 
   window.openPersonModal = function (btn) {
@@ -160,15 +216,16 @@
       setVal('p-notes', btn.dataset.notes);
       setVal('p-email', btn.dataset.email);
       setVal('p-phone', btn.dataset.phone);
-      setVal('p-contact', btn.dataset.contact);
       setVal('p-birthday', btn.dataset.birthday);
       setVal('p-aliases', btn.dataset.aliases);
       setVal('p-tags', btn.dataset.tags);
+      loadContacts(btn.dataset.contacts);
     } else {
       title.textContent = 'Add person';
       submit.textContent = 'Add person';
       form.action = '/dashboard/people';
       form.reset();
+      loadContacts('{}');
     }
     modal.hidden = false;
     document.body.style.overflow = 'hidden';

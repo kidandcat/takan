@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -119,8 +120,14 @@ type emailDomainView struct {
 }
 
 type personView struct {
-	ID, Name, Relationship, Context, Notes, Email, Phone, Contact, Birthday string
-	TagsLine, AliasesLine, Initial                                          string
+	ID, Name, Relationship, Context, Notes, Email, Phone, Birthday string
+	TagsLine, AliasesLine, Initial, ContactsJSON                   string
+	Contacts                                                       []personContactView
+	HasContacts                                                    bool
+}
+
+type personContactView struct {
+	Key, Value string
 }
 
 type modView struct {
@@ -489,13 +496,22 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			pv := personView{
 				ID: p.ID, Name: p.Name, Relationship: p.Relationship,
 				Context: p.Context, Notes: p.Notes, Email: p.Email, Phone: p.Phone,
-				Contact: p.Contact, Birthday: p.Birthday, Initial: personInitial(p.Name),
+				Birthday: p.Birthday, Initial: personInitial(p.Name),
 			}
 			if len(p.Tags) > 0 {
 				pv.TagsLine = strings.Join(p.Tags, ", ")
 			}
 			if len(p.Aliases) > 0 {
 				pv.AliasesLine = strings.Join(p.Aliases, ", ")
+			}
+			for _, pair := range store.ContactPairs(p.Contacts) {
+				pv.Contacts = append(pv.Contacts, personContactView{Key: pair[0], Value: pair[1]})
+			}
+			pv.HasContacts = len(pv.Contacts) > 0
+			if b, err := json.Marshal(p.Contacts); err == nil && len(p.Contacts) > 0 {
+				pv.ContactsJSON = string(b)
+			} else {
+				pv.ContactsJSON = "{}"
 			}
 			data.People = append(data.People, pv)
 		}
@@ -837,7 +853,7 @@ func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
 		Notes:        r.FormValue("notes"),
 		Email:        r.FormValue("email"),
 		Phone:        r.FormValue("phone"),
-		Contact:      r.FormValue("contact"),
+		Contacts:     parseFormContacts(r),
 		Birthday:     r.FormValue("birthday"),
 		Aliases:      splitCSV(r.FormValue("aliases")),
 		Tags:         splitCSV(r.FormValue("tags")),
@@ -867,7 +883,6 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request) {
 		"notes":        r.FormValue("notes"),
 		"email":        r.FormValue("email"),
 		"phone":        r.FormValue("phone"),
-		"contact":      r.FormValue("contact"),
 		"birthday":     r.FormValue("birthday"),
 	}
 	if fields["name"] == "" {
@@ -875,7 +890,8 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.Store.UpdatePersonFields(r.Context(), u.ID, id, fields,
-		splitCSV(r.FormValue("aliases")), splitCSV(r.FormValue("tags")), true, true); err != nil {
+		splitCSV(r.FormValue("aliases")), splitCSV(r.FormValue("tags")), true, true,
+		parseFormContacts(r), true); err != nil {
 		http.Redirect(w, r, "/dashboard/people?flash="+urlQuery(err.Error()), http.StatusFound)
 		return
 	}
@@ -883,6 +899,31 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/people?flash=Person+updated", http.StatusFound)
+}
+
+// parseFormContacts builds a map from parallel contact_key[] / contact_value[] form fields.
+func parseFormContacts(r *http.Request) map[string]string {
+	keys := r.Form["contact_key"]
+	vals := r.Form["contact_value"]
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make(map[string]string)
+	for i, k := range keys {
+		k = strings.TrimSpace(k)
+		v := ""
+		if i < len(vals) {
+			v = strings.TrimSpace(vals[i])
+		}
+		if k == "" || v == "" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (s *Server) deletePerson(w http.ResponseWriter, r *http.Request) {
