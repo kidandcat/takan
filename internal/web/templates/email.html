@@ -41,35 +41,45 @@
     </form>
 
     {{if .EmailConfigured}}
-    <h3 style="margin-top:1.5rem;margin-bottom:.35rem">Domains</h3>
-    <p class="muted" style="margin-bottom:.75rem">Enable domains for send/list/get tools. Status comes from Resend.</p>
-    {{if .EmailDomainRows}}
-    <div class="machine-list">
-      {{range .EmailDomainRows}}
-      <div class="machine-row">
-        <div>
-          <div class="name">{{.Name}}</div>
-          <div class="faint">
-            status {{.Status}}
-            · send {{.Sending}}
-            · receive {{.Receiving}}
-          </div>
-        </div>
-        <form method="post" action="/dashboard/email/domains/toggle">
-          <input type="hidden" name="domain" value="{{.Name}}"/>
-          <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
-          <label class="switch" title="{{if .Enabled}}Disable{{else}}Enable{{end}}">
-            <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.submit()"/>
-            <span class="slider"></span>
-          </label>
-        </form>
-      </div>
-      {{end}}
+    <div id="email-domains">
+      <h3 style="margin-top:1.5rem;margin-bottom:.35rem">Domains</h3>
+      <p class="muted" style="margin-bottom:.75rem">Enable domains for send/list/get tools. Status comes from Resend.</p>
+      {{template "email_domain_list" .}}
     </div>
-    {{else}}
-    <div class="empty">No domains returned by Resend. Add a domain in the Resend dashboard, then refresh.</div>
-    {{end}}
     {{end}}
   </div>
 </section>
+{{end}}
+
+{{define "email_domain_list"}}
+{{if .EmailDomainRows}}
+<div id="email-domain-list" class="machine-list">
+  {{range .EmailDomainRows}}
+  <div class="machine-row">
+    <div>
+      <div class="name">{{.Name}}</div>
+      <div class="faint">
+        status {{.Status}}
+        · send {{.Sending}}
+        · receive {{.Receiving}}
+      </div>
+    </div>
+    <form method="post"
+          action="/dashboard/email/domains/toggle"
+          hx-post="/dashboard/email/domains/toggle"
+          hx-target="#email-domain-list"
+          hx-swap="outerHTML">
+      <input type="hidden" name="domain" value="{{.Name}}"/>
+      <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
+      <label class="switch" title="{{if .Enabled}}Disable{{else}}Enable{{end}}">
+        <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()"/>
+        <span class="slider"></span>
+      </label>
+    </form>
+  </div>
+  {{end}}
+</div>
+{{else}}
+<div id="email-domain-list" class="empty">No domains returned by Resend. Add a domain in the Resend dashboard, then refresh.</div>
+{{end}}
 {{end}}

@@ -629,7 +629,30 @@ func (s *Server) toggleEmailDomain(w http.ResponseWriter, r *http.Request) {
 	if s.OnToolsChanged != nil {
 		s.OnToolsChanged(u.ID)
 	}
-	http.Redirect(w, r, "/dashboard/email", http.StatusFound)
+	// HTMX: swap only the domain list so scroll position is preserved.
+	if r.Header.Get("HX-Request") == "true" {
+		data := pageData{User: u, EmailConfigured: true}
+		for _, d := range domains {
+			data.EmailDomainRows = append(data.EmailDomainRows, emailDomainView{
+				Name: d.Name, Status: d.Status, Sending: d.Sending, Receiving: d.Receiving, Enabled: d.Enabled,
+			})
+		}
+		s.renderEmailDomainList(w, data)
+		return
+	}
+	http.Redirect(w, r, "/dashboard/email#email-domains", http.StatusFound)
+}
+
+func (s *Server) renderEmailDomainList(w http.ResponseWriter, data pageData) {
+	t, err := template.ParseFS(tmplFS, "templates/email.html")
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := t.ExecuteTemplate(w, "email_domain_list", data); err != nil {
+		http.Error(w, err.Error(), 500)
+	}
 }
 
 func (s *Server) clearEmail(w http.ResponseWriter, r *http.Request) {
