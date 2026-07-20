@@ -62,7 +62,7 @@
 
 <div class="card" id="mercadona">
   <h1>Mercadona</h1>
-  <p class="muted">Stored encrypted for your account only. Full cart tools will use mercadona-mcp next.</p>
+  <p class="muted">Saves credentials, logs into Mercadona, and enables cart tools (search, add, list, …) in your AI client.</p>
   {{if .MercadonaConfigured}}
     <p class="ok">Configured for {{.MercadonaEmail}} · CP {{.MercadonaPostal}}</p>
     <form method="post" action="/dashboard/mercadona/clear">

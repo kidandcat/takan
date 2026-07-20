@@ -1,10 +1,11 @@
 module github.com/kidandcat/takan
 
-go 1.23.0
+go 1.25.5
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/kidandcat/mercadona-mcp v0.0.0
 	github.com/mentasystems/colmena v0.0.0
 	golang.org/x/crypto v0.36.0
 )
@@ -12,16 +13,16 @@ require (
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/ncruces/go-strftime v0.1.9 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
-	golang.org/x/sys v0.31.0 // indirect
-	modernc.org/libc v1.61.13 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.8.2 // indirect
-	modernc.org/sqlite v1.36.3 // indirect
+	modernc.org/memory v1.11.0 // indirect
+	modernc.org/sqlite v1.54.0 // indirect
 )
 
 // Colmena v2 is tagged v2.0.0 but the module path is still without /v2.
-// Pin the local tree (same machine as the developer; CI should vendor).
 replace github.com/mentasystems/colmena => ../colmena
+
+replace github.com/kidandcat/mercadona-mcp => ../mercadona-mcp

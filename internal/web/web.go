@@ -26,7 +26,11 @@ type Server struct {
 	Hub       *agenthub.Hub
 	Box       *cryptox.Box
 	PublicURL string
-	tmpl      *template.Template
+	// OnMercadonaSave logs into Mercadona and stores session tokens (optional).
+	OnMercadonaSave func(ctx context.Context, userID, email, password, postal string) error
+	// OnMercadonaClear unlinks Mercadona session for the user.
+	OnMercadonaClear func(ctx context.Context, userID string) error
+	tmpl             *template.Template
 }
 
 func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL string) (*Server, error) {
@@ -264,6 +268,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			mv.Ready = m.Enabled && online
 		case "mercadona":
 			_, _, _, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
+			// Ready when creds exist; session link is verified when tools run.
 			mv.Ready = m.Enabled && ok
 		}
 		data.Modules = append(data.Modules, mv)
@@ -332,23 +337,35 @@ func (s *Server) saveMercadona(w http.ResponseWriter, r *http.Request) {
 	pass := r.FormValue("password")
 	postal := r.FormValue("postal_code")
 	if pass == "" {
-		// keep existing password
 		_, oldEnc, _, ok, _ := s.Store.GetMercadonaCreds(r.Context(), u.ID)
 		if !ok {
 			http.Redirect(w, r, "/dashboard?flash="+urlQuery("password required"), http.StatusFound)
 			return
 		}
-		_ = s.Store.SaveMercadonaCreds(r.Context(), u.ID, email, oldEnc, postal)
-	} else {
-		enc, err := s.Box.Seal(pass)
+		plain, err := s.Box.Open(oldEnc)
 		if err != nil {
-			http.Redirect(w, r, "/dashboard?flash="+urlQuery(err.Error()), http.StatusFound)
+			http.Redirect(w, r, "/dashboard?flash="+urlQuery("re-enter password"), http.StatusFound)
 			return
 		}
-		_ = s.Store.SaveMercadonaCreds(r.Context(), u.ID, email, enc, postal)
+		pass = plain
+	}
+	enc, err := s.Box.Seal(pass)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if err := s.Store.SaveMercadonaCreds(r.Context(), u.ID, email, enc, postal); err != nil {
+		http.Redirect(w, r, "/dashboard?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnMercadonaSave != nil {
+		if err := s.OnMercadonaSave(r.Context(), u.ID, email, pass, postal); err != nil {
+			http.Redirect(w, r, "/dashboard?flash="+urlQuery("Mercadona login failed: "+err.Error()), http.StatusFound)
+			return
+		}
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "mercadona", true)
-	http.Redirect(w, r, "/dashboard?flash=Mercadona+saved#mercadona", http.StatusFound)
+	http.Redirect(w, r, "/dashboard?flash=Mercadona+linked#mercadona", http.StatusFound)
 }
 
 func (s *Server) clearMercadona(w http.ResponseWriter, r *http.Request) {
@@ -357,6 +374,9 @@ func (s *Server) clearMercadona(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.Store.DeleteMercadonaCreds(r.Context(), u.ID)
+	if s.OnMercadonaClear != nil {
+		_ = s.OnMercadonaClear(r.Context(), u.ID)
+	}
 	http.Redirect(w, r, "/dashboard#mercadona", http.StatusFound)
 }
 

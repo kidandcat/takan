@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kidandcat/mercadona-mcp/sdk"
 
 	"github.com/kidandcat/takan/internal/agenthub"
 	"github.com/kidandcat/takan/internal/config"
@@ -59,15 +62,33 @@ func main() {
 		},
 	)
 
+	// Mercadona multi-tenant DB (aliases, cart prefs, encrypted sessions).
+	mdb, err := sdk.OpenDB(filepath.Join(cfg.DataDir, "mercadona.db"))
+	if err != nil {
+		log.Fatalf("mercadona store: %v", err)
+	}
+	defer mdb.Close()
+	mbox, err := sdk.NewBox(cfg.SessionKey)
+	if err != nil {
+		log.Fatalf("mercadona crypto: %v", err)
+	}
+	mercMod := mercadona.NewModule(st, mdb, mbox, cfg.PublicURL)
+
 	prov := &modules.Provider{
 		Store:     st,
 		Machine:   machine.Factory(st, hub),
-		Mercadona: mercadona.Factory(st),
+		Mercadona: mercMod.Factory(),
 	}
 
 	webSrv, err := web.New(st, hub, box, cfg.PublicURL)
 	if err != nil {
 		log.Fatalf("web: %v", err)
+	}
+	webSrv.OnMercadonaSave = func(ctx context.Context, userID, email, password, postal string) error {
+		return mercadona.LinkAccount(ctx, mdb, mbox, userID, email, password, postal)
+	}
+	webSrv.OnMercadonaClear = func(ctx context.Context, userID string) error {
+		return mercadona.UnlinkAccount(ctx, mdb, userID)
 	}
 
 	mcpSrv := &mcp.Server{
