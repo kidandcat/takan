@@ -1,0 +1,55 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{{.Title}} · Takan</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root { --bg:#0b0d10; --card:#14181f; --text:#e8eaed; --muted:#9aa0a6; --acc:#7c9cff; --ok:#3dd68c; --bad:#f07178; --border:#252b36; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--text); line-height:1.5; }
+    a { color:var(--acc); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+    header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
+    header .brand { font-weight:700; letter-spacing:.02em; font-size:1.15rem; }
+    header .brand span { color:var(--muted); font-weight:500; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1.25rem; margin-bottom:1rem; }
+    h1 { font-size:1.4rem; margin:0 0 .5rem; }
+    h2 { font-size:1.05rem; margin:0 0 .75rem; color:var(--muted); font-weight:600; }
+    label { display:block; font-size:.85rem; color:var(--muted); margin:.6rem 0 .25rem; }
+    input, select, textarea { width:100%; padding:.55rem .7rem; border-radius:8px; border:1px solid var(--border); background:#0e1218; color:var(--text); }
+    button, .btn { display:inline-block; margin-top:.75rem; padding:.55rem 1rem; border-radius:8px; border:0; background:var(--acc); color:#0b0d10; font-weight:600; cursor:pointer; }
+    button.secondary, .btn.secondary { background:transparent; color:var(--text); border:1px solid var(--border); }
+    button.danger { background:var(--bad); color:#1a0a0a; }
+    .muted { color:var(--muted); font-size:.9rem; }
+    .row { display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; }
+    .pill { display:inline-block; padding:.15rem .55rem; border-radius:999px; font-size:.75rem; font-weight:600; }
+    .pill.on { background:rgba(61,214,140,.15); color:var(--ok); }
+    .pill.off { background:rgba(240,113,120,.12); color:var(--bad); }
+    .err { color:var(--bad); font-size:.9rem; margin-top:.5rem; }
+    .ok { color:var(--ok); font-size:.9rem; margin-top:.5rem; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.82rem; }
+    pre { background:#0e1218; border:1px solid var(--border); border-radius:8px; padding:.75rem; overflow:auto; white-space:pre-wrap; }
+    .module { display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; }
+    .module + .module { border-top:1px solid var(--border); margin-top:1rem; padding-top:1rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">Takan <span>// connect AI to your life</span></div>
+      <nav class="row">
+        {{if .User}}
+          <span class="muted">{{.User.Email}}</span>
+          <a class="btn secondary" href="/logout" style="margin-top:0;padding:.35rem .7rem;font-size:.85rem">Log out</a>
+        {{end}}
+      </nav>
+    </header>
+    {{template "content" .}}
+  </div>
+</body>
+</html>
+{{end}}

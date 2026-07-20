@@ -1,0 +1,7 @@
+/takan
+/takan-linux
+/takan-agent
+/takan-agent-*
+/data/
+*.env
+/vendor/

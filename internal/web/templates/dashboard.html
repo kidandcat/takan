@@ -1,0 +1,90 @@
+{{define "content"}}
+<div class="card">
+  <h1>Dashboard</h1>
+  <p class="muted">Connect your AI client once. Toggle modules below.</p>
+  <h2>MCP connection</h2>
+  <p class="muted">URL</p>
+  <pre>{{.MCPURL}}</pre>
+  <p class="muted">Bearer token (keep secret)</p>
+  <pre id="token">{{.MCPToken}}</pre>
+  <p class="muted">Header: <code>Authorization: Bearer &lt;token&gt;</code></p>
+  {{if .TokenNote}}<p class="ok">{{.TokenNote}}</p>{{end}}
+  <form method="post" action="/dashboard/rotate-token" style="display:inline">
+    <button type="submit" class="secondary">Rotate MCP token</button>
+  </form>
+</div>
+
+<div class="card" id="modules">
+  <h1>Modules</h1>
+  {{range .Modules}}
+  <div class="module">
+    <div>
+      <div class="row">
+        <strong>{{.Name}}</strong>
+        {{if .Enabled}}<span class="pill on">ON</span>{{else}}<span class="pill off">OFF</span>{{end}}
+        {{if .Ready}}<span class="pill on">ready</span>{{else if .Enabled}}<span class="pill off">needs setup</span>{{end}}
+      </div>
+      <p class="muted" style="margin:.35rem 0 0">{{.Description}}</p>
+    </div>
+    <form method="post" action="/dashboard/modules/{{.ID}}/toggle">
+      <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
+      <button type="submit" class="{{if .Enabled}}secondary{{end}}">{{if .Enabled}}Disable{{else}}Enable{{end}}</button>
+    </form>
+  </div>
+  {{end}}
+</div>
+
+<div class="card" id="machine">
+  <h1>Machine</h1>
+  <p class="muted">Outbound agent on each computer. No inbound SSH required.</p>
+  <h2>Registered machines</h2>
+  {{if .Machines}}
+    <ul>
+    {{range .Machines}}
+      <li>
+        <strong>{{.Name}}</strong>
+        {{if .Online}}<span class="pill on">online</span>{{else}}<span class="pill off">offline</span>{{end}}
+        <form method="post" action="/dashboard/machines/{{.ID}}/delete" style="display:inline" onsubmit="return confirm('Remove machine?')">
+          <button type="submit" class="danger" style="margin-top:0;padding:.2rem .5rem;font-size:.75rem">Remove</button>
+        </form>
+      </li>
+    {{end}}
+    </ul>
+  {{else}}
+    <p class="muted">No machines yet.</p>
+  {{end}}
+
+  <h2>Add machine</h2>
+  <form method="post" action="/dashboard/machines">
+    <label>Name (e.g. mac, laptop)</label>
+    <input name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="mac"/>
+    <button type="submit">Create + show install command</button>
+  </form>
+  {{if .InstallCmd}}
+  <p class="ok" style="margin-top:1rem">Run this on the target machine (one-time token — copy now):</p>
+  <pre>{{.InstallCmd}}</pre>
+  {{end}}
+</div>
+
+<div class="card" id="mercadona">
+  <h1>Mercadona</h1>
+  <p class="muted">Stored encrypted for your account only. Full cart tools will use mercadona-mcp next.</p>
+  {{if .MercadonaConfigured}}
+    <p class="ok">Configured for {{.MercadonaEmail}} · CP {{.MercadonaPostal}}</p>
+    <form method="post" action="/dashboard/mercadona/clear">
+      <button type="submit" class="secondary">Clear credentials</button>
+    </form>
+  {{end}}
+  <form method="post" action="/dashboard/mercadona">
+    <label>Email</label>
+    <input type="email" name="email" required value="{{.MercadonaEmail}}"/>
+    <label>Password</label>
+    <input type="password" name="password" {{if not .MercadonaConfigured}}required{{end}} placeholder="{{if .MercadonaConfigured}}leave blank to keep{{end}}"/>
+    <label>Postal code</label>
+    <input name="postal_code" required pattern="[0-9]{5}" value="{{.MercadonaPostal}}"/>
+    <button type="submit">Save credentials</button>
+  </form>
+  {{if .Flash}}<p class="ok">{{.Flash}}</p>{{end}}
+  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+</div>
+{{end}}
