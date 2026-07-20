@@ -30,7 +30,9 @@ type Server struct {
 	OnMercadonaSave func(ctx context.Context, userID, email, password, postal string) error
 	// OnMercadonaClear unlinks Mercadona session for the user.
 	OnMercadonaClear func(ctx context.Context, userID string) error
-	tmpl             *template.Template
+	// OnToolsChanged notifies MCP clients (tools/list_changed) after module changes.
+	OnToolsChanged func(userID string)
+	tmpl           *template.Template
 }
 
 func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL string) (*Server, error) {
@@ -293,6 +295,9 @@ func (s *Server) toggleModule(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	en := r.FormValue("enabled") == "1"
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, id, en)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
@@ -308,6 +313,9 @@ func (s *Server) createMachine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "machine", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
 	// Name is already registered on the server with this token; only token is needed on the machine.
 	cmd := fmt.Sprintf("curl -fsSL %s/install.sh | bash -s -- %s", s.PublicURL, raw)
 	http.SetCookie(w, &http.Cookie{
@@ -365,6 +373,9 @@ func (s *Server) saveMercadona(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "mercadona", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
 	http.Redirect(w, r, "/dashboard?flash=Mercadona+linked#mercadona", http.StatusFound)
 }
 
@@ -376,6 +387,9 @@ func (s *Server) clearMercadona(w http.ResponseWriter, r *http.Request) {
 	_ = s.Store.DeleteMercadonaCreds(r.Context(), u.ID)
 	if s.OnMercadonaClear != nil {
 		_ = s.OnMercadonaClear(r.Context(), u.ID)
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard#mercadona", http.StatusFound)
 }

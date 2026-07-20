@@ -94,6 +94,7 @@ func main() {
 	mcpSrv := &mcp.Server{
 		Name:      "takan",
 		PublicURL: cfg.PublicURL,
+		Sessions:  mcp.NewSessionHub(),
 		Resolve: func(ctx context.Context, bearer string) (string, error) {
 			// OAuth access tokens only (no long-lived static API keys).
 			u, err := st.UserByAccessToken(ctx, bearer)
@@ -104,6 +105,7 @@ func main() {
 		},
 		ToolsFor: prov.ToolsFor,
 	}
+	webSrv.OnToolsChanged = mcpSrv.NotifyToolsChanged
 
 	oauthSrv := &oauth.Server{
 		Store:            st,
