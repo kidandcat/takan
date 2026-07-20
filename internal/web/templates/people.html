@@ -1,8 +1,11 @@
 {{define "content"}}
 <section class="section hero">
-  <div>
-    <h1>People</h1>
-    <p class="muted" style="margin-top:.4rem;max-width:52ch">Directory of people you know — relationship, context, notes. Tools: <code>people_list</code>, <code>people_get</code>, <code>people_add</code>, <code>people_update</code>, <code>people_delete</code>.</p>
+  <div class="row" style="justify-content:space-between;align-items:flex-start;width:100%">
+    <div>
+      <h1>People</h1>
+      <p class="muted" style="margin-top:.4rem;max-width:52ch">Directory of people you know — relationship, context, notes. Tools: <code>people_list</code>, <code>people_get</code>, <code>people_add</code>, <code>people_update</code>, <code>people_delete</code>.</p>
+    </div>
+    <button type="button" class="btn" style="margin-top:0" onclick="openPersonModal()">Add person</button>
   </div>
 </section>
 
@@ -14,62 +17,10 @@
   <div class="card">
     <div class="card-head">
       <div>
-        <h3>Add person</h3>
-        <p class="muted">Capture how you know them and what matters in the relationship.</p>
-      </div>
-      <span class="pill neutral">{{.PeopleCount}} total</span>
-    </div>
-    <form method="post" action="/dashboard/people" class="form-stack" style="max-width:100%">
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="name">Name</label>
-          <input id="name" name="name" required placeholder="Ana García"/>
-        </div>
-        <div>
-          <label for="relationship">Relationship</label>
-          <input id="relationship" name="relationship" placeholder="friend, coworker, client…"/>
-        </div>
-      </div>
-      <div>
-        <label for="context">Context (how you relate)</label>
-        <input id="context" name="context" placeholder="Met at work; helps with design reviews"/>
-      </div>
-      <div>
-        <label for="notes">Notes</label>
-        <textarea id="notes" name="notes" rows="3" style="width:100%" placeholder="Facts, history, preferences…"></textarea>
-      </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="aliases">Aliases (comma-separated)</label>
-          <input id="aliases" name="aliases" placeholder="Anita, A.G."/>
-        </div>
-        <div>
-          <label for="tags">Tags (comma-separated)</label>
-          <input id="tags" name="tags" placeholder="work, madrid"/>
-        </div>
-      </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="contact">Contact</label>
-          <input id="contact" name="contact" placeholder="email, phone, @handle"/>
-        </div>
-        <div>
-          <label for="birthday">Birthday</label>
-          <input id="birthday" name="birthday" placeholder="YYYY-MM-DD or free text"/>
-        </div>
-      </div>
-      <button type="submit">Add &amp; enable module</button>
-    </form>
-  </div>
-</section>
-
-<section class="section">
-  <div class="card">
-    <div class="card-head">
-      <div>
         <h3>Directory</h3>
         <p class="muted">Your people. The AI can search and update these via MCP.</p>
       </div>
+      <span class="pill neutral">{{.PeopleCount}} total</span>
     </div>
     {{if .People}}
     <div class="machine-list">
@@ -79,23 +30,141 @@
           <div class="name">{{.Name}}{{if .Relationship}} <span class="faint">· {{.Relationship}}</span>{{end}}</div>
           {{if .Context}}<div class="faint" style="margin-top:.15rem">{{.Context}}</div>{{end}}
           {{if .Notes}}<div class="muted" style="margin-top:.25rem;font-size:.85rem;white-space:pre-wrap">{{.Notes}}</div>{{end}}
-          {{if or .TagsLine .Contact}}
+          {{if or .TagsLine .Contact .AliasesLine}}
           <div class="faint" style="margin-top:.3rem">
+            {{if .AliasesLine}}aka {{.AliasesLine}}{{end}}
+            {{if and .AliasesLine .TagsLine}} · {{end}}
             {{if .TagsLine}}{{.TagsLine}}{{end}}
-            {{if and .TagsLine .Contact}} · {{end}}
+            {{if and (or .AliasesLine .TagsLine) .Contact}} · {{end}}
             {{if .Contact}}{{.Contact}}{{end}}
           </div>
           {{end}}
         </div>
-        <form method="post" action="/dashboard/people/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?')">
-          <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Delete</button>
-        </form>
+        <div class="row" style="gap:.4rem;flex-shrink:0">
+          <button type="button" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem"
+            data-id="{{.ID}}"
+            data-name="{{.Name}}"
+            data-relationship="{{.Relationship}}"
+            data-context="{{.Context}}"
+            data-notes="{{.Notes}}"
+            data-contact="{{.Contact}}"
+            data-birthday="{{.Birthday}}"
+            data-aliases="{{.AliasesLine}}"
+            data-tags="{{.TagsLine}}"
+            onclick="openPersonModal(this)">Edit</button>
+          <form method="post" action="/dashboard/people/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?')">
+            <button type="submit" class="secondary" style="margin-top:0;padding:.4rem .75rem;font-size:.8rem">Delete</button>
+          </form>
+        </div>
       </div>
       {{end}}
     </div>
     {{else}}
-    <div class="empty">No people yet. Add someone above or via <code>people_add</code>.</div>
+    <div class="empty">No people yet. <button type="button" class="ghost" onclick="openPersonModal()" style="font-size:.9rem">Add someone</button> or use <code>people_add</code>.</div>
     {{end}}
   </div>
 </section>
+
+<div class="modal-backdrop" id="person-modal" hidden onclick="if(event.target===this)closePersonModal()">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="person-modal-title">
+    <div class="modal-head">
+      <h3 id="person-modal-title">Add person</h3>
+      <button type="button" class="icon-btn" aria-label="Close" onclick="closePersonModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <form method="post" action="/dashboard/people" id="person-form" class="form-stack" style="max-width:100%">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="p-name">Name</label>
+          <input id="p-name" name="name" required placeholder="Ana García"/>
+        </div>
+        <div>
+          <label for="p-relationship">Relationship</label>
+          <input id="p-relationship" name="relationship" placeholder="friend, coworker, client…"/>
+        </div>
+      </div>
+      <div>
+        <label for="p-context">Context (how you relate)</label>
+        <input id="p-context" name="context" placeholder="Met at work; helps with design reviews"/>
+      </div>
+      <div>
+        <label for="p-notes">Notes</label>
+        <textarea id="p-notes" name="notes" rows="4" style="width:100%" placeholder="Facts, history, preferences…"></textarea>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="p-aliases">Aliases (comma-separated)</label>
+          <input id="p-aliases" name="aliases" placeholder="Anita, A.G."/>
+        </div>
+        <div>
+          <label for="p-tags">Tags (comma-separated)</label>
+          <input id="p-tags" name="tags" placeholder="work, madrid"/>
+        </div>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="p-contact">Contact</label>
+          <input id="p-contact" name="contact" placeholder="email, phone, @handle"/>
+        </div>
+        <div>
+          <label for="p-birthday">Birthday</label>
+          <input id="p-birthday" name="birthday" placeholder="YYYY-MM-DD or free text"/>
+        </div>
+      </div>
+      <div class="row" style="justify-content:flex-end;margin-top:.5rem">
+        <button type="button" class="secondary" style="margin-top:0" onclick="closePersonModal()">Cancel</button>
+        <button type="submit" id="person-submit" style="margin-top:0">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var modal = document.getElementById('person-modal');
+  var form = document.getElementById('person-form');
+  var title = document.getElementById('person-modal-title');
+  var submit = document.getElementById('person-submit');
+
+  function setVal(id, v) {
+    var el = document.getElementById(id);
+    if (el) el.value = v || '';
+  }
+
+  window.openPersonModal = function (btn) {
+    if (btn && btn.dataset && btn.dataset.id) {
+      title.textContent = 'Edit person';
+      submit.textContent = 'Save changes';
+      form.action = '/dashboard/people/' + encodeURIComponent(btn.dataset.id);
+      setVal('p-name', btn.dataset.name);
+      setVal('p-relationship', btn.dataset.relationship);
+      setVal('p-context', btn.dataset.context);
+      setVal('p-notes', btn.dataset.notes);
+      setVal('p-contact', btn.dataset.contact);
+      setVal('p-birthday', btn.dataset.birthday);
+      setVal('p-aliases', btn.dataset.aliases);
+      setVal('p-tags', btn.dataset.tags);
+    } else {
+      title.textContent = 'Add person';
+      submit.textContent = 'Add person';
+      form.action = '/dashboard/people';
+      form.reset();
+    }
+    modal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    var name = document.getElementById('p-name');
+    if (name) name.focus();
+  };
+
+  window.closePersonModal = function () {
+    modal.hidden = true;
+    document.body.style.overflow = '';
+  };
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && modal && !modal.hidden) closePersonModal();
+  });
+})();
+</script>
 {{end}}

@@ -76,6 +76,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/email/domains/toggle", s.toggleEmailDomain)
 	mux.HandleFunc("POST /dashboard/memory", s.saveMemory)
 	mux.HandleFunc("POST /dashboard/people", s.createPerson)
+	mux.HandleFunc("POST /dashboard/people/{id}", s.updatePerson)
 	mux.HandleFunc("POST /dashboard/people/{id}/delete", s.deletePerson)
 }
 
@@ -118,7 +119,8 @@ type emailDomainView struct {
 }
 
 type personView struct {
-	ID, Name, Relationship, Context, Notes, Contact, TagsLine string
+	ID, Name, Relationship, Context, Notes, Contact, Birthday string
+	TagsLine, AliasesLine                                     string
 }
 
 type modView struct {
@@ -486,10 +488,13 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		for _, p := range plist {
 			pv := personView{
 				ID: p.ID, Name: p.Name, Relationship: p.Relationship,
-				Context: p.Context, Notes: p.Notes, Contact: p.Contact,
+				Context: p.Context, Notes: p.Notes, Contact: p.Contact, Birthday: p.Birthday,
 			}
 			if len(p.Tags) > 0 {
 				pv.TagsLine = strings.Join(p.Tags, ", ")
+			}
+			if len(p.Aliases) > 0 {
+				pv.AliasesLine = strings.Join(p.Aliases, ", ")
 			}
 			data.People = append(data.People, pv)
 		}
@@ -795,22 +800,23 @@ func (s *Server) saveMemory(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard/memory?flash=Memory+saved", http.StatusFound)
 }
 
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
 	u := s.requireUser(w, r)
 	if u == nil {
 		return
 	}
 	_ = r.ParseForm()
-	splitCSV := func(s string) []string {
-		var out []string
-		for _, p := range strings.Split(s, ",") {
-			p = strings.TrimSpace(p)
-			if p != "" {
-				out = append(out, p)
-			}
-		}
-		return out
-	}
 	p := store.Person{
 		UserID:       u.ID,
 		Name:         r.FormValue("name"),
@@ -831,6 +837,36 @@ func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/people?flash=Person+added", http.StatusFound)
+}
+
+func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	id := r.PathValue("id")
+	fields := map[string]string{
+		"name":         r.FormValue("name"),
+		"relationship": r.FormValue("relationship"),
+		"context":      r.FormValue("context"),
+		"notes":        r.FormValue("notes"),
+		"contact":      r.FormValue("contact"),
+		"birthday":     r.FormValue("birthday"),
+	}
+	if fields["name"] == "" {
+		http.Redirect(w, r, "/dashboard/people?flash="+urlQuery("name required"), http.StatusFound)
+		return
+	}
+	if _, err := s.Store.UpdatePersonFields(r.Context(), u.ID, id, fields,
+		splitCSV(r.FormValue("aliases")), splitCSV(r.FormValue("tags")), true, true); err != nil {
+		http.Redirect(w, r, "/dashboard/people?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/people?flash=Person+updated", http.StatusFound)
 }
 
 func (s *Server) deletePerson(w http.ResponseWriter, r *http.Request) {

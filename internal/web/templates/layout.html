@@ -710,6 +710,38 @@
     .landing .feat strong { color: var(--text); display: block; margin-bottom: 0.1rem; }
     .auth-card .card-head { margin-bottom: 0.5rem; }
 
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 1.25rem;
+      overflow-y: auto;
+      background: rgba(14, 24, 32, 0.45);
+      backdrop-filter: blur(3px);
+    }
+    .modal-backdrop[hidden] { display: none !important; }
+    .modal {
+      width: min(100%, 560px);
+      margin: 4vh auto 2rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
+      padding: 1.15rem 1.25rem 1.35rem;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.85rem;
+    }
+    .modal-head h3 { margin: 0; font-size: 1.1rem; }
+
     /* Responsive */
     @media (max-width: 900px) {
       .app { grid-template-columns: 1fr; }
