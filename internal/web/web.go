@@ -302,14 +302,14 @@ func (s *Server) createMachine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	m, raw, err := s.Store.CreateMachine(r.Context(), u.ID, r.FormValue("name"))
+	_, raw, err := s.Store.CreateMachine(r.Context(), u.ID, r.FormValue("name"))
 	if err != nil {
 		http.Redirect(w, r, "/dashboard?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
 		return
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "machine", true)
-	cmd := fmt.Sprintf("# install takan-agent (token shown once)\nexport TAKAN_AGENT_TOKEN=%s\nexport TAKAN_AGENT_NAME=%s\nexport TAKAN_URL=%s\ncurl -fsSL %s/install.sh | bash",
-		raw, m.Name, s.PublicURL, s.PublicURL)
+	// Name is already registered on the server with this token; only token is needed on the machine.
+	cmd := fmt.Sprintf("curl -fsSL %s/install.sh | bash -s -- %s", s.PublicURL, raw)
 	http.SetCookie(w, &http.Cookie{
 		Name: "takan_install", Value: base64.RawURLEncoding.EncodeToString([]byte(cmd)),
 		Path: "/", MaxAge: 300, HttpOnly: true,

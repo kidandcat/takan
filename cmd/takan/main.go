@@ -171,10 +171,16 @@ func serveInstallSh(publicURL string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		script := `#!/usr/bin/env bash
 set -euo pipefail
-# Takan agent installer
+# Takan agent installer — only the agent token is required.
+#   curl -fsSL ` + publicURL + `/install.sh | bash -s -- <token>
 TOKEN="${TAKAN_AGENT_TOKEN:-}"
-NAME="${TAKAN_AGENT_NAME:-$(hostname -s 2>/dev/null || echo machine)}"
+NAME="${TAKAN_AGENT_NAME:-}"
 URL="${TAKAN_URL:-` + publicURL + `}"
+# Positional: bash -s -- <token> [--name mac]
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+  TOKEN="$1"
+  shift
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --token) TOKEN="$2"; shift 2 ;;
@@ -183,10 +189,14 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
+if [ -z "$NAME" ]; then
+  NAME="$(hostname -s 2>/dev/null || echo machine)"
+fi
 if [ -z "$TOKEN" ]; then
-  echo "usage: TAKAN_AGENT_TOKEN=... curl -fsSL $URL/install.sh | bash" >&2
+  echo "usage: curl -fsSL $URL/install.sh | bash -s -- <agent-token>" >&2
   exit 1
 fi
+
 BIN_DIR="${HOME}/.local/bin"
 mkdir -p "$BIN_DIR"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
