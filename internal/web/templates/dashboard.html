@@ -2,24 +2,24 @@
 <section class="section hero">
   <div>
     <h1>Overview</h1>
-    <p class="muted" style="margin-top:.4rem;max-width:42ch">One MCP connection. Enable modules and wire your life into the AI client.</p>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Connect your AI once, then manage modules from here.</p>
   </div>
   <div class="stats">
-    <a class="stat" href="/dashboard/modules" style="text-decoration:none;color:inherit">
+    <div class="stat">
       <div class="label">Modules</div>
       <div class="value">{{.ModEnabledCount}}<span class="muted" style="font-size:1rem;font-weight:500"> / {{.ModTotalCount}}</span></div>
-      <div class="hint">enabled · open modules →</div>
-    </a>
-    <a class="stat" href="/dashboard/machines" style="text-decoration:none;color:inherit">
+      <div class="hint">enabled</div>
+    </div>
+    <div class="stat">
       <div class="label">Machines</div>
       <div class="value">{{.MachOnlineCount}}<span class="muted" style="font-size:1rem;font-weight:500"> / {{.MachTotalCount}}</span></div>
-      <div class="hint">online · manage →</div>
-    </a>
-    <a class="stat" href="/dashboard/connect" style="text-decoration:none;color:inherit">
+      <div class="hint">online now</div>
+    </div>
+    <div class="stat">
       <div class="label">MCP</div>
       <div class="value" style="font-size:1.1rem;padding-top:.2rem">Live</div>
-      <div class="hint">connect AI →</div>
-    </a>
+      <div class="hint">endpoint ready</div>
+    </div>
   </div>
 </section>
 
@@ -31,56 +31,71 @@
 {{end}}
 
 <section class="section">
-  <div class="section-title"><span class="dot"></span><h2>Quick access</h2></div>
+  <div class="section-title"><span class="dot"></span><h2>Connect your AI</h2></div>
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>MCP endpoint</h3>
+        <p class="muted">Paste this URL as a custom connector. The client discovers OAuth, opens login, and stores tokens.</p>
+      </div>
+      <span class="pill neutral">OAuth · PKCE</span>
+    </div>
+    <div class="code-wrap">
+      <pre id="mcp-url">{{.MCPURL}}</pre>
+      <button type="button" class="copy-btn" onclick="copyText('mcp-url', this)">Copy</button>
+    </div>
+    <p class="faint" style="margin-top:.75rem">Grok → Connectors → Custom · Claude / Cursor → same idea</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title">
+    <span class="dot"></span>
+    <h2>Modules</h2>
+    <a href="/dashboard/integrations" class="faint" style="margin-left:auto;font-size:.85rem">Browse all →</a>
+  </div>
   <div class="module-grid">
-    <a class="mod-card" href="/dashboard/connect" style="text-decoration:none;color:inherit">
+    {{range .Modules}}
+    <article class="mod-card{{if .Enabled}} enabled{{end}}">
       <div class="mod-top">
-        <div class="mod-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.07 0l1.41-1.41a5 5 0 0 0-7.07-7.07L10 5.93"/><path d="M14 11a5 5 0 0 0-7.07 0L5.5 12.41a5 5 0 0 0 7.07 7.07L14 18.07"/></svg>
-        </div>
-      </div>
-      <div class="mod-body">
-        <h3>Connect AI</h3>
-        <p>MCP URL and OAuth setup for Grok, Claude, Cursor.</p>
-      </div>
-      <div class="mod-foot"><span class="faint">Open →</span></div>
-    </a>
-    <a class="mod-card" href="/dashboard/modules" style="text-decoration:none;color:inherit">
-      <div class="mod-top">
-        <div class="mod-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-        </div>
-      </div>
-      <div class="mod-body">
-        <h3>Modules</h3>
-        <p>{{.ModEnabledCount}} of {{.ModTotalCount}} enabled. Toggle tools for your AI client.</p>
-      </div>
-      <div class="mod-foot"><span class="faint">Open →</span></div>
-    </a>
-    <a class="mod-card" href="/dashboard/machines" style="text-decoration:none;color:inherit">
-      <div class="mod-top">
-        <div class="mod-icon machine">
+        <div class="mod-icon {{.ID}}">
+          {{if eq .ID "machine"}}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
-        </div>
-      </div>
-      <div class="mod-body">
-        <h3>Machines</h3>
-        <p>{{.MachOnlineCount}} online of {{.MachTotalCount}} registered agents.</p>
-      </div>
-      <div class="mod-foot"><span class="faint">Open →</span></div>
-    </a>
-    <a class="mod-card" href="/dashboard/mercadona" style="text-decoration:none;color:inherit">
-      <div class="mod-top">
-        <div class="mod-icon mercadona">
+          {{else if eq .ID "mercadona"}}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg>
+          {{else}}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6"/></svg>
+          {{end}}
         </div>
+        <form method="post" action="/dashboard/modules/{{.ID}}/toggle" title="{{if .Enabled}}Disable{{else}}Enable{{end}}">
+          <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
+          <label class="switch">
+            <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.submit()"/>
+            <span class="slider"></span>
+          </label>
+        </form>
       </div>
       <div class="mod-body">
-        <h3>Mercadona</h3>
-        <p>{{if .MercadonaConfigured}}Linked as {{.MercadonaEmail}}{{else}}Not linked yet — save credentials to enable cart tools.{{end}}</p>
+        <div class="row" style="gap:.45rem">
+          <h3>{{.Name}}</h3>
+          {{if .Enabled}}<span class="pill on">On</span>{{else}}<span class="pill off">Off</span>{{end}}
+          {{if .Ready}}<span class="pill on"><span class="live"></span> Ready</span>
+          {{else if .Enabled}}<span class="pill warn">Needs setup</span>{{end}}
+        </div>
+        <p>{{.Description}}</p>
       </div>
-      <div class="mod-foot"><span class="faint">Open →</span></div>
-    </a>
+      <div class="mod-foot">
+        {{if .Path}}
+          <a href="{{.Path}}">Configure →</a>
+        {{else}}
+          <span class="faint">—</span>
+        {{end}}
+        <span class="faint">{{.ID}}</span>
+      </div>
+    </article>
+    {{else}}
+    <div class="empty" style="grid-column:1/-1">No modules yet. <a href="/dashboard/integrations">Browse integrations</a>.</div>
+    {{end}}
   </div>
 </section>
 {{end}}

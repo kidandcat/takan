@@ -51,10 +51,16 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /register", s.registerPost)
 	mux.HandleFunc("GET /logout", s.logout)
 	mux.HandleFunc("GET /dashboard", s.dashOverview)
-	mux.HandleFunc("GET /dashboard/connect", s.dashConnect)
-	mux.HandleFunc("GET /dashboard/modules", s.dashModules)
+	mux.HandleFunc("GET /dashboard/integrations", s.dashIntegrations)
 	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
+	// Old routes → overview / integrations
+	mux.HandleFunc("GET /dashboard/connect", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard", http.StatusFound)
+	})
+	mux.HandleFunc("GET /dashboard/modules", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/integrations", http.StatusFound)
+	})
 	mux.HandleFunc("POST /dashboard/modules/{id}/toggle", s.toggleModule)
 	mux.HandleFunc("POST /dashboard/machines", s.createMachine)
 	mux.HandleFunc("POST /dashboard/machines/{id}/delete", s.deleteMachine)
@@ -84,13 +90,15 @@ type pageData struct {
 	ModTotalCount   int
 	MachOnlineCount int
 	MachTotalCount  int
-	// ActiveNav highlights the sidebar item: overview|connect|modules|machines|mercadona
+	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
 }
 
 type modView struct {
 	ID, Name, Description string
 	Enabled, Ready        bool
+	// Path is the module settings page (e.g. /dashboard/machines).
+	Path string
 }
 
 type machView struct {
@@ -236,7 +244,7 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 	data := s.buildDashboard(r.Context(), u)
 	data.ActiveNav = nav
 	data.Title = title
-	if nav == "machines" {
+	if nav == "machine" {
 		if c, err := r.Cookie("takan_install"); err == nil && c.Value != "" {
 			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
 				data.InstallCmd = string(raw)
@@ -258,14 +266,11 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 func (s *Server) dashOverview(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "overview", "Overview", "dashboard.html")
 }
-func (s *Server) dashConnect(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "connect", "Connect AI", "connect.html")
-}
-func (s *Server) dashModules(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "modules", "Modules", "modules.html")
+func (s *Server) dashIntegrations(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "integrations", "Integrations", "integrations.html")
 }
 func (s *Server) dashMachines(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "machines", "Machines", "machines.html")
+	s.dashPage(w, r, "machine", "Machines", "machines.html")
 }
 func (s *Server) dashMercadona(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "mercadona", "Mercadona", "mercadona.html")
@@ -296,6 +301,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		}
 		switch m.ModuleID {
 		case "machine":
+			mv.Path = "/dashboard/machines"
 			ms, _ := s.Store.ListMachines(ctx, u.ID)
 			online := false
 			for _, mac := range ms {
@@ -306,9 +312,12 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			}
 			mv.Ready = m.Enabled && online
 		case "mercadona":
+			mv.Path = "/dashboard/mercadona"
 			_, _, _, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
 			// Ready when creds exist; session link is verified when tools run.
 			mv.Ready = m.Enabled && ok
+		default:
+			mv.Path = "/dashboard/" + m.ModuleID
 		}
 		data.Modules = append(data.Modules, mv)
 		if m.Enabled {
@@ -344,7 +353,34 @@ func (s *Server) toggleModule(w http.ResponseWriter, r *http.Request) {
 	if s.OnToolsChanged != nil {
 		s.OnToolsChanged(u.ID)
 	}
-	http.Redirect(w, r, "/dashboard/modules", http.StatusFound)
+	s.redirectBack(w, r, "/dashboard")
+}
+
+// redirectBack sends the browser to Referer when it is on this host, else fallback.
+func (s *Server) redirectBack(w http.ResponseWriter, r *http.Request, fallback string) {
+	ref := r.Header.Get("Referer")
+	if ref != "" {
+		if u, err := url.Parse(ref); err == nil {
+			sameHost := u.Host == "" || u.Host == r.Host
+			if !sameHost && s.PublicURL != "" {
+				if pub, err := url.Parse(s.PublicURL); err == nil {
+					sameHost = u.Host == pub.Host
+				}
+			}
+			if sameHost {
+				path := u.RequestURI()
+				if path == "" {
+					path = "/"
+				}
+				// Only bounce back into the panel.
+				if strings.HasPrefix(path, "/dashboard") {
+					http.Redirect(w, r, path, http.StatusFound)
+					return
+				}
+			}
+		}
+	}
+	http.Redirect(w, r, fallback, http.StatusFound)
 }
 
 func (s *Server) createMachine(w http.ResponseWriter, r *http.Request) {

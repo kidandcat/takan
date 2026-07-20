@@ -1,8 +1,8 @@
 {{define "content"}}
 <section class="section hero">
   <div>
-    <h1>Modules</h1>
-    <p class="muted" style="margin-top:.4rem;max-width:48ch">Toggle modules on or off. Tools appear and disappear in your AI client without reconnecting.</p>
+    <h1>Browse integrations</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Search the catalog, enable modules, and open setup for each one.</p>
   </div>
 </section>
 
@@ -11,9 +11,15 @@
 {{end}}
 
 <section class="section">
-  <div class="module-grid">
+  <div class="card" style="margin-bottom:1rem">
+    <label for="integ-search" style="margin-top:0">Search</label>
+    <input id="integ-search" type="search" placeholder="Name or description…" autocomplete="off" oninput="filterIntegrations(this.value)"/>
+    <p class="faint" style="margin-top:.55rem"><span id="integ-count">{{.ModTotalCount}}</span> integration{{if ne .ModTotalCount 1}}s{{end}}</p>
+  </div>
+
+  <div class="module-grid" id="integ-grid">
     {{range .Modules}}
-    <article class="mod-card{{if .Enabled}} enabled{{end}}">
+    <article class="mod-card{{if .Enabled}} enabled{{end}}" data-search="{{.Name}} {{.Description}} {{.ID}}">
       <div class="mod-top">
         <div class="mod-icon {{.ID}}">
           {{if eq .ID "machine"}}
@@ -42,10 +48,8 @@
         <p>{{.Description}}</p>
       </div>
       <div class="mod-foot">
-        {{if eq .ID "machine"}}
-          <a href="/dashboard/machines">Configure machines →</a>
-        {{else if eq .ID "mercadona"}}
-          <a href="/dashboard/mercadona">Configure account →</a>
+        {{if .Path}}
+          <a href="{{.Path}}">Open setup →</a>
         {{else}}
           <span class="faint">—</span>
         {{end}}
@@ -53,8 +57,27 @@
       </div>
     </article>
     {{else}}
-    <div class="empty" style="grid-column:1/-1">No modules in catalog yet.</div>
+    <div class="empty" style="grid-column:1/-1">No integrations in catalog.</div>
     {{end}}
   </div>
+  <div class="empty" id="integ-empty" style="display:none;margin-top:1rem">No integrations match your search.</div>
 </section>
+
+<script>
+function filterIntegrations(q) {
+  q = (q || '').toLowerCase().trim();
+  var cards = document.querySelectorAll('#integ-grid .mod-card');
+  var n = 0;
+  cards.forEach(function (el) {
+    var hay = (el.getAttribute('data-search') || '').toLowerCase();
+    var show = !q || hay.indexOf(q) !== -1;
+    el.style.display = show ? '' : 'none';
+    if (show) n++;
+  });
+  var count = document.getElementById('integ-count');
+  if (count) count.textContent = n;
+  var empty = document.getElementById('integ-empty');
+  if (empty) empty.style.display = n === 0 ? 'block' : 'none';
+}
+</script>
 {{end}}
