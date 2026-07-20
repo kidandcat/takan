@@ -172,18 +172,6 @@ CREATE TABLE IF NOT EXISTS user_memory (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS file_shares (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  object_key TEXT NOT NULL,
-  filename TEXT NOT NULL,
-  content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-  size_bytes INTEGER NOT NULL DEFAULT 0,
-  public_url TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  expires_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_file_shares_user ON file_shares(user_id);
 `)
 	return err
 }
@@ -410,7 +398,7 @@ type ModuleState struct {
 }
 
 // defaultModuleIDs must stay in sync with modules.Catalog.
-var defaultModuleIDs = []string{"machine", "mercadona", "email", "memory", "files"}
+var defaultModuleIDs = []string{"machine", "mercadona", "email", "memory"}
 
 func (s *Store) ListModules(ctx context.Context, userID string) ([]ModuleState, error) {
 	// ensure defaults exist
@@ -655,92 +643,6 @@ INSERT INTO user_memory (user_id, content, updated_at) VALUES (?,?,?)
 ON CONFLICT(user_id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
 		userID, content, time.Now().UTC().Format(time.RFC3339))
 	return err
-}
-
-// --- file shares ---
-
-type FileShare struct {
-	ID          string
-	UserID      string
-	ObjectKey   string
-	Filename    string
-	ContentType string
-	SizeBytes   int64
-	PublicURL   string
-	CreatedAt   time.Time
-	ExpiresAt   *time.Time
-}
-
-func (s *Store) CreateFileShare(ctx context.Context, sh FileShare) error {
-	var exp any
-	if sh.ExpiresAt != nil {
-		exp = sh.ExpiresAt.UTC().Format(time.RFC3339)
-	}
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO file_shares (id, user_id, object_key, filename, content_type, size_bytes, public_url, created_at, expires_at)
-VALUES (?,?,?,?,?,?,?,?,?)`,
-		sh.ID, sh.UserID, sh.ObjectKey, sh.Filename, sh.ContentType, sh.SizeBytes, sh.PublicURL,
-		sh.CreatedAt.UTC().Format(time.RFC3339), exp)
-	return err
-}
-
-func (s *Store) ListFileShares(ctx context.Context, userID string) ([]FileShare, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id, user_id, object_key, filename, content_type, size_bytes, public_url, created_at, expires_at
-FROM file_shares WHERE user_id = ? ORDER BY created_at DESC`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []FileShare
-	for rows.Next() {
-		var sh FileShare
-		var created string
-		var exp sql.NullString
-		if err := rows.Scan(&sh.ID, &sh.UserID, &sh.ObjectKey, &sh.Filename, &sh.ContentType,
-			&sh.SizeBytes, &sh.PublicURL, &created, &exp); err != nil {
-			return nil, err
-		}
-		sh.CreatedAt, _ = time.Parse(time.RFC3339, created)
-		if exp.Valid {
-			t, _ := time.Parse(time.RFC3339, exp.String)
-			sh.ExpiresAt = &t
-		}
-		out = append(out, sh)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) GetFileShare(ctx context.Context, userID, id string) (*FileShare, error) {
-	var sh FileShare
-	var created string
-	var exp sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-SELECT id, user_id, object_key, filename, content_type, size_bytes, public_url, created_at, expires_at
-FROM file_shares WHERE id = ? AND user_id = ?`, id, userID).
-		Scan(&sh.ID, &sh.UserID, &sh.ObjectKey, &sh.Filename, &sh.ContentType,
-			&sh.SizeBytes, &sh.PublicURL, &created, &exp)
-	if err != nil {
-		return nil, err
-	}
-	sh.CreatedAt, _ = time.Parse(time.RFC3339, created)
-	if exp.Valid {
-		t, _ := time.Parse(time.RFC3339, exp.String)
-		sh.ExpiresAt = &t
-	}
-	return &sh, nil
-}
-
-func (s *Store) DeleteFileShare(ctx context.Context, userID, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM file_shares WHERE id = ? AND user_id = ?`, id, userID)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
 }
 
 // --- helpers ---

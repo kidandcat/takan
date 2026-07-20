@@ -20,7 +20,6 @@ var Catalog = []Info{
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
 	{ID: "email", Name: "Email", Description: "Send email via Resend (you bring the API key)."},
 	{ID: "memory", Name: "Memory", Description: "Short-lived working memory for your AI client (per account)."},
-	{ID: "files", Name: "Files", Description: "Upload files/images to public object storage and share URLs."},
 }
 
 // Provider builds tools for enabled modules.
@@ -30,7 +29,6 @@ type Provider struct {
 	Mercadona ToolFactory
 	Email     ToolFactory
 	Memory    ToolFactory
-	Files     ToolFactory
 }
 
 // ToolFactory produces tools when the module is enabled.
@@ -63,10 +61,6 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 		case "memory":
 			if p.Memory != nil {
 				out = append(out, p.Memory(ctx, userID)...)
-			}
-		case "files":
-			if p.Files != nil {
-				out = append(out, p.Files(ctx, userID)...)
 			}
 		}
 	}

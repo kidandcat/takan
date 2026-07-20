@@ -11,14 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"io"
-	"path/filepath"
-
 	"github.com/kidandcat/takan/internal/agenthub"
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/modules"
-	"github.com/kidandcat/takan/modules/files"
 )
 
 //go:embed templates/*.html
@@ -30,7 +26,6 @@ type Server struct {
 	Hub       *agenthub.Hub
 	Box       *cryptox.Box
 	PublicURL string
-	Files     *files.Module // optional public file storage
 	// OnMercadonaSave logs into Mercadona and stores session tokens (optional).
 	OnMercadonaSave func(ctx context.Context, userID, email, password, postal string) error
 	// OnMercadonaClear unlinks Mercadona session for the user.
@@ -61,7 +56,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
 	mux.HandleFunc("GET /dashboard/memory", s.dashMemory)
-	mux.HandleFunc("GET /dashboard/files", s.dashFiles)
 	// Old routes → overview / integrations
 	mux.HandleFunc("GET /dashboard/connect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -77,8 +71,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/email", s.saveEmail)
 	mux.HandleFunc("POST /dashboard/email/clear", s.clearEmail)
 	mux.HandleFunc("POST /dashboard/memory", s.saveMemory)
-	mux.HandleFunc("POST /dashboard/files/upload", s.uploadFile)
-	mux.HandleFunc("POST /dashboard/files/{id}/delete", s.deleteFile)
 }
 
 type pageData struct {
@@ -103,8 +95,6 @@ type pageData struct {
 	EmailKeySet         bool
 	MemoryContent       string
 	MemoryUpdated       string
-	FileShares          []fileView
-	FilesStorageOK      bool
 	// Dashboard stats (precomputed for templates)
 	ModEnabledCount int
 	ModTotalCount   int
@@ -112,11 +102,6 @@ type pageData struct {
 	MachTotalCount  int
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
-}
-
-type fileView struct {
-	ID, Name, URL, Created string
-	Bytes                  int64
 }
 
 type modView struct {
@@ -306,9 +291,6 @@ func (s *Server) dashEmail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashMemory(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "memory", "Memory", "memory.html")
 }
-func (s *Server) dashFiles(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "files", "Files", "files.html")
-}
 
 func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data := pageData{
@@ -357,9 +339,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		case "memory":
 			mv.Path = "/dashboard/memory"
 			mv.Ready = m.Enabled // always ready once enabled
-		case "files":
-			mv.Path = "/dashboard/files"
-			mv.Ready = m.Enabled && s.Files != nil && s.Files.Blob != nil
 		default:
 			mv.Path = "/dashboard/" + m.ModuleID
 		}
@@ -391,15 +370,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		data.MemoryContent = content
 		if !updated.IsZero() {
 			data.MemoryUpdated = updated.UTC().Format(time.RFC3339)
-		}
-	}
-	data.FilesStorageOK = s.Files != nil && s.Files.Blob != nil
-	if shares, err := s.Store.ListFileShares(ctx, u.ID); err == nil {
-		for _, sh := range shares {
-			data.FileShares = append(data.FileShares, fileView{
-				ID: sh.ID, Name: sh.Filename, URL: sh.PublicURL,
-				Bytes: sh.SizeBytes, Created: sh.CreatedAt.UTC().Format(time.RFC3339),
-			})
 		}
 	}
 	return data
@@ -611,66 +581,6 @@ func (s *Server) saveMemory(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/memory?flash=Memory+saved", http.StatusFound)
-}
-
-func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	if s.Files == nil || s.Files.Blob == nil {
-		http.Redirect(w, r, "/dashboard/files?flash="+urlQuery("file storage not configured on server"), http.StatusFound)
-		return
-	}
-	if err := r.ParseMultipartForm(26 << 20); err != nil {
-		http.Redirect(w, r, "/dashboard/files?flash="+urlQuery("upload too large or invalid"), http.StatusFound)
-		return
-	}
-	f, hdr, err := r.FormFile("file")
-	if err != nil {
-		http.Redirect(w, r, "/dashboard/files?flash="+urlQuery("file required"), http.StatusFound)
-		return
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 25<<20+1))
-	if err != nil {
-		http.Redirect(w, r, "/dashboard/files?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	name := hdr.Filename
-	if name == "" {
-		name = "upload.bin"
-	}
-	ct := hdr.Header.Get("Content-Type")
-	if ct == "" {
-		ct = "application/octet-stream"
-	}
-	// strip path components browsers sometimes send
-	name = filepath.Base(name)
-	sh, err := s.Files.Upload(r.Context(), u.ID, name, ct, data)
-	if err != nil {
-		http.Redirect(w, r, "/dashboard/files?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "files", true)
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	http.Redirect(w, r, "/dashboard/files?flash="+urlQuery("Uploaded: "+sh.PublicURL), http.StatusFound)
-}
-
-func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	id := r.PathValue("id")
-	sh, err := s.Store.GetFileShare(r.Context(), u.ID, id)
-	if err == nil && s.Files != nil && s.Files.Blob != nil {
-		_ = s.Files.Blob.Delete(r.Context(), sh.ObjectKey)
-	}
-	_ = s.Store.DeleteFileShare(r.Context(), u.ID, id)
-	http.Redirect(w, r, "/dashboard/files", http.StatusFound)
 }
 
 func urlQuery(s string) string {

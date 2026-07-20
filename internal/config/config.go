@@ -19,14 +19,6 @@ type Config struct {
 	BackupPrefix    string
 	BackupAccessKey string
 	BackupSecretKey string
-	// Optional public file storage (OVH S3 / any S3-compatible)
-	FilesEndpoint   string
-	FilesRegion     string
-	FilesBucket     string
-	FilesPrefix     string
-	FilesAccessKey  string
-	FilesSecretKey  string
-	FilesPublicBase string // public URL prefix for objects
 }
 
 func Load() Config {
@@ -41,13 +33,6 @@ func Load() Config {
 		BackupPrefix:    env("TAKAN_BACKUP_PREFIX", "takan/"),
 		BackupAccessKey: os.Getenv("AWS_ACCESS_KEY_ID"),
 		BackupSecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
-		FilesEndpoint:   env("TAKAN_FILES_ENDPOINT", os.Getenv("TAKAN_BACKUP_ENDPOINT")),
-		FilesRegion:     env("TAKAN_FILES_REGION", env("TAKAN_BACKUP_REGION", "gra")),
-		FilesBucket:     os.Getenv("TAKAN_FILES_BUCKET"),
-		FilesPrefix:     env("TAKAN_FILES_PREFIX", "takan-files/"),
-		FilesAccessKey:  env("TAKAN_FILES_ACCESS_KEY", os.Getenv("AWS_ACCESS_KEY_ID")),
-		FilesSecretKey:  env("TAKAN_FILES_SECRET_KEY", os.Getenv("AWS_SECRET_ACCESS_KEY")),
-		FilesPublicBase: strings.TrimRight(os.Getenv("TAKAN_FILES_PUBLIC_BASE"), "/"),
 	}
 	if c.SessionKey == "" {
 		c.SessionKey = "dev-insecure-change-me"

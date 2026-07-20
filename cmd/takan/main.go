@@ -20,7 +20,6 @@ import (
 	"github.com/kidandcat/takan/internal/web"
 	"github.com/kidandcat/takan/modules"
 	"github.com/kidandcat/takan/modules/email"
-	"github.com/kidandcat/takan/modules/files"
 	"github.com/kidandcat/takan/modules/machine"
 	"github.com/kidandcat/takan/modules/memory"
 	"github.com/kidandcat/takan/modules/mercadona"
@@ -75,37 +74,18 @@ func main() {
 	}
 	mercMod := mercadona.NewModule(st, mdb, mbox, cfg.PublicURL)
 
-	var fileBlob *files.BlobStore
-	if cfg.FilesBucket != "" && cfg.FilesAccessKey != "" && cfg.FilesSecretKey != "" && cfg.FilesEndpoint != "" {
-		fb, err := files.NewBlobStore(files.S3Config{
-			Endpoint: cfg.FilesEndpoint, Region: cfg.FilesRegion, Bucket: cfg.FilesBucket,
-			Prefix: cfg.FilesPrefix, AccessKey: cfg.FilesAccessKey, SecretKey: cfg.FilesSecretKey,
-			PublicBase: cfg.FilesPublicBase,
-		})
-		if err != nil {
-			log.Fatalf("files storage: %v", err)
-		}
-		fileBlob = fb
-		log.Printf("files: public storage enabled → s3://%s/%s", cfg.FilesBucket, cfg.FilesPrefix)
-	} else {
-		log.Printf("files: storage disabled (set TAKAN_FILES_BUCKET + keys + endpoint)")
-	}
-	filesMod := &files.Module{Store: st, Blob: fileBlob}
-
 	prov := &modules.Provider{
 		Store:     st,
 		Machine:   machine.Factory(st, hub),
 		Mercadona: mercMod.Factory(),
 		Email:     email.Factory(st, box),
 		Memory:    memory.Factory(st),
-		Files:     filesMod.Factory(),
 	}
 
 	webSrv, err := web.New(st, hub, box, cfg.PublicURL)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}
-	webSrv.Files = filesMod
 	webSrv.OnMercadonaSave = func(ctx context.Context, userID, emailAddr, password, postal string) error {
 		return mercadona.LinkAccount(ctx, mdb, mbox, userID, emailAddr, password, postal)
 	}
