@@ -1,0 +1,142 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Invites</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:52ch">
+      Share invite codes so others can create a Takan account. Each code works once.
+    </p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+{{if .NewInviteCode}}
+<div class="card" style="border-color:var(--ok);background:var(--ok-bg)">
+  <div class="card-head">
+    <div>
+      <h3>New invite code</h3>
+      <p class="muted">Copy it now — it will not be shown again.</p>
+    </div>
+    <span class="pill on">One-time</span>
+  </div>
+  <div class="code-wrap">
+    <pre id="invite-code">{{.NewInviteCode}}</pre>
+    <button type="button" class="copy-btn" onclick="copyText('invite-code', this)">Copy</button>
+  </div>
+  <p class="faint" style="margin-top:.75rem;word-break:break-all">
+    Share link:
+    <code id="invite-link">{{.PublicURL}}/register?invite={{.NewInviteCode}}</code>
+    <button type="button" class="copy-btn" onclick="copyText('invite-link', this)" style="margin-left:.5rem">Copy link</button>
+  </p>
+</div>
+{{end}}
+
+<section class="section">
+  <div class="section-title"><span class="dot"></span><h2>Your budget</h2></div>
+  <div class="card">
+    {{if .InviteQuota}}
+      {{if .InviteQuota.Unlimited}}
+        <p><span class="pill on">Unlimited</span> You can create as many invites as you need.</p>
+        <p class="muted" style="margin-top:.4rem">Issued so far: <strong>{{.InviteQuota.Created}}</strong></p>
+      {{else}}
+        <p>
+          <strong>{{.InviteQuota.Remaining}}</strong> remaining
+          · <span class="muted">{{.InviteQuota.Created}} / {{.InviteQuota.Quota}} used</span>
+        </p>
+      {{end}}
+    {{else}}
+      <p class="muted">Could not load invite quota.</p>
+    {{end}}
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title"><span class="dot"></span><h2>Create invite</h2></div>
+  <div class="card">
+    <form method="post" action="/dashboard/invites">
+      <label for="note">Note (optional)</label>
+      <input id="note" name="note" placeholder="e.g. for Alex"/>
+      <label for="days">Expires in (days)</label>
+      <input id="days" name="days" type="number" min="1" max="365" value="30"/>
+      <button type="submit" style="margin-top:1rem">Create invite</button>
+    </form>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title"><span class="dot"></span><h2>Issued codes</h2></div>
+  {{if .Invites}}
+  <div class="card" style="padding:0;overflow:hidden">
+    <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+      <thead>
+        <tr style="text-align:left;background:var(--bg-soft)">
+          <th style="padding:.7rem 1rem">Created</th>
+          <th style="padding:.7rem 1rem">Note</th>
+          <th style="padding:.7rem 1rem">Status</th>
+          <th style="padding:.7rem 1rem">Expires</th>
+          <th style="padding:.7rem 1rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Invites}}
+        <tr style="border-top:1px solid var(--border)">
+          <td style="padding:.65rem 1rem" class="faint">{{.Created}}</td>
+          <td style="padding:.65rem 1rem">{{if .Note}}{{.Note}}{{else}}—{{end}}</td>
+          <td style="padding:.65rem 1rem">
+            {{if eq .Status "open"}}<span class="pill on">open</span>
+            {{else if eq .Status "used"}}<span class="pill neutral">used</span>
+            {{else}}<span class="pill warn">{{.Status}}</span>{{end}}
+          </td>
+          <td style="padding:.65rem 1rem" class="faint">{{if .Expires}}{{.Expires}}{{else}}—{{end}}</td>
+          <td style="padding:.65rem 1rem;text-align:right">
+            {{if eq .Status "open"}}
+            <form method="post" action="/dashboard/invites/{{.ID}}/revoke" style="display:inline">
+              <button type="submit" class="btn secondary" style="padding:.3rem .6rem;font-size:.8rem">Revoke</button>
+            </form>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="card"><p class="muted">No invites yet.</p></div>
+  {{end}}
+</section>
+
+{{if .IsAdmin}}
+<section class="section">
+  <div class="section-title"><span class="dot"></span><h2>Admin · user invite policy</h2></div>
+  <p class="muted" style="margin-bottom:.75rem">Grant unlimited invites or change quotas. Only admins see this.</p>
+  {{range .AdminUsers}}
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>{{.Email}}</h3>
+        <p class="faint">issued {{.Created}} · quota {{.Quota}}{{if .Unlimited}} · unlimited{{end}}{{if .Admin}} · admin{{end}}</p>
+      </div>
+    </div>
+    <form method="post" action="/dashboard/invites/admin" class="row" style="gap:.75rem;flex-wrap:wrap;align-items:flex-end">
+      <input type="hidden" name="user_id" value="{{.ID}}"/>
+      <div style="flex:1;min-width:8rem">
+        <label>Quota</label>
+        <input name="quota" type="number" min="0" value="{{.Quota}}"/>
+      </div>
+      <label style="display:flex;align-items:center;gap:.4rem;margin:0">
+        <input type="checkbox" name="unlimited" value="1" {{if .Unlimited}}checked{{end}} style="width:auto"/>
+        Unlimited
+      </label>
+      <label style="display:flex;align-items:center;gap:.4rem;margin:0">
+        <input type="checkbox" name="is_admin" value="1" {{if .Admin}}checked{{end}} style="width:auto"/>
+        Admin
+      </label>
+      <button type="submit">Save</button>
+    </form>
+  </div>
+  {{end}}
+</section>
+{{end}}
+{{end}}

@@ -9,7 +9,7 @@ import (
 
 func (s *Server) renderLogin(w http.ResponseWriter, q url.Values, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	footer := `<p class="muted">Accounts are invitation-only for now.</p>`
+	footer := `<p class="muted">No account? <a href="/register">Register with an invite</a> first, then come back.</p>`
 	if s.AllowRegister {
 		footer = `<p class="muted">No account? <a href="/register">Create one</a> first, then come back.</p>`
 	}

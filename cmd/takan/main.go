@@ -16,6 +16,7 @@ import (
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/mcp"
 	"github.com/kidandcat/takan/internal/oauth"
+	"github.com/kidandcat/takan/internal/ratelimit"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/internal/web"
 	"github.com/kidandcat/takan/modules"
@@ -45,6 +46,12 @@ func main() {
 	}
 	defer st.Close()
 
+	// One-time import from standalone mercadona.db (if still present).
+	legacyMerc := filepath.Join(cfg.DataDir, "mercadona.db")
+	if err := st.ImportLegacyMercadonaDB(legacyMerc); err != nil {
+		log.Printf("mercadona legacy import: %v", err)
+	}
+
 	box, err := cryptox.NewBox(cfg.SessionKey)
 	if err != nil {
 		log.Fatalf("crypto: %v", err)
@@ -63,36 +70,48 @@ func main() {
 		},
 	)
 
-	// Mercadona multi-tenant DB (aliases, cart prefs, encrypted sessions).
-	mdb, err := mercadona.OpenDB(filepath.Join(cfg.DataDir, "mercadona.db"))
-	if err != nil {
-		log.Fatalf("mercadona store: %v", err)
-	}
-	defer mdb.Close()
+	// Mercadona shares the main Takan/Colmena DB (multi-tenant by user id).
 	mbox, err := mercadona.NewBox(cfg.SessionKey)
 	if err != nil {
 		log.Fatalf("mercadona crypto: %v", err)
 	}
-	mercMod := mercadona.NewModule(st, mdb, mbox, cfg.PublicURL)
+	mercMod := mercadona.NewModule(st, st.DB(), mbox, cfg.PublicURL)
+
+	rl := ratelimit.New()
+	bashLimit := machine.BashLimiter(nil)
+	if cfg.MachineBashPerMin > 0 {
+		max := cfg.MachineBashPerMin
+		bashLimit = func(userID string) bool {
+			return rl.Allow("bash:"+userID, max, time.Minute)
+		}
+	}
+	authLimit := func(key string) bool {
+		max := cfg.AuthPerMin
+		if max <= 0 {
+			return true
+		}
+		return rl.Allow(key, max, time.Minute)
+	}
 
 	prov := &modules.Provider{
 		Store:     st,
-		Machine:   machine.Factory(st, hub),
+		Machine:   machine.Factory(st, hub, bashLimit),
 		Mercadona: mercMod.Factory(),
 		Email:     email.Factory(st, box),
 		Memory:    memory.Factory(st),
 		People:    people.Factory(st),
 	}
 
-	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir, cfg.AllowRegister)
+	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir, cfg.AllowRegister, cfg.DefaultInviteQuota)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}
+	webSrv.AuthRateLimit = authLimit
 	webSrv.OnMercadonaSave = func(ctx context.Context, userID, emailAddr, password, postal string) error {
-		return mercadona.LinkAccount(ctx, mdb, mbox, userID, emailAddr, password, postal)
+		return mercadona.LinkAccount(ctx, st.DB(), mbox, userID, emailAddr, password, postal)
 	}
 	webSrv.OnMercadonaClear = func(ctx context.Context, userID string) error {
-		return mercadona.UnlinkAccount(ctx, mdb, userID)
+		return mercadona.UnlinkAccount(ctx, st.DB(), userID)
 	}
 
 	mcpSrv := &mcp.Server{
@@ -100,7 +119,6 @@ func main() {
 		PublicURL: cfg.PublicURL,
 		Sessions:  mcp.NewSessionHub(),
 		Resolve: func(ctx context.Context, bearer string) (string, error) {
-			// OAuth access tokens only (no long-lived static API keys).
 			u, err := st.UserByAccessToken(ctx, bearer)
 			if err != nil {
 				return "", err
@@ -115,10 +133,26 @@ func main() {
 		Store:            st,
 		PublicURL:        cfg.PublicURL,
 		AllowRegister:    cfg.AllowRegister,
+		Redirects:        oauth.NewRedirectChecker(cfg.OAuthRedirectExtra),
+		RateLimit:        authLimit,
 		UserFromSession:  webSrv.CurrentUser,
 		CreateSession:    webSrv.CreateWebSession,
 		SetSessionCookie: webSrv.SetSessionCookie,
 	}
+
+	// Periodic GC for expired tokens/sessions.
+	go func() {
+		t := time.NewTicker(6 * time.Hour)
+		defer t.Stop()
+		for range t.C {
+			if n, err := st.DeleteExpiredOAuthTokens(context.Background()); err != nil {
+				log.Printf("token gc: %v", err)
+			} else if n > 0 {
+				log.Printf("token gc: removed %d expired rows", n)
+			}
+			rl.Cleanup(2 * time.Hour)
+		}
+	}()
 
 	mux := http.NewServeMux()
 	webSrv.Routes(mux)
@@ -132,7 +166,6 @@ func main() {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("GET /install.sh", serveInstallSh(cfg.PublicURL))
-	// Prebuilt agents (placed next to binary at deploy time)
 	mux.Handle("GET /download/", http.StripPrefix("/download/", http.FileServer(http.Dir(agentBinDir()))))
 
 	httpSrv := &http.Server{
@@ -150,7 +183,8 @@ func main() {
 		_ = httpSrv.Shutdown(ctx)
 	}()
 
-	log.Printf("takan listening on %s public=%s allow_register=%v", cfg.Listen, cfg.PublicURL, cfg.AllowRegister)
+	log.Printf("takan listening on %s public=%s allow_register=%v invite_quota=%d",
+		cfg.Listen, cfg.PublicURL, cfg.AllowRegister, cfg.DefaultInviteQuota)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
@@ -241,7 +275,6 @@ if [ "$(uname -s)" = "Darwin" ]; then
     "${AS_ROOT[@]}" mkdir -p "$BIN_DIR" "$LOG_DIR"
     "${AS_ROOT[@]}" mv "$TMP" "$BIN_DIR/takan-agent"
     "${AS_ROOT[@]}" chmod 755 "$BIN_DIR/takan-agent"
-    # Drop user LaunchAgent if a previous install used it.
     launchctl bootout "gui/$(id -u)/com.takan.agent" 2>/dev/null || true
     launchctl unload "$HOME/Library/LaunchAgents/com.takan.agent.plist" 2>/dev/null || true
     rm -f "$HOME/Library/LaunchAgents/com.takan.agent.plist" 2>/dev/null || true
@@ -296,7 +329,6 @@ EOF
     echo "takan-agent loaded (launchd user). log: ~/.takan/agent.log"
   fi
 else
-  # Linux: system unit when root/sudo available, else systemd --user.
   if [ "$USE_SYSTEM" = "1" ]; then
     BIN_DIR=/usr/local/bin
     ENV_DIR=/etc/takan
@@ -326,8 +358,6 @@ KillMode=mixed
 [Install]
 WantedBy=multi-user.target
 EOF
-    # Stop user unit if a previous install used it (avoid two agents, same token).
-    # Old units lacked TimeoutStopSec; SIGTERM can hang — kill hard, then disable.
     if systemctl --user is-active takan-agent >/dev/null 2>&1; then
       systemctl --user kill -s SIGKILL takan-agent 2>/dev/null || true
       timeout 3 systemctl --user stop takan-agent 2>/dev/null || true
@@ -335,7 +365,6 @@ EOF
     systemctl --user disable takan-agent 2>/dev/null || true
     rm -f "$HOME/.config/systemd/user/takan-agent.service" 2>/dev/null || true
     systemctl --user daemon-reload 2>/dev/null || true
-    # Also stop any leftover binary (user or previous system install).
     "${AS_ROOT[@]}" systemctl stop takan-agent 2>/dev/null || true
     pkill -9 -x takan-agent 2>/dev/null || true
     "${AS_ROOT[@]}" systemctl daemon-reload
@@ -367,7 +396,6 @@ WantedBy=default.target
 EOF
     systemctl --user daemon-reload
     systemctl --user enable --now takan-agent
-    # Headless VPS: keep user services after logout (no root needed for linger).
     if command -v loginctl >/dev/null 2>&1; then
       if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" != "yes" ]; then
         if command -v sudo >/dev/null 2>&1 && sudo -n loginctl enable-linger "$(id -un)" 2>/dev/null; then
@@ -381,7 +409,6 @@ EOF
   fi
 fi
 `
-		// strip windows line endings if any
 		_, _ = w.Write([]byte(strings.ReplaceAll(script, "\r\n", "\n")))
 	}
 }

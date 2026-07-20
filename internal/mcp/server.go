@@ -87,11 +87,15 @@ func (s *Server) authUser(w http.ResponseWriter, r *http.Request) (string, bool)
 }
 
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authUser(w, r); !ok {
+	userID, ok := s.authUser(w, r)
+	if !ok {
 		return
 	}
 	if sid := r.Header.Get("MCP-Session-Id"); sid != "" {
-		s.hub().Delete(sid)
+		sess := s.hub().Get(sid)
+		if sess != nil && sess.UserID == userID {
+			s.hub().Delete(sid)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

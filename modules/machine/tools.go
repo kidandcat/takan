@@ -12,8 +12,12 @@ import (
 	"github.com/kidandcat/takan/internal/store"
 )
 
+// BashLimiter optional per-user rate limit for machine_bash.
+// Returns false when the call should be rejected.
+type BashLimiter func(userID string) bool
+
 // Factory returns machine_* tools.
-func Factory(st *store.Store, hub *agenthub.Hub) func(ctx context.Context, userID string) []mcp.RegisteredTool {
+func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx context.Context, userID string) []mcp.RegisteredTool {
 	return func(ctx context.Context, userID string) []mcp.RegisteredTool {
 		return []mcp.RegisteredTool{
 			{
@@ -63,6 +67,9 @@ func Factory(st *store.Store, hub *agenthub.Hub) func(ctx context.Context, userI
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					if limit != nil && !limit(userID) {
+						return "", fmt.Errorf("rate limit: too many machine_bash calls — try again shortly")
+					}
 					name, _ := args["machine"].(string)
 					cmd, _ := args["command"].(string)
 					name = strings.TrimSpace(name)

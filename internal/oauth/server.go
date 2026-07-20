@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/kidandcat/takan/internal/store"
@@ -20,18 +21,35 @@ import (
 // PublicClientID is the fixed public client for Takan (PKCE only, no secret).
 const PublicClientID = "takan"
 
+// Token TTLs (shorter access + rotating refresh).
+const (
+	AccessTokenTTL  = 24 * time.Hour
+	RefreshTokenTTL = 30 * 24 * time.Hour
+)
+
 // Server is the OAuth AS + resource metadata, co-hosted with the MCP resource.
 type Server struct {
 	Store     *store.Store
 	PublicURL string // https://takan.es
 	// AllowRegister shows the signup link on the OAuth login page.
 	AllowRegister bool
+	// Redirects validates redirect_uri (required for multi-tenant safety).
+	Redirects *RedirectChecker
+	// RateLimit optional: return false to reject (login / token).
+	RateLimit func(key string) bool
 	// UserFromSession returns the logged-in panel user for a request, if any.
 	UserFromSession func(r *http.Request) *store.User
 	// CreateSession logs the user in on the panel after authorize login.
 	CreateSession func(ctx context.Context, userID string) (cookieToken string, err error)
 	// SetSessionCookie writes the web session cookie.
 	SetSessionCookie func(w http.ResponseWriter, token string)
+}
+
+func (s *Server) redirects() *RedirectChecker {
+	if s.Redirects == nil {
+		s.Redirects = NewRedirectChecker(nil)
+	}
+	return s.Redirects
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
@@ -98,7 +116,7 @@ func parseRedirectURIs(r *http.Request) []string {
 
 func (s *Server) authorizeGET(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if err := validateAuthorizeQuery(q); err != nil {
+	if err := s.validateAuthorizeQuery(q); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -118,7 +136,7 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 			q.Set(k, v)
 		}
 	}
-	if err := validateAuthorizeQuery(q); err != nil {
+	if err := s.validateAuthorizeQuery(q); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -127,6 +145,10 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 	user := s.UserFromSession(r)
 
 	if action == "login" || user == nil {
+		if s.RateLimit != nil && !s.RateLimit("oauth-login:"+clientIP(r)) {
+			s.renderLogin(w, q, "Too many attempts — try again later")
+			return
+		}
 		u, err := s.Store.Authenticate(r.Context(), r.FormValue("email"), r.FormValue("password"))
 		if err != nil {
 			s.renderLogin(w, q, "Invalid email or password")
@@ -186,15 +208,15 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, u.String(), http.StatusFound)
 }
 
-func validateAuthorizeQuery(q url.Values) error {
+func (s *Server) validateAuthorizeQuery(q url.Values) error {
 	if q.Get("response_type") != "code" {
 		return fmt.Errorf("response_type must be code")
 	}
 	if q.Get("client_id") == "" {
 		return fmt.Errorf("client_id required")
 	}
-	if q.Get("redirect_uri") == "" {
-		return fmt.Errorf("redirect_uri required")
+	if err := s.redirects().ValidateRedirectURI(q.Get("redirect_uri")); err != nil {
+		return err
 	}
 	if q.Get("code_challenge") == "" {
 		return fmt.Errorf("code_challenge required (PKCE)")
@@ -207,6 +229,10 @@ func validateAuthorizeQuery(q url.Values) error {
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
+	if s.RateLimit != nil && !s.RateLimit("oauth-token:"+clientIP(r)) {
+		writeOAuthError(w, http.StatusTooManyRequests, "slow_down", "rate limited")
+		return
+	}
 	_ = r.ParseForm()
 	switch r.FormValue("grant_type") {
 	case "authorization_code":
@@ -247,12 +273,12 @@ func (s *Server) tokenAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "pkce verification failed")
 		return
 	}
-	access, exp, err := s.Store.IssueAccessToken(r.Context(), userID, storedClient, scope, 30*24*time.Hour)
+	access, exp, err := s.Store.IssueAccessToken(r.Context(), userID, storedClient, scope, AccessTokenTTL)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "")
 		return
 	}
-	refresh, err := s.Store.IssueRefreshToken(r.Context(), userID, storedClient, scope, 90*24*time.Hour)
+	refresh, err := s.Store.IssueRefreshToken(r.Context(), userID, storedClient, scope, RefreshTokenTTL)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "")
 		return
@@ -267,23 +293,42 @@ func (s *Server) tokenAuthCode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) tokenRefresh(w http.ResponseWriter, r *http.Request) {
+	if s.RateLimit != nil && !s.RateLimit("oauth-token:"+clientIP(r)) {
+		writeOAuthError(w, http.StatusTooManyRequests, "slow_down", "rate limited")
+		return
+	}
 	raw := r.FormValue("refresh_token")
-	userID, clientID, scope, err := s.Store.ConsumeRefreshToken(r.Context(), raw)
+	userID, clientID, scope, newRefresh, err := s.Store.RotateRefreshToken(r.Context(), raw, RefreshTokenTTL)
 	if err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", err.Error())
 		return
 	}
-	access, exp, err := s.Store.IssueAccessToken(r.Context(), userID, clientID, scope, 30*24*time.Hour)
+	access, exp, err := s.Store.IssueAccessToken(r.Context(), userID, clientID, scope, AccessTokenTTL)
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "")
 		return
 	}
 	writeJSON(w, map[string]any{
-		"access_token": access,
-		"token_type":   "Bearer",
-		"expires_in":   int(time.Until(exp).Seconds()),
-		"scope":        scope,
+		"access_token":  access,
+		"token_type":    "Bearer",
+		"expires_in":    int(time.Until(exp).Seconds()),
+		"refresh_token": newRefresh,
+		"scope":         scope,
 	})
+}
+
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Real-IP"); xff != "" {
+		return xff
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return strings.TrimSpace(strings.Split(xff, ",")[0])
+	}
+	host := r.RemoteAddr
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		return host[:i]
+	}
+	return host
 }
 
 func verifyPKCE(verifier, challenge, method string) bool {

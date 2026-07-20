@@ -28,6 +28,14 @@ Only the URL is needed. Clients discover OAuth automatically (PKCE), open a brow
 https://takan.es/mcp
 ```
 
+## Multi-user
+
+- Accounts are isolated by `user_id` (modules, machines, secrets, people, memory, Mercadona).
+- **Invites:** closed registration by default. Users create invite codes (quota `TAKAN_DEFAULT_INVITE_QUOTA`, default 5). Admins can grant **unlimited invites** or change quotas in **Panel → Invites**.
+- First registered user becomes **admin + unlimited invites**.
+- Mercadona lives in the **main Colmena DB** (same backup as everything else).
+- OAuth: PKCE + redirect allowlist; access tokens 24h; refresh rotates (30d).
+
 ## Dev
 
 ```bash

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,8 +34,12 @@ type Server struct {
 	PublicURL string
 	// DataDir is the Colmena/data root (people photos live under people-photos/).
 	DataDir string
-	// AllowRegister enables public self-signup (default false = invitation-only).
+	// AllowRegister enables public self-signup without invite (default false).
 	AllowRegister bool
+	// DefaultInviteQuota applied to newly registered users.
+	DefaultInviteQuota int
+	// AuthRateLimit optional IP throttle for login/register.
+	AuthRateLimit func(key string) bool
 	// OnMercadonaSave logs into Mercadona and stores session tokens (optional).
 	OnMercadonaSave func(ctx context.Context, userID, email, password, postal string) error
 	// OnMercadonaClear unlinks Mercadona session for the user.
@@ -44,12 +49,18 @@ type Server struct {
 	tmpl           *template.Template
 }
 
-func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL, dataDir string, allowRegister bool) (*Server, error) {
+func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL, dataDir string, allowRegister bool, defaultInviteQuota int) (*Server, error) {
 	t, err := template.ParseFS(tmplFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	return &Server{Store: st, Hub: hub, Box: box, PublicURL: publicURL, DataDir: dataDir, AllowRegister: allowRegister, tmpl: t}, nil
+	if defaultInviteQuota <= 0 {
+		defaultInviteQuota = store.DefaultInviteQuota
+	}
+	return &Server{
+		Store: st, Hub: hub, Box: box, PublicURL: publicURL, DataDir: dataDir,
+		AllowRegister: allowRegister, DefaultInviteQuota: defaultInviteQuota, tmpl: t,
+	}, nil
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
@@ -66,6 +77,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
 	mux.HandleFunc("GET /dashboard/memory", s.dashMemory)
 	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
+	mux.HandleFunc("GET /dashboard/invites", s.dashInvites)
 	// Old routes → overview / integrations
 	mux.HandleFunc("GET /dashboard/connect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -74,6 +86,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 		http.Redirect(w, r, "/dashboard/integrations", http.StatusFound)
 	})
 	mux.HandleFunc("POST /dashboard/modules/{id}/toggle", s.toggleModule)
+	mux.HandleFunc("POST /dashboard/invites", s.createInvite)
+	mux.HandleFunc("POST /dashboard/invites/{id}/revoke", s.revokeInvite)
+	mux.HandleFunc("POST /dashboard/invites/admin", s.adminInvitePolicy)
 	mux.HandleFunc("POST /dashboard/machines", s.createMachine)
 	mux.HandleFunc("POST /dashboard/machines/{id}/delete", s.deleteMachine)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
@@ -96,6 +111,7 @@ type pageData struct {
 	Flash               string
 	FlashIsError        bool
 	MCPURL              string
+	PublicURL           string
 	OAuthClientID       string
 	OAuthAuthorize      string
 	OAuthToken          string
@@ -122,6 +138,27 @@ type pageData struct {
 	ActiveNav string
 	// AllowRegister controls public signup CTAs and /register form.
 	AllowRegister bool
+	// Invite registration
+	InviteRequired bool
+	InviteCode     string
+	// Invites panel
+	InviteQuota     *store.InviteQuotaInfo
+	Invites         []inviteView
+	NewInviteCode   string // flash: show once after create
+	AdminUsers      []adminUserView
+	IsAdmin         bool
+}
+
+type inviteView struct {
+	ID, Note, Status, Created, Expires, UsedBy string
+	Used                                       bool
+}
+
+type adminUserView struct {
+	ID, Email       string
+	Quota           int
+	Unlimited, Admin bool
+	Created         int
 }
 
 type emailDomainView struct {
@@ -244,6 +281,10 @@ func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
+	if s.AuthRateLimit != nil && !s.AuthRateLimit("login:"+clientIP(r)) {
+		s.page(w, "login.html", pageData{Title: "Log in", Error: "Too many attempts — try again later"})
+		return
+	}
 	_ = r.ParseForm()
 	u, err := s.Store.Authenticate(r.Context(), r.FormValue("email"), r.FormValue("password"))
 	if err != nil {
@@ -259,36 +300,62 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
-// registerClosedMsg is shown when TAKAN_ALLOW_REGISTER is off.
-const registerClosedMsg = "Registration is closed. Takan is invitation-only for now."
-
 func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
-	if !s.AllowRegister {
-		s.page(w, "register.html", pageData{Title: "Register", Error: registerClosedMsg})
-		return
-	}
-	s.page(w, "register.html", pageData{Title: "Register"})
+	n, _ := s.Store.UserCount(r.Context())
+	inviteRequired := !s.AllowRegister && n > 0
+	code := r.URL.Query().Get("invite")
+	s.page(w, "register.html", pageData{
+		Title: "Register", AllowRegister: true, // form always shown; invite may be required
+		InviteRequired: inviteRequired, InviteCode: code,
+	})
 }
 
 func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
-	if !s.AllowRegister {
-		w.WriteHeader(http.StatusForbidden)
-		s.page(w, "register.html", pageData{Title: "Register", Error: registerClosedMsg})
+	if s.AuthRateLimit != nil && !s.AuthRateLimit("register:"+clientIP(r)) {
+		s.page(w, "register.html", pageData{
+			Title: "Register", AllowRegister: true, Error: "Too many attempts — try again later",
+			InviteRequired: !s.AllowRegister,
+		})
 		return
 	}
 	_ = r.ParseForm()
-	u, err := s.Store.CreateUser(r.Context(), r.FormValue("email"), r.FormValue("password"))
+	n, _ := s.Store.UserCount(r.Context())
+	inviteRequired := !s.AllowRegister && n > 0
+	code := r.FormValue("invite")
+	u, err := s.Store.CreateUserOpts(r.Context(), r.FormValue("email"), r.FormValue("password"), store.CreateUserOpts{
+		InviteCode:    code,
+		DefaultQuota:  s.DefaultInviteQuota,
+		RequireInvite: inviteRequired,
+		AllowOpen:     s.AllowRegister || n == 0,
+	})
 	if err != nil {
-		s.page(w, "register.html", pageData{Title: "Register", Error: err.Error()})
+		s.page(w, "register.html", pageData{
+			Title: "Register", AllowRegister: true, Error: err.Error(),
+			InviteRequired: inviteRequired, InviteCode: code,
+		})
 		return
 	}
 	tok, err := s.Store.CreateWebSession(r.Context(), u.ID, 30*24*time.Hour)
 	if err != nil {
-		s.page(w, "register.html", pageData{Title: "Register", Error: err.Error()})
+		s.page(w, "register.html", pageData{Title: "Register", AllowRegister: true, Error: err.Error()})
 		return
 	}
 	s.setSession(w, tok)
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
+}
+
+func clientIP(r *http.Request) string {
+	if x := r.Header.Get("X-Real-IP"); x != "" {
+		return x
+	}
+	if x := r.Header.Get("X-Forwarded-For"); x != "" {
+		return strings.TrimSpace(strings.Split(x, ",")[0])
+	}
+	host := r.RemoteAddr
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		return host[:i]
+	}
+	return host
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -324,6 +391,14 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 			http.SetCookie(w, &http.Cookie{Name: "takan_install", Value: "", Path: "/", MaxAge: -1})
 		}
 	}
+	if nav == "invites" {
+		if c, err := r.Cookie("takan_invite_code"); err == nil && c.Value != "" {
+			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
+				data.NewInviteCode = string(raw)
+			}
+			http.SetCookie(w, &http.Cookie{Name: "takan_invite_code", Value: "", Path: "/", MaxAge: -1})
+		}
+	}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		data.Flash = f
 		lf := strings.ToLower(f)
@@ -356,12 +431,16 @@ func (s *Server) dashMemory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashPeople(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "people", "People", "people.html")
 }
+func (s *Server) dashInvites(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "invites", "Invites", "invites.html")
+}
 
 func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data := pageData{
 		Title:          "Dashboard",
 		User:           u,
 		MCPURL:         s.PublicURL + "/mcp",
+		PublicURL:      s.PublicURL,
 		OAuthClientID:  "takan",
 		OAuthAuthorize: s.PublicURL + "/oauth/authorize",
 		OAuthToken:     s.PublicURL + "/oauth/token",
@@ -544,6 +623,46 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			data.People = append(data.People, pv)
 		}
 	}
+	// Invites panel data
+	data.IsAdmin = u.IsAdmin
+	if q, err := s.Store.InviteQuota(ctx, u.ID); err == nil {
+		data.InviteQuota = q
+	}
+	if list, err := s.Store.ListInvites(ctx, u.ID); err == nil {
+		for _, inv := range list {
+			iv := inviteView{
+				ID: inv.ID, Note: inv.Note,
+				Created: inv.CreatedAt.UTC().Format("2006-01-02 15:04"),
+			}
+			if inv.ExpiresAt != nil {
+				iv.Expires = inv.ExpiresAt.UTC().Format("2006-01-02")
+			}
+			if inv.UsedAt != nil {
+				iv.Used = true
+				iv.Status = "used"
+				iv.UsedBy = inv.UsedBy
+			} else if inv.ExpiresAt != nil && time.Now().UTC().After(*inv.ExpiresAt) {
+				iv.Status = "expired"
+			} else {
+				iv.Status = "open"
+			}
+			data.Invites = append(data.Invites, iv)
+		}
+	}
+	if u.IsAdmin {
+		if users, err := s.Store.ListUsersForAdmin(ctx); err == nil {
+			for _, au := range users {
+				av := adminUserView{
+					ID: au.ID, Email: au.Email, Quota: au.InviteQuota,
+					Unlimited: au.InviteUnlimited, Admin: au.IsAdmin,
+				}
+				if info, err := s.Store.InviteQuota(ctx, au.ID); err == nil {
+					av.Created = info.Created
+				}
+				data.AdminUsers = append(data.AdminUsers, av)
+			}
+		}
+	}
 	return data
 }
 
@@ -553,6 +672,17 @@ func (s *Server) toggleModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	known := false
+	for _, c := range modules.Catalog {
+		if c.ID == id {
+			known = true
+			break
+		}
+	}
+	if !known {
+		http.Redirect(w, r, "/dashboard/integrations?flash="+urlQuery("unknown module"), http.StatusFound)
+		return
+	}
 	_ = r.ParseForm()
 	en := r.FormValue("enabled") == "1"
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, id, en)
@@ -560,6 +690,69 @@ func (s *Server) toggleModule(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	s.redirectBack(w, r, "/dashboard")
+}
+
+func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	note := r.FormValue("note")
+	ttl := 30 * 24 * time.Hour
+	if d := r.FormValue("days"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil && n > 0 {
+			if n > 365 {
+				n = 365
+			}
+			ttl = time.Duration(n) * 24 * time.Hour
+		}
+	}
+	inv, err := s.Store.CreateInvite(r.Context(), u.ID, note, ttl)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/invites?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	// One-time flash of the raw code via cookie (not logged).
+	http.SetCookie(w, &http.Cookie{
+		Name: "takan_invite_code", Value: base64.RawURLEncoding.EncodeToString([]byte(inv.RawCode)),
+		Path: "/", MaxAge: 300, HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.PublicURL, "https"),
+	})
+	http.Redirect(w, r, "/dashboard/invites?flash=Invite+created+—+copy+the+code+now", http.StatusFound)
+}
+
+func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	if err := s.Store.RevokeUnusedInvite(r.Context(), u.ID, r.PathValue("id")); err != nil {
+		http.Redirect(w, r, "/dashboard/invites?flash="+urlQuery("could not revoke"), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/dashboard/invites?flash=Invite+revoked", http.StatusFound)
+}
+
+func (s *Server) adminInvitePolicy(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	if !u.IsAdmin {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	_ = r.ParseForm()
+	target := r.FormValue("user_id")
+	quota, _ := strconv.Atoi(r.FormValue("quota"))
+	unlimited := r.FormValue("unlimited") == "1"
+	isAdmin := r.FormValue("is_admin") == "1"
+	if err := s.Store.SetUserInvitePolicy(r.Context(), target, quota, unlimited, isAdmin); err != nil {
+		http.Redirect(w, r, "/dashboard/invites?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/dashboard/invites?flash=User+invite+policy+updated", http.StatusFound)
 }
 
 // redirectBack sends the browser to Referer when it is on this host, else fallback.

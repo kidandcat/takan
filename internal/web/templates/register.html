@@ -1,14 +1,24 @@
 {{define "content"}}
 <div class="card auth-card">
-  {{if .AllowRegister}}
   <div class="card-head">
     <div>
       <h1>Create account</h1>
-      <p class="muted" style="margin-top:.35rem">Start wiring modules into your AI client.</p>
+      <p class="muted" style="margin-top:.35rem">
+        {{if .InviteRequired}}You need an invite code from an existing Takan user.{{else}}Start wiring modules into your AI client.{{end}}
+      </p>
     </div>
   </div>
   {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
   <form method="post" action="/register">
+    {{if .InviteRequired}}
+    <label for="invite">Invite code</label>
+    <input id="invite" type="text" name="invite" required autocomplete="off" spellcheck="false"
+      value="{{.InviteCode}}" placeholder="paste invite code"/>
+    {{else}}
+    <label for="invite">Invite code <span class="faint">(optional)</span></label>
+    <input id="invite" type="text" name="invite" autocomplete="off" spellcheck="false"
+      value="{{.InviteCode}}" placeholder="optional"/>
+    {{end}}
     <label for="email">Email</label>
     <input id="email" type="email" name="email" required autocomplete="username"/>
     <label for="password">Password (min 8)</label>
@@ -16,15 +26,5 @@
     <button type="submit" style="width:100%">Create account</button>
   </form>
   <p class="muted" style="margin-top:1.1rem;text-align:center">Already have one? <a href="/login">Log in</a></p>
-  {{else}}
-  <div class="card-head">
-    <div>
-      <h1>Invitation only</h1>
-      <p class="muted" style="margin-top:.35rem">Public registration is closed for now.</p>
-    </div>
-  </div>
-  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-  <p class="muted" style="margin-top:1.1rem;text-align:center">Already invited? <a href="/login">Log in</a></p>
-  {{end}}
 </div>
 {{end}}

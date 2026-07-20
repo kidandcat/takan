@@ -58,6 +58,11 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		return nil, fmt.Errorf("colmena: %w", err)
 	}
 	s := &Store{node: node, db: node.DB()}
+	// Enforce FK on the writer connection (CASCADE, RESTRICT). Per-connection pragma.
+	if _, err := s.db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		_ = node.Close()
+		return nil, fmt.Errorf("pragma foreign_keys: %w", err)
+	}
 	if err := s.migrate(); err != nil {
 		_ = node.Close()
 		return nil, err
@@ -67,6 +72,14 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		return nil, err
 	}
 	if err := s.migratePeopleContactFields(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
+	if err := s.migrateUserInviteCols(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
+	if err := s.migrateMercadonaTables(); err != nil {
 		_ = node.Close()
 		return nil, err
 	}
@@ -93,7 +106,10 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE COLLATE NOCASE,
   password_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  invite_quota INTEGER NOT NULL DEFAULT 5,
+  invite_unlimited INTEGER NOT NULL DEFAULT 0,
+  is_admin INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS web_sessions (
@@ -203,72 +219,242 @@ CREATE TABLE IF NOT EXISTS people (
 CREATE INDEX IF NOT EXISTS idx_people_user ON people(user_id);
 CREATE INDEX IF NOT EXISTS idx_people_user_name ON people(user_id, name);
 
+CREATE TABLE IF NOT EXISTS invites (
+  id TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL UNIQUE,
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  note TEXT NOT NULL DEFAULT '',
+  expires_at TEXT,
+  used_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_invites_created_by ON invites(created_by);
+CREATE INDEX IF NOT EXISTS idx_invites_used_by ON invites(used_by);
+
 `)
 	return err
+}
+
+// migrateUserInviteCols adds invite_quota / invite_unlimited / is_admin on users.
+func (s *Store) migrateUserInviteCols() error {
+	rows, err := s.db.Query(`PRAGMA table_info(users)`)
+	if err != nil {
+		return err
+	}
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		cols[name] = true
+	}
+	rows.Close()
+	if len(cols) == 0 {
+		return nil
+	}
+	alters := []struct {
+		col string
+		ddl string
+	}{
+		{"invite_quota", fmt.Sprintf(`ALTER TABLE users ADD COLUMN invite_quota INTEGER NOT NULL DEFAULT %d`, DefaultInviteQuota)},
+		{"invite_unlimited", `ALTER TABLE users ADD COLUMN invite_unlimited INTEGER NOT NULL DEFAULT 0`},
+		{"is_admin", `ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`},
+	}
+	for _, a := range alters {
+		if cols[a.col] {
+			continue
+		}
+		if _, err := s.db.Exec(a.ddl); err != nil {
+			return err
+		}
+	}
+	// Bootstrap: if exactly one user and none is admin, promote the earliest.
+	var nUsers, nAdmins int
+	_ = s.db.QueryRow(`SELECT COUNT(1) FROM users`).Scan(&nUsers)
+	_ = s.db.QueryRow(`SELECT COUNT(1) FROM users WHERE is_admin = 1`).Scan(&nAdmins)
+	if nUsers > 0 && nAdmins == 0 {
+		_, _ = s.db.Exec(`
+UPDATE users SET is_admin = 1, invite_unlimited = 1
+WHERE id = (SELECT id FROM users ORDER BY created_at ASC LIMIT 1)`)
+		log.Printf("store: promoted earliest user to admin + unlimited invites")
+	}
+	return nil
 }
 
 // --- users ---
 
 type User struct {
-	ID           string
-	Email        string
-	PasswordHash string
-	CreatedAt    time.Time
+	ID              string
+	Email           string
+	PasswordHash    string
+	CreatedAt       time.Time
+	InviteQuota     int
+	InviteUnlimited bool
+	IsAdmin         bool
+}
+
+// CreateUserOpts controls registration side-effects.
+type CreateUserOpts struct {
+	// InviteCode when set is validated and consumed for the new user.
+	InviteCode string
+	// DefaultQuota for the new account (0 → DefaultInviteQuota).
+	DefaultQuota int
+	// RequireInvite fails when InviteCode is empty (unless bootstrap first user).
+	RequireInvite bool
+	// AllowOpen when true allows registration without invite (TAKAN_ALLOW_REGISTER).
+	AllowOpen bool
 }
 
 func (s *Store) CreateUser(ctx context.Context, email, password string) (*User, error) {
+	return s.CreateUserOpts(ctx, email, password, CreateUserOpts{AllowOpen: true})
+}
+
+// CreateUserOpts registers a user with invite / bootstrap rules.
+func (s *Store) CreateUserOpts(ctx context.Context, email, password string, opts CreateUserOpts) (*User, error) {
 	email = normalizeEmail(email)
 	if email == "" || len(password) < 8 {
 		return nil, fmt.Errorf("email required and password min 8 chars")
 	}
+	n, err := s.UserCount(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bootstrap := n == 0
+	code := strings.TrimSpace(opts.InviteCode)
+	// First user is always allowed (becomes admin). Afterwards:
+	// open register → invite optional; closed → invite required.
+	if !bootstrap {
+		if !opts.AllowOpen && code == "" {
+			return nil, fmt.Errorf("invite code required")
+		}
+		if code != "" {
+			if err := s.PeekInvite(ctx, code); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
 	}
 	id := uuid.NewString()
 	now := time.Now().UTC()
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO users (id, email, password_hash, created_at) VALUES (?,?,?,?)`,
-		id, email, string(hash), now.Format(time.RFC3339))
+	quota := opts.DefaultQuota
+	if quota <= 0 {
+		quota = DefaultInviteQuota
+	}
+	un, ad := 0, 0
+	if bootstrap {
+		un, ad = 1, 1 // first user: admin + unlimited invites
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO users (id, email, password_hash, created_at, invite_quota, invite_unlimited, is_admin)
+VALUES (?,?,?,?,?,?,?)`,
+		id, email, string(hash), now.Format(time.RFC3339), quota, un, ad)
 	if err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
-	for _, mid := range []string{"machine", "mercadona"} {
+	if code != "" {
+		if err := s.ConsumeInvite(ctx, code, id); err != nil {
+			// roll back user
+			_, _ = s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+			return nil, err
+		}
+	}
+	for _, mid := range defaultModuleIDs {
 		_, _ = s.db.ExecContext(ctx,
 			`INSERT OR IGNORE INTO user_modules (user_id, module_id, enabled) VALUES (?,?,0)`,
 			id, mid)
 	}
-	return &User{ID: id, Email: email, PasswordHash: string(hash), CreatedAt: now}, nil
+	return &User{
+		ID: id, Email: email, PasswordHash: string(hash), CreatedAt: now,
+		InviteQuota: quota, InviteUnlimited: un != 0, IsAdmin: ad != 0,
+	}, nil
 }
 
 func (s *Store) Authenticate(ctx context.Context, email, password string) (*User, error) {
 	email = normalizeEmail(email)
-	var u User
-	var created string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE email = ?`, email).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &created)
+	u, err := s.userByEmail(ctx, email)
 	if err != nil {
 		return nil, fmt.Errorf("invalid credentials")
 	}
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
 		return nil, fmt.Errorf("invalid credentials")
 	}
+	return u, nil
+}
+
+func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {
+	return s.scanUser(s.db.QueryRowContext(ctx, userSelect+` WHERE id = ?`, id))
+}
+
+func (s *Store) userByEmail(ctx context.Context, email string) (*User, error) {
+	return s.scanUser(s.db.QueryRowContext(ctx, userSelect+` WHERE email = ?`, email))
+}
+
+const userSelect = `SELECT id, email, password_hash, created_at,
+  COALESCE(invite_quota, 5), COALESCE(invite_unlimited, 0), COALESCE(is_admin, 0) FROM users`
+
+func (s *Store) scanUser(row *sql.Row) (*User, error) {
+	var u User
+	var created string
+	var un, ad int
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &created, &u.InviteQuota, &un, &ad)
+	if err != nil {
+		return nil, err
+	}
+	u.InviteUnlimited = un != 0
+	u.IsAdmin = ad != 0
 	u.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	return &u, nil
 }
 
-func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {
-	var u User
-	var created string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, email, password_hash, created_at FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Email, &u.PasswordHash, &created)
-	if err != nil {
-		return nil, err
+// DeleteExpiredOAuthTokens removes expired access/refresh/codes (best-effort GC).
+func (s *Store) DeleteExpiredOAuthTokens(ctx context.Context) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var total int64
+	for _, q := range []string{
+		`DELETE FROM oauth_tokens WHERE expires_at < ?`,
+		`DELETE FROM oauth_refresh WHERE expires_at < ?`,
+		`DELETE FROM oauth_codes WHERE expires_at < ?`,
+		`DELETE FROM web_sessions WHERE expires_at < ?`,
+	} {
+		res, err := s.db.ExecContext(ctx, q, now)
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += n
 	}
-	u.CreatedAt, _ = time.Parse(time.RFC3339, created)
-	return &u, nil
+	return total, nil
+}
+
+// RotateRefreshToken invalidates old refresh and issues a new one (same client/scope).
+func (s *Store) RotateRefreshToken(ctx context.Context, rawOld string, ttl time.Duration) (userID, clientID, scope, newRaw string, err error) {
+	userID, clientID, scope, err = s.ConsumeRefreshToken(ctx, rawOld)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	// Invalidate old refresh (rotation).
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM oauth_refresh WHERE token_hash = ?`, hashToken(rawOld))
+	newRaw, err = s.IssueRefreshToken(ctx, userID, clientID, scope, ttl)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	return userID, clientID, scope, newRaw, nil
+}
+
+// RevokeAccessToken deletes a raw access token.
+func (s *Store) RevokeAccessToken(ctx context.Context, raw string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM oauth_tokens WHERE token_hash = ?`, hashToken(raw))
+	return err
 }
 
 // --- web sessions ---

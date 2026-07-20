@@ -34,7 +34,12 @@ type Hub struct {
 
 	mu      sync.RWMutex
 	agents  map[string]*agent // machineID -> conn
-	pending map[string]chan Result
+	pending map[string]*pendingTask
+}
+
+type pendingTask struct {
+	machineID string
+	ch        chan Result
 }
 
 type agent struct {
@@ -69,7 +74,7 @@ func New(auth Authenticator, touch Touch) *Hub {
 		Auth:    auth,
 		Touch:   touch,
 		agents:  make(map[string]*agent),
-		pending: make(map[string]chan Result),
+		pending: make(map[string]*pendingTask),
 	}
 }
 
@@ -112,7 +117,7 @@ func (h *Hub) RunBash(ctx context.Context, userID, machineName, command string, 
 	taskID := uuid.NewString()
 	ch := make(chan Result, 1)
 	h.mu.Lock()
-	h.pending[taskID] = ch
+	h.pending[taskID] = &pendingTask{machineID: a.machineID, ch: ch}
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
@@ -221,10 +226,14 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			}
 		case "bash_result":
 			h.mu.Lock()
-			ch := h.pending[msg.TaskID]
+			pt := h.pending[msg.TaskID]
+			// Only the agent that owns the task may complete it.
+			if pt != nil && pt.machineID != machineID {
+				pt = nil
+			}
 			h.mu.Unlock()
-			if ch != nil {
-				ch <- Result{ExitCode: msg.ExitCode, Stdout: msg.Stdout, Stderr: msg.Stderr, Error: msg.Error}
+			if pt != nil {
+				pt.ch <- Result{ExitCode: msg.ExitCode, Stdout: msg.Stdout, Stderr: msg.Stderr, Error: msg.Error}
 			}
 		}
 	}
