@@ -24,7 +24,6 @@ var Catalog = []Info{
 	{ID: "machine", Name: "Machine", Description: "Remote shell + configurable AI task runners (Claude, Grok, free commands) via takan-agent."},
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
-	{ID: "memory", Name: "Memory", Description: "Short-lived working memory for your AI client (per account)."},
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
 	{ID: "health", Name: "Health", Description: "Personal health: profile, daily diary, injuries and conditions."},
 }
@@ -40,7 +39,6 @@ type Provider struct {
 	Machine   ToolFactory
 	Mercadona ToolFactory
 	Email     ToolFactory
-	Memory    ToolFactory
 	People    ToolFactory
 	Health    ToolFactory
 }
@@ -72,10 +70,6 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.Email != nil {
 				out = append(out, p.Email(ctx, userID)...)
 			}
-		case "memory":
-			if p.Memory != nil {
-				out = append(out, p.Memory(ctx, userID)...)
-			}
 		case "people":
 			if p.People != nil {
 				out = append(out, p.People(ctx, userID)...)
@@ -94,7 +88,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, Mercadona linked, email domains, memory, people, health). " +
+				"(machines online, Mercadona linked, email domains, people, health). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -206,19 +200,6 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			return false, fmt.Sprintf("key set, 0 domains enabled (%d discovered)", len(domains))
 		}
 		return true, fmt.Sprintf("%d enabled domain(s): %s", len(en), strings.Join(en, ", "))
-	case "memory":
-		content, updated, ok, err := p.Store.GetMemory(ctx, userID)
-		if err != nil {
-			return false, "error reading memory"
-		}
-		if !ok || strings.TrimSpace(content) == "" {
-			return true, "empty"
-		}
-		detail = fmt.Sprintf("%d chars", len(content))
-		if !updated.IsZero() {
-			detail += ", updated " + updated.UTC().Format("2006-01-02")
-		}
-		return true, detail
 	case "people":
 		n, err := p.Store.CountPeople(ctx, userID)
 		if err != nil {

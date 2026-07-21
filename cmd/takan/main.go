@@ -23,7 +23,6 @@ import (
 	"github.com/kidandcat/takan/modules/email"
 	"github.com/kidandcat/takan/modules/health"
 	"github.com/kidandcat/takan/modules/machine"
-	"github.com/kidandcat/takan/modules/memory"
 	"github.com/kidandcat/takan/modules/mercadona"
 	"github.com/kidandcat/takan/modules/people"
 )
@@ -103,7 +102,6 @@ func main() {
 		Machine:   machine.Factory(st, hub, bashLimit),
 		Mercadona: mercMod.Factory(),
 		Email:     email.Factory(st, box),
-		Memory:    memory.Factory(st),
 		People:    people.Factory(st),
 		Health:    health.Factory(st),
 	}

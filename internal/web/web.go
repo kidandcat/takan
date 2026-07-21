@@ -76,7 +76,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
-	mux.HandleFunc("GET /dashboard/memory", s.dashMemory)
 	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
 	mux.HandleFunc("GET /dashboard/health", s.dashHealth)
 	mux.HandleFunc("GET /dashboard/invites", s.dashInvites)
@@ -104,7 +103,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/email/refresh", s.refreshEmail)
 	mux.HandleFunc("POST /dashboard/email/clear", s.clearEmail)
 	mux.HandleFunc("POST /dashboard/email/domains/toggle", s.toggleEmailDomain)
-	mux.HandleFunc("POST /dashboard/memory", s.saveMemory)
 	mux.HandleFunc("POST /dashboard/people", s.createPerson)
 	mux.HandleFunc("POST /dashboard/people/{id}", s.updatePerson)
 	mux.HandleFunc("POST /dashboard/people/{id}/delete", s.deletePerson)
@@ -144,8 +142,6 @@ type pageData struct {
 	EmailConfigured     bool
 	EmailDomainRows     []emailDomainView
 	EmailKeySet         bool
-	MemoryContent       string
-	MemoryUpdated       string
 	People              []personView
 	PeopleCount         int
 	// Health module
@@ -496,9 +492,6 @@ func (s *Server) dashMercadona(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashEmail(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "email", "Email", "email.html")
 }
-func (s *Server) dashMemory(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "memory", "Memory", "memory.html")
-}
 func (s *Server) dashPeople(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "people", "People", "people.html")
 }
@@ -587,32 +580,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.DetailsLine = strings.Join(en, ", ")
 			}
 			mv.Ready = m.Enabled && ok && len(en) > 0
-		case "memory":
-			mv.Path = "/dashboard/memory"
-			content, updated, mok, _ := s.Store.GetMemory(ctx, u.ID)
-			if !mok || strings.TrimSpace(content) == "" {
-				mv.Summary = "Empty"
-			} else {
-				lines := strings.Count(content, "\n") + 1
-				mv.Summary = fmt.Sprintf("%d lines · %d chars", lines, len(content))
-				var bits []string
-				if !updated.IsZero() {
-					bits = append(bits, "updated "+updated.UTC().Format("2006-01-02 15:04"))
-				}
-				for _, line := range strings.Split(content, "\n") {
-					line = strings.TrimSpace(line)
-					if line == "" {
-						continue
-					}
-					if len(line) > 64 {
-						line = line[:61] + "…"
-					}
-					bits = append(bits, line)
-					break
-				}
-				mv.DetailsLine = strings.Join(bits, " · ")
-			}
-			mv.Ready = m.Enabled
 		case "people":
 			mv.Path = "/dashboard/people"
 			n, _ := s.Store.CountPeople(ctx, u.ID)
@@ -693,12 +660,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			data.EmailDomainRows = append(data.EmailDomainRows, emailDomainView{
 				Name: d.Name, Status: d.Status, Sending: d.Sending, Receiving: d.Receiving, Enabled: d.Enabled,
 			})
-		}
-	}
-	if content, updated, mok, _ := s.Store.GetMemory(ctx, u.ID); mok {
-		data.MemoryContent = content
-		if !updated.IsZero() {
-			data.MemoryUpdated = updated.UTC().Format(time.RFC3339)
 		}
 	}
 	if plist, err := s.Store.ListPeople(ctx, u.ID, "", 100); err == nil {
@@ -1265,24 +1226,6 @@ func (s *Server) clearEmail(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/email", http.StatusFound)
-}
-
-func (s *Server) saveMemory(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	_ = r.ParseForm()
-	content := r.FormValue("content")
-	if err := s.Store.SetMemory(r.Context(), u.ID, content); err != nil {
-		http.Redirect(w, r, "/dashboard/memory?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "memory", true)
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	http.Redirect(w, r, "/dashboard/memory?flash=Memory+saved", http.StatusFound)
 }
 
 func parseOptionalFloat(s string) (*float64, error) {

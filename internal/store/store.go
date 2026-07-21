@@ -87,6 +87,10 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		_ = node.Close()
 		return nil, err
 	}
+	if err := s.migrateDropMemoryModule(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -194,12 +198,6 @@ CREATE TABLE IF NOT EXISTS email_settings (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   api_key_enc TEXT NOT NULL,
   domains TEXT NOT NULL DEFAULT '[]',
-  updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS user_memory (
-  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  content TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );
 
@@ -619,7 +617,7 @@ type ModuleState struct {
 }
 
 // defaultModuleIDs must stay in sync with modules.Catalog.
-var defaultModuleIDs = []string{"machine", "mercadona", "email", "memory", "people", "health"}
+var defaultModuleIDs = []string{"machine", "mercadona", "email", "people", "health"}
 
 func (s *Store) ListModules(ctx context.Context, userID string) ([]ModuleState, error) {
 	// ensure defaults exist
@@ -1439,29 +1437,17 @@ func normalizeStringList(in []string) []string {
 	return out
 }
 
-// --- memory ---
-
-func (s *Store) GetMemory(ctx context.Context, userID string) (content string, updatedAt time.Time, ok bool, err error) {
-	var updated string
-	err = s.db.QueryRowContext(ctx,
-		`SELECT content, updated_at FROM user_memory WHERE user_id = ?`, userID).
-		Scan(&content, &updated)
-	if err == sql.ErrNoRows {
-		return "", time.Time{}, false, nil
+// migrateDropMemoryModule removes the retired Memory module (providers ship their own memory).
+// Drops user_modules rows and the user_memory table if present.
+func (s *Store) migrateDropMemoryModule() error {
+	if _, err := s.db.Exec(`DELETE FROM user_modules WHERE module_id = 'memory'`); err != nil {
+		return err
 	}
-	if err != nil {
-		return "", time.Time{}, false, err
+	// Table may not exist on fresh DBs (no longer in migrate()).
+	if _, err := s.db.Exec(`DROP TABLE IF EXISTS user_memory`); err != nil {
+		return err
 	}
-	updatedAt, _ = time.Parse(time.RFC3339, updated)
-	return content, updatedAt, true, nil
-}
-
-func (s *Store) SetMemory(ctx context.Context, userID, content string) error {
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO user_memory (user_id, content, updated_at) VALUES (?,?,?)
-ON CONFLICT(user_id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
-		userID, content, time.Now().UTC().Format(time.RFC3339))
-	return err
+	return nil
 }
 
 // --- helpers ---

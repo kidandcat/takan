@@ -17,7 +17,6 @@ Integrations live under `modules/` as subpackages:
 | **Machine** | `modules/machine` | `machine_list`, `machine_bash`, `machine_ai_runners`, `machine_ai_run`, `machine_ai_status` | Install `takan-agent`; AI runners in panel |
 | **Mercadona** | `modules/mercadona` | `mercadona_search`, `mercadona_add`, `mercadona_cart` | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get` | Resend API key; enable domains |
-| **Memory** | `modules/memory` | `memory_get`, `memory_set` | Enable module |
 | **People** | `modules/people` | `people_list` / `get` / `add` / `update` / `delete` | Personal CRM in panel |
 | **Health** | `modules/health` | `health_status`, `health_profile_set`, `health_log_*`, `health_issue_*` | Profile + daily diary + injuries |
 | **meta** | `modules` | `takan_status` | Always on — all modules + readiness |
@@ -34,7 +33,7 @@ https://<your-host>/mcp
 
 ## Multi-user
 
-- Isolation by `user_id` (modules, machines, secrets, people, memory, health, Mercadona, email).
+- Isolation by `user_id` (modules, machines, secrets, people, health, Mercadona, email).
 - **Invites:** registration closed by default. Users create invite codes (`TAKAN_DEFAULT_INVITE_QUOTA`, default 5). Admins can grant unlimited invites in **Panel → Invites**.
 - First registered user becomes **admin + unlimited invites**.
 - OAuth: PKCE + redirect allowlist; access tokens 24h; refresh rotates (30d).

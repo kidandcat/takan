@@ -34,19 +34,6 @@ func TestCrossTenantIsolation(t *testing.T) {
 		t.Fatal("second user should not be admin")
 	}
 
-	// Memory isolation
-	if err := st.SetMemory(ctx, a.ID, "secret-a"); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetMemory(ctx, b.ID, "secret-b"); err != nil {
-		t.Fatal(err)
-	}
-	ca, _, _, _ := st.GetMemory(ctx, a.ID)
-	cb, _, _, _ := st.GetMemory(ctx, b.ID)
-	if ca != "secret-a" || cb != "secret-b" {
-		t.Fatalf("memory leak: a=%q b=%q", ca, cb)
-	}
-
 	// People isolation
 	pa, err := st.CreatePerson(ctx, Person{UserID: a.ID, Name: "Alice Friend"})
 	if err != nil {
