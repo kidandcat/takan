@@ -128,6 +128,8 @@ type pageData struct {
 	// Machine AI tasks (panel)
 	AITasksEnabled bool
 	AIRunners      []machineAIRunnerView
+	// AITabActive selects the AI tasks tab on narrow screens (after AI save/error).
+	AITabActive bool
 	MercadonaConfigured bool
 	MercadonaEmail      string
 	MercadonaPostal     string
@@ -412,6 +414,9 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 				Enabled: rn.Enabled, Builtin: rn.Builtin,
 			})
 		}
+		if tab := r.URL.Query().Get("tab"); tab == "tasks" || tab == "ai" {
+			data.AITabActive = true
+		}
 	}
 	if nav == "invites" {
 		if c, err := r.Cookie("takan_invite_code"); err == nil && c.Value != "" {
@@ -428,6 +433,10 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 			strings.Contains(lf, "fail") ||
 			strings.Contains(lf, "required") ||
 			strings.Contains(lf, "re-enter")
+		// After AI settings save/error, land on the AI tasks tab (mobile).
+		if nav == "machine" && (strings.Contains(lf, "ai task") || strings.Contains(lf, "runner")) {
+			data.AITabActive = true
+		}
 	}
 	s.page(w, tmpl, data)
 }

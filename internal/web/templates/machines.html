@@ -10,8 +10,23 @@
   <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
 {{end}}
 
-<section class="section">
-  <div class="card">
+<section class="section split-two">
+  {{/* Radios drive mobile tabs (CSS :has). Hidden on wide screens. */}}
+  <input class="page-tab-radio" type="radio" name="mtab" id="mtab-machines" {{if not .AITabActive}}checked{{end}}/>
+  <input class="page-tab-radio" type="radio" name="mtab" id="mtab-tasks" {{if .AITabActive}}checked{{end}}/>
+
+  <div class="page-tabs" role="tablist" aria-label="Machines sections">
+    <label for="mtab-machines" role="tab">
+      Machines
+      <span class="tab-meta">{{.MachOnlineCount}} online · {{.MachTotalCount}} total</span>
+    </label>
+    <label for="mtab-tasks" role="tab">
+      AI tasks
+      <span class="tab-meta">{{if .AITasksEnabled}}Enabled{{else}}Disabled{{end}}</span>
+    </label>
+  </div>
+
+  <div class="card page-panel panel-machines">
     <div class="card-head">
       <div>
         <h3>Registered agents</h3>
@@ -65,14 +80,12 @@
     </div>
     {{end}}
   </div>
-</section>
 
-<section class="section">
-  <div class="card">
+  <div class="card page-panel panel-tasks">
     <div class="card-head">
       <div>
         <h3>AI tasks</h3>
-        <p class="muted">Long-running headless jobs on your machines. Enable runners the AI may use via <code>machine_ai_run</code>.</p>
+        <p class="muted">Long-running headless jobs. Enable runners the AI may use via <code>machine_ai_run</code>.</p>
       </div>
       <span class="pill {{if .AITasksEnabled}}on{{else}}off{{end}}">
         {{if .AITasksEnabled}}Enabled{{else}}Disabled{{end}}
@@ -131,12 +144,12 @@
 
       <h3 style="margin:1rem 0 .35rem;font-size:1rem">Add free command</h3>
       <p class="muted" style="margin-bottom:.65rem">Custom CLI of your choice (any binary on the machine’s PATH).</p>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.65rem">
+      <div class="form-grid" style="grid-template-columns:1fr;gap:.75rem;margin-bottom:.65rem">
         <div>
           <label for="new_name">Name</label>
           <input id="new_name" name="new_name" placeholder="Codex, aider…"/>
         </div>
-        <div style="grid-column:1 / -1">
+        <div>
           <label for="new_command">Command</label>
           <input id="new_command" name="new_command"
             style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem"
