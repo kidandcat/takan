@@ -60,6 +60,23 @@ func (h *SessionHub) Delete(id string) {
 	}
 }
 
+// DropUserSessions closes and removes every MCP session for userID.
+func (h *SessionHub) DropUserSessions(userID string) int {
+	h.mu.Lock()
+	var drop []*Session
+	for id, s := range h.sessions {
+		if s.UserID == userID {
+			drop = append(drop, s)
+			delete(h.sessions, id)
+		}
+	}
+	h.mu.Unlock()
+	for _, s := range drop {
+		s.closeAll()
+	}
+	return len(drop)
+}
+
 // NotifyToolsChanged sends notifications/tools/list_changed to all SSE
 // streams belonging to sessions of userID (MCP Streamable HTTP).
 func (h *SessionHub) NotifyToolsChanged(userID string) {

@@ -43,6 +43,9 @@ type Server struct {
 	CreateSession func(ctx context.Context, userID string) (cookieToken string, err error)
 	// SetSessionCookie writes the web session cookie.
 	SetSessionCookie func(w http.ResponseWriter, token string)
+	// OnAccessTokenIssued is called after a successful access-token grant
+	// (authorization_code or refresh_token). Used to clear MCP force-reauth.
+	OnAccessTokenIssued func(userID string)
 }
 
 func (s *Server) redirects() *RedirectChecker {
@@ -283,6 +286,9 @@ func (s *Server) tokenAuthCode(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "")
 		return
 	}
+	if s.OnAccessTokenIssued != nil {
+		s.OnAccessTokenIssued(userID)
+	}
 	writeJSON(w, map[string]any{
 		"access_token":  access,
 		"token_type":    "Bearer",
@@ -307,6 +313,9 @@ func (s *Server) tokenRefresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "")
 		return
+	}
+	if s.OnAccessTokenIssued != nil {
+		s.OnAccessTokenIssued(userID)
 	}
 	writeJSON(w, map[string]any{
 		"access_token":  access,

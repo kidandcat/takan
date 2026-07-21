@@ -138,6 +138,8 @@ func main() {
 		UserFromSession:  webSrv.CurrentUser,
 		CreateSession:    webSrv.CreateWebSession,
 		SetSessionCookie: webSrv.SetSessionCookie,
+		// New access token (login or refresh) clears MCP force-reauth after tool changes.
+		OnAccessTokenIssued: mcpSrv.ClearForceReauth,
 	}
 
 	// Periodic GC for expired tokens/sessions.
