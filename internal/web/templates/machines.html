@@ -2,7 +2,7 @@
 <section class="section hero">
   <div>
     <h1>Machines</h1>
-    <p class="muted" style="margin-top:.4rem;max-width:48ch">Outbound agent on each computer. Shell + long-running Claude/Grok jobs. No inbound SSH required.</p>
+    <p class="muted" style="margin-top:.4rem;max-width:48ch">Outbound agent on each computer. Shell + long-running AI jobs. No inbound SSH required.</p>
   </div>
 </section>
 
@@ -64,6 +64,90 @@
       </div>
     </div>
     {{end}}
+  </div>
+</section>
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>AI tasks</h3>
+        <p class="muted">Long-running headless jobs on your machines. Enable runners the AI may use via <code>machine_ai_run</code>.</p>
+      </div>
+      <span class="pill {{if .AITasksEnabled}}on{{else}}off{{end}}">
+        {{if .AITasksEnabled}}Enabled{{else}}Disabled{{end}}
+      </span>
+    </div>
+
+    <form method="post" action="/dashboard/machines/ai" class="form-stack" style="max-width:100%">
+      <div class="machine-row" style="margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid rgba(0,0,0,.06)">
+        <div>
+          <div class="name">Enable AI tasks</div>
+          <div class="faint">When off, <code>machine_ai_*</code> tools are hidden from MCP clients.</div>
+        </div>
+        <label class="switch" title="Enable AI tasks">
+          <input type="checkbox" name="ai_tasks_enabled" value="1" {{if .AITasksEnabled}}checked{{end}}/>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <h3 style="margin:0 0 .35rem;font-size:1rem">Launch commands</h3>
+      <p class="muted" style="margin-bottom:.75rem">
+        Each runner is a shell command. Use <code>{{"{{prompt}}"}}</code> where the task prompt should go (shell-quoted automatically).
+        If you omit it, the prompt is appended as the last argument.
+      </p>
+
+      {{range .AIRunners}}
+      <div class="ai-runner" style="margin-bottom:1rem;padding:0.85rem 1rem;border-radius:12px;border:1px solid rgba(0,0,0,.08);background:rgba(0,0,0,.02)">
+        <input type="hidden" name="runner_id" value="{{.ID}}"/>
+        <input type="hidden" name="runner_builtin" value="{{if .Builtin}}1{{else}}0{{end}}"/>
+        <div class="machine-row" style="margin-bottom:.55rem">
+          <div class="row" style="gap:.65rem;align-items:center;flex-wrap:wrap">
+            <label class="switch" title="{{if .Enabled}}Disable{{else}}Enable{{end}} runner">
+              <input type="checkbox" name="runner_enabled" value="{{.ID}}" {{if .Enabled}}checked{{end}}/>
+              <span class="slider"></span>
+            </label>
+            <input name="runner_name" value="{{.Name}}" placeholder="Name" style="max-width:12rem;margin:0;font-weight:600"/>
+            <span class="faint" style="font-family:ui-monospace,monospace;font-size:.8rem">id: {{.ID}}</span>
+            {{if .Builtin}}
+              <span class="pill neutral" style="font-size:.7rem">preset</span>
+            {{end}}
+          </div>
+          {{if not .Builtin}}
+          <button type="submit" class="secondary" style="margin-top:0;padding:.35rem .7rem;font-size:.8rem"
+            formaction="/dashboard/machines/ai/delete-runner" formnovalidate
+            name="id" value="{{.ID}}"
+            onclick="return confirm('Remove runner {{.Name}}?')">Remove</button>
+          {{end}}
+        </div>
+        <label class="faint" style="display:block;margin-bottom:.25rem;font-size:.8rem">Command</label>
+        <input name="runner_command" value="{{.Command}}" required
+          style="width:100%;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem"
+          placeholder="claude -p --dangerously-skip-permissions {{"{{prompt}}"}}"/>
+      </div>
+      {{else}}
+      <div class="empty" style="margin-bottom:1rem">No runners yet — defaults will be created on save.</div>
+      {{end}}
+
+      <h3 style="margin:1rem 0 .35rem;font-size:1rem">Add free command</h3>
+      <p class="muted" style="margin-bottom:.65rem">Custom CLI of your choice (any binary on the machine’s PATH).</p>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.65rem">
+        <div>
+          <label for="new_name">Name</label>
+          <input id="new_name" name="new_name" placeholder="Codex, aider…"/>
+        </div>
+        <div style="grid-column:1 / -1">
+          <label for="new_command">Command</label>
+          <input id="new_command" name="new_command"
+            style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem"
+            placeholder="my-cli --yolo {{"{{prompt}}"}}"/>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:.5rem">
+        <button type="submit">Save AI settings</button>
+      </div>
+    </form>
   </div>
 </section>
 {{end}}

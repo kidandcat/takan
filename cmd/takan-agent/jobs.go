@@ -17,9 +17,12 @@ import (
 
 const maxTrackedJobs = 50
 
+const promptPlaceholder = "{{prompt}}"
+
 type jobMeta struct {
 	JobID      string `json:"job_id"`
-	Agent      string `json:"agent"`
+	Agent      string `json:"agent"` // runner id
+	Command    string `json:"command,omitempty"`
 	Prompt     string `json:"prompt"`
 	Cwd        string `json:"cwd,omitempty"`
 	Status     string `json:"status"` // running | done | failed
@@ -53,12 +56,18 @@ func (m *jobManager) jobDir(id string) string {
 	return filepath.Join(m.root, id)
 }
 
-func (m *jobManager) start(agent, prompt, cwd string, autoApprove bool) (jobMeta, error) {
-	agent = strings.ToLower(strings.TrimSpace(agent))
-	if agent != "claude" && agent != "grok" {
-		return jobMeta{}, fmt.Errorf(`agent must be "claude" or "grok"`)
+// start launches a shell command template with the prompt injected.
+// commandTmpl may include {{prompt}}; otherwise the quoted prompt is appended.
+func (m *jobManager) start(runnerID, commandTmpl, prompt, cwd string) (jobMeta, error) {
+	runnerID = strings.TrimSpace(runnerID)
+	if runnerID == "" {
+		runnerID = "custom"
 	}
+	commandTmpl = strings.TrimSpace(commandTmpl)
 	prompt = strings.TrimSpace(prompt)
+	if commandTmpl == "" {
+		return jobMeta{}, fmt.Errorf("command required")
+	}
 	if prompt == "" {
 		return jobMeta{}, fmt.Errorf("prompt required")
 	}
@@ -68,10 +77,7 @@ func (m *jobManager) start(agent, prompt, cwd string, autoApprove bool) (jobMeta
 		}
 	}
 
-	bin, err := resolveAIBinary(agent)
-	if err != nil {
-		return jobMeta{}, err
-	}
+	shellCmd := expandPromptTemplate(commandTmpl, prompt)
 
 	id := uuid.NewString()
 	dir := m.jobDir(id)
@@ -85,8 +91,7 @@ func (m *jobManager) start(agent, prompt, cwd string, autoApprove bool) (jobMeta
 		return jobMeta{}, err
 	}
 
-	args := buildAIArgs(agent, prompt, autoApprove)
-	cmd := exec.Command(bin, args...)
+	cmd := exec.Command("bash", "-lc", shellCmd)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -99,7 +104,8 @@ func (m *jobManager) start(agent, prompt, cwd string, autoApprove bool) (jobMeta
 	started := time.Now().UTC().Format(time.RFC3339)
 	meta := jobMeta{
 		JobID:     id,
-		Agent:     agent,
+		Agent:     runnerID,
+		Command:   commandTmpl,
 		Prompt:    prompt,
 		Cwd:       cwd,
 		Status:    "running",
@@ -116,7 +122,7 @@ func (m *jobManager) start(agent, prompt, cwd string, autoApprove bool) (jobMeta
 		meta.Error = err.Error()
 		meta.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 		_ = writeMeta(dir, meta)
-		return meta, fmt.Errorf("start %s: %w", agent, err)
+		return meta, fmt.Errorf("start: %w", err)
 	}
 	meta.PID = cmd.Process.Pid
 	_ = writeMeta(dir, meta)
@@ -140,7 +146,6 @@ func (m *jobManager) start(agent, prompt, cwd string, autoApprove bool) (jobMeta
 				errMsg = err.Error()
 			}
 		}
-		// re-read meta in case something else touched it
 		meta2, _ := readMeta(dir)
 		if meta2.JobID == "" {
 			meta2 = meta
@@ -160,12 +165,25 @@ func (m *jobManager) start(agent, prompt, cwd string, autoApprove bool) (jobMeta
 	return meta, nil
 }
 
+func expandPromptTemplate(tmpl, prompt string) string {
+	q := shellQuote(prompt)
+	if strings.Contains(tmpl, promptPlaceholder) {
+		return strings.ReplaceAll(tmpl, promptPlaceholder, q)
+	}
+	// No placeholder: append quoted prompt as final argument.
+	return strings.TrimSpace(tmpl) + " " + q
+}
+
+// shellQuote wraps s in single quotes for bash -lc (safe for arbitrary text).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func (m *jobManager) status(jobID string, tailBytes int) (jobMeta, string, error) {
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {
 		return jobMeta{}, "", fmt.Errorf("job_id required")
 	}
-	// prevent path traversal
 	if strings.Contains(jobID, "/") || strings.Contains(jobID, "..") || strings.Contains(jobID, "\\") {
 		return jobMeta{}, "", fmt.Errorf("invalid job_id")
 	}
@@ -174,15 +192,12 @@ func (m *jobManager) status(jobID string, tailBytes int) (jobMeta, string, error
 	if err != nil {
 		return jobMeta{}, "", fmt.Errorf("unknown job %q", jobID)
 	}
-	// refresh running status from OS if we still track the process, or by PID
 	if meta.Status == "running" && meta.PID > 0 {
 		if !pidAlive(meta.PID) {
-			// process gone but Wait not observed (e.g. agent restarted)
 			meta.Status = "done"
 			if meta.FinishedAt == "" {
 				meta.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 			}
-			// try to recover exit code is hard; leave 0 if clean death without wait
 			_ = writeMeta(dir, meta)
 		}
 	}
@@ -214,7 +229,6 @@ func (m *jobManager) list() []jobMeta {
 			}
 			_ = writeMeta(m.jobDir(e.Name()), meta)
 		}
-		// trim prompt in list views
 		if len(meta.Prompt) > 200 {
 			meta.Prompt = meta.Prompt[:200] + "…"
 		}
@@ -298,68 +312,13 @@ func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	// Signal 0 checks existence without killing.
 	err := syscall.Kill(pid, 0)
 	return err == nil
-}
-
-func buildAIArgs(agent, prompt string, autoApprove bool) []string {
-	switch agent {
-	case "claude":
-		// -p/--print is a boolean flag; prompt is positional.
-		args := []string{"-p"}
-		if autoApprove {
-			args = append(args, "--dangerously-skip-permissions")
-		}
-		args = append(args, prompt)
-		return args
-	case "grok":
-		// -p/--single takes the prompt value.
-		args := []string{}
-		if autoApprove {
-			args = append(args, "--always-approve")
-		}
-		args = append(args, "-p", prompt)
-		return args
-	default:
-		return []string{"-p", prompt}
-	}
-}
-
-func resolveAIBinary(agent string) (string, error) {
-	// Prefer PATH, then common install locations.
-	if p, err := exec.LookPath(agent); err == nil {
-		return p, nil
-	}
-	home, _ := os.UserHomeDir()
-	var candidates []string
-	switch agent {
-	case "claude":
-		candidates = []string{
-			filepath.Join(home, ".local", "bin", "claude"),
-			"/usr/local/bin/claude",
-			"/opt/homebrew/bin/claude",
-		}
-	case "grok":
-		candidates = []string{
-			filepath.Join(home, ".grok", "bin", "grok"),
-			filepath.Join(home, ".local", "bin", "grok"),
-			"/usr/local/bin/grok",
-			"/opt/homebrew/bin/grok",
-		}
-	}
-	for _, c := range candidates {
-		if st, err := os.Stat(c); err == nil && !st.IsDir() {
-			return c, nil
-		}
-	}
-	return "", fmt.Errorf("%s binary not found in PATH or common locations", agent)
 }
 
 func enrichedEnv() []string {
 	env := os.Environ()
 	home, _ := os.UserHomeDir()
-	// Ensure typical user bin dirs are on PATH (launchd/systemd often have a minimal PATH).
 	extra := []string{
 		filepath.Join(home, ".local", "bin"),
 		filepath.Join(home, ".grok", "bin"),
@@ -372,7 +331,6 @@ func enrichedEnv() []string {
 			path = d + string(os.PathListSeparator) + path
 		}
 	}
-	// Replace PATH in env
 	out := make([]string, 0, len(env)+1)
 	found := false
 	for _, e := range env {

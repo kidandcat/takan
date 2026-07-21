@@ -19,7 +19,7 @@ type BashLimiter func(userID string) bool
 // Factory returns machine_* tools.
 func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx context.Context, userID string) []mcp.RegisteredTool {
 	return func(ctx context.Context, userID string) []mcp.RegisteredTool {
-		return []mcp.RegisteredTool{
+		tools := []mcp.RegisteredTool{
 			{
 				Tool: mcp.Tool{
 					Name: "machine_list",
@@ -53,7 +53,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					Name: "machine_bash",
 					Description: "Run a shell command on a registered machine via its takan-agent. " +
 						"The agent must be online. Prefer short non-interactive commands. " +
-						"Pass machine name from machine_list. For long-running Claude/Grok work use machine_ai_run instead.",
+						"Pass machine name from machine_list. For long-running AI work use machine_ai_run instead.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -77,7 +77,6 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if name == "" || cmd == "" {
 						return "", fmt.Errorf("machine and command required")
 					}
-					// ownership check
 					if _, err := st.MachineByUserAndName(ctx, userID, name); err != nil {
 						return "", fmt.Errorf("unknown machine %q", name)
 					}
@@ -117,71 +116,134 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					return b.String(), nil
 				},
 			},
-			{
+		}
+
+		cfg, err := LoadConfig(ctx, st, userID)
+		if err != nil || !cfg.AITasksEnabled {
+			return tools
+		}
+		enabled := cfg.EnabledRunners()
+		if len(enabled) == 0 {
+			return tools
+		}
+
+		runnerIDs := make([]string, 0, len(enabled))
+		var descParts []string
+		for _, r := range enabled {
+			runnerIDs = append(runnerIDs, r.ID)
+			descParts = append(descParts, fmt.Sprintf("%s (%s): %s", r.ID, r.Name, r.Command))
+		}
+		runnersBlurb := strings.Join(descParts, "; ")
+
+		tools = append(tools,
+			mcp.RegisteredTool{
+				Tool: mcp.Tool{
+					Name: "machine_ai_runners",
+					Description: "List AI launch runners configured for this account (enabled only). " +
+						"Configure in Takan panel → Machines → AI tasks. " +
+						"Use runner id with machine_ai_run.",
+					InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+				},
+				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					cfg, err := LoadConfig(ctx, st, userID)
+					if err != nil {
+						return "", err
+					}
+					if !cfg.AITasksEnabled {
+						return "AI tasks are disabled in the Takan panel (Machines → AI tasks).", nil
+					}
+					type row struct {
+						ID      string `json:"id"`
+						Name    string `json:"name"`
+						Command string `json:"command"`
+						Builtin bool   `json:"builtin,omitempty"`
+					}
+					var rows []row
+					for _, r := range cfg.EnabledRunners() {
+						rows = append(rows, row{ID: r.ID, Name: r.Name, Command: r.Command, Builtin: r.Builtin})
+					}
+					if len(rows) == 0 {
+						return "No enabled runners. Enable Claude/Grok or add a free command in the panel.", nil
+					}
+					b, _ := json.MarshalIndent(rows, "", "  ")
+					return string(b), nil
+				},
+			},
+			mcp.RegisteredTool{
 				Tool: mcp.Tool{
 					Name: "machine_ai_run",
-					Description: "Start a long-running headless AI agent job on a machine (returns immediately with job_id). " +
-						"Runs Claude Code (`claude -p`) or Grok Build (`grok -p`) in script/print mode. " +
-						"Poll progress with machine_ai_status. Requires claude/grok installed and authenticated on the machine. " +
-						"auto_approve defaults to true (needed for unattended tool use).",
+					Description: "Start a long-running AI job on a machine (returns immediately with job_id). " +
+						"Pick a runner id configured in the Takan panel (not free-form agent names). " +
+						"Enabled runners: " + runnersBlurb + ". " +
+						"Poll with machine_ai_status. The runner command template injects {{prompt}}.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"machine": map[string]any{"type": "string", "description": "Machine name from machine_list"},
-							"agent": map[string]any{
+							"runner": map[string]any{
 								"type":        "string",
-								"enum":        []string{"claude", "grok"},
-								"description": `AI agent binary: "claude" (Claude Code) or "grok" (Grok Build)`,
+								"enum":        runnerIDs,
+								"description": "Runner id from machine_ai_runners / panel (e.g. claude, grok, or a custom id)",
 							},
 							"prompt": map[string]any{
 								"type":        "string",
-								"description": "Task prompt passed to the agent in -p / script mode",
+								"description": "Task prompt injected into the runner command ({{prompt}})",
 							},
 							"cwd": map[string]any{
 								"type":        "string",
-								"description": "Working directory on the machine (optional; default is the agent process cwd)",
-							},
-							"auto_approve": map[string]any{
-								"type":        "boolean",
-								"description": "Auto-approve tool permissions (default true). Claude: --dangerously-skip-permissions; Grok: --always-approve",
+								"description": "Working directory on the machine (optional)",
 							},
 						},
-						"required": []string{"machine", "agent", "prompt"},
+						"required": []string{"machine", "runner", "prompt"},
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					cfg, err := LoadConfig(ctx, st, userID)
+					if err != nil {
+						return "", err
+					}
+					if !cfg.AITasksEnabled {
+						return "", fmt.Errorf("AI tasks are disabled — enable them in Takan panel → Machines")
+					}
 					name, _ := args["machine"].(string)
-					agentName, _ := args["agent"].(string)
+					runnerID, _ := args["runner"].(string)
+					// accept legacy "agent" for a release
+					if runnerID == "" {
+						runnerID, _ = args["agent"].(string)
+					}
 					prompt, _ := args["prompt"].(string)
 					cwd, _ := args["cwd"].(string)
 					name = strings.TrimSpace(name)
-					agentName = strings.ToLower(strings.TrimSpace(agentName))
+					runnerID = strings.TrimSpace(runnerID)
 					prompt = strings.TrimSpace(prompt)
 					cwd = strings.TrimSpace(cwd)
-					if name == "" || agentName == "" || prompt == "" {
-						return "", fmt.Errorf("machine, agent and prompt required")
+					if name == "" || runnerID == "" || prompt == "" {
+						return "", fmt.Errorf("machine, runner and prompt required")
 					}
-					if agentName != "claude" && agentName != "grok" {
-						return "", fmt.Errorf(`agent must be "claude" or "grok"`)
+					r, ok := cfg.RunnerByID(runnerID)
+					if !ok || !r.Enabled {
+						var ids []string
+						for _, e := range cfg.EnabledRunners() {
+							ids = append(ids, e.ID)
+						}
+						return "", fmt.Errorf("unknown or disabled runner %q — enabled: %s", runnerID, strings.Join(ids, ", "))
 					}
 					if _, err := st.MachineByUserAndName(ctx, userID, name); err != nil {
 						return "", fmt.Errorf("unknown machine %q", name)
 					}
-					autoApprove := true
-					if v, ok := args["auto_approve"].(bool); ok {
-						autoApprove = v
-					}
-					res, err := hub.StartAI(ctx, userID, name, agentName, prompt, cwd, autoApprove)
+					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd)
 					if err != nil {
 						return "", err
 					}
 					out := map[string]any{
 						"machine": name,
 						"job_id":  res.JobID,
-						"agent":   res.Agent,
+						"runner":  r.ID,
+						"name":    r.Name,
+						"command": r.Command,
 						"status":  res.Status,
 						"pid":     res.PID,
-						"hint":    "Poll with machine_ai_status(machine, job_id). Jobs keep running if the agent reconnects.",
+						"hint":    "Poll with machine_ai_status(machine, job_id).",
 					}
 					if res.Error != "" {
 						out["error"] = res.Error
@@ -190,7 +252,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					return string(b), nil
 				},
 			},
-			{
+			mcp.RegisteredTool{
 				Tool: mcp.Tool{
 					Name: "machine_ai_status",
 					Description: "Check status of a long-running AI job started with machine_ai_run. " +
@@ -212,6 +274,13 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					cfg, err := LoadConfig(ctx, st, userID)
+					if err != nil {
+						return "", err
+					}
+					if !cfg.AITasksEnabled {
+						return "", fmt.Errorf("AI tasks are disabled — enable them in Takan panel → Machines")
+					}
 					name, _ := args["machine"].(string)
 					jobID, _ := args["job_id"].(string)
 					name = strings.TrimSpace(name)
@@ -233,7 +302,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if jobID == "" {
 						type row struct {
 							JobID      string `json:"job_id"`
-							Agent      string `json:"agent"`
+							Runner     string `json:"runner"`
 							Status     string `json:"status"`
 							ExitCode   int    `json:"exit_code,omitempty"`
 							PID        int    `json:"pid,omitempty"`
@@ -244,8 +313,12 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						}
 						rows := make([]row, 0, len(list))
 						for _, j := range list {
+							runner := j.Runner
+							if runner == "" {
+								runner = j.Agent
+							}
 							rows = append(rows, row{
-								JobID: j.JobID, Agent: j.Agent, Status: j.Status,
+								JobID: j.JobID, Runner: runner, Status: j.Status,
 								ExitCode: j.ExitCode, PID: j.PID, Cwd: j.Cwd, Prompt: j.Prompt,
 								StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
 							})
@@ -256,10 +329,14 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						b, _ := json.MarshalIndent(map[string]any{"machine": name, "jobs": rows}, "", "  ")
 						return string(b), nil
 					}
+					runner := job.Runner
+					if runner == "" {
+						runner = job.Agent
+					}
 					out := map[string]any{
 						"machine":     name,
 						"job_id":      job.JobID,
-						"agent":       job.Agent,
+						"runner":      runner,
 						"status":      job.Status,
 						"exit_code":   job.ExitCode,
 						"pid":         job.PID,
@@ -278,6 +355,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					return string(b), nil
 				},
 			},
-		}
+		)
+		return tools
 	}
 }

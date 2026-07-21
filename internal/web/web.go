@@ -21,6 +21,7 @@ import (
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/modules"
 	emailmod "github.com/kidandcat/takan/modules/email"
+	machinemod "github.com/kidandcat/takan/modules/machine"
 )
 
 //go:embed templates/*.html
@@ -94,6 +95,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/invites/admin", s.adminInvitePolicy)
 	mux.HandleFunc("POST /dashboard/machines", s.createMachine)
 	mux.HandleFunc("POST /dashboard/machines/{id}/delete", s.deleteMachine)
+	mux.HandleFunc("POST /dashboard/machines/ai", s.saveMachineAI)
+	mux.HandleFunc("POST /dashboard/machines/ai/delete-runner", s.deleteMachineAIRunner)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
 	mux.HandleFunc("POST /dashboard/mercadona/clear", s.clearMercadona)
 	mux.HandleFunc("POST /dashboard/email", s.saveEmail)
@@ -122,6 +125,9 @@ type pageData struct {
 	Modules             []modView
 	Machines            []machView
 	InstallCmd          string
+	// Machine AI tasks (panel)
+	AITasksEnabled bool
+	AIRunners      []machineAIRunnerView
 	MercadonaConfigured bool
 	MercadonaEmail      string
 	MercadonaPostal     string
@@ -203,6 +209,11 @@ type modFact struct {
 type machView struct {
 	ID, Name string
 	Online   bool
+}
+
+type machineAIRunnerView struct {
+	ID, Name, Command string
+	Enabled, Builtin  bool
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data pageData) {
@@ -392,6 +403,14 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 				data.InstallCmd = string(raw)
 			}
 			http.SetCookie(w, &http.Cookie{Name: "takan_install", Value: "", Path: "/", MaxAge: -1})
+		}
+		cfg, _ := machinemod.LoadConfig(r.Context(), s.Store, u.ID)
+		data.AITasksEnabled = cfg.AITasksEnabled
+		for _, rn := range cfg.Runners {
+			data.AIRunners = append(data.AIRunners, machineAIRunnerView{
+				ID: rn.ID, Name: rn.Name, Command: rn.Command,
+				Enabled: rn.Enabled, Builtin: rn.Builtin,
+			})
 		}
 	}
 	if nav == "invites" {
@@ -828,6 +847,104 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.Store.DeleteMachine(r.Context(), u.ID, r.PathValue("id"))
 	http.Redirect(w, r, "/dashboard/machines", http.StatusFound)
+}
+
+func (s *Server) saveMachineAI(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	cfg := machinemod.Config{
+		AITasksEnabled: r.FormValue("ai_tasks_enabled") == "1",
+	}
+	ids := r.Form["runner_id"]
+	names := r.Form["runner_name"]
+	cmds := r.Form["runner_command"]
+	builtins := r.Form["runner_builtin"]
+	enabledSet := map[string]bool{}
+	for _, id := range r.Form["runner_enabled"] {
+		enabledSet[id] = true
+	}
+	n := len(ids)
+	for i := 0; i < n; i++ {
+		id := strings.TrimSpace(ids[i])
+		name, cmd, builtin := "", "", false
+		if i < len(names) {
+			name = names[i]
+		}
+		if i < len(cmds) {
+			cmd = cmds[i]
+		}
+		if i < len(builtins) {
+			builtin = builtins[i] == "1"
+		}
+		if id == "" && name == "" && cmd == "" {
+			continue
+		}
+		cfg.Runners = append(cfg.Runners, machinemod.Runner{
+			ID: id, Name: name, Command: cmd,
+			Enabled: enabledSet[id], Builtin: builtin,
+		})
+	}
+	// Optional free command added in the same form.
+	newName := strings.TrimSpace(r.FormValue("new_name"))
+	newCmd := strings.TrimSpace(r.FormValue("new_command"))
+	if newCmd != "" {
+		id := strings.TrimSpace(r.FormValue("new_id"))
+		if id == "" {
+			id = newName
+		}
+		cfg.Runners = append(cfg.Runners, machinemod.Runner{
+			ID: id, Name: newName, Command: newCmd, Enabled: true, Builtin: false,
+		})
+	}
+	if err := machinemod.SaveConfig(r.Context(), s.Store, u.ID, cfg); err != nil {
+		http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("AI tasks settings saved"), http.StatusFound)
+}
+
+func (s *Server) deleteMachineAIRunner(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	delID := strings.TrimSpace(r.FormValue("id"))
+	if delID == "" {
+		http.Redirect(w, r, "/dashboard/machines", http.StatusFound)
+		return
+	}
+	cfg, err := machinemod.LoadConfig(r.Context(), s.Store, u.ID)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		return
+	}
+	var next []machinemod.Runner
+	for _, rn := range cfg.Runners {
+		if rn.ID == delID {
+			if rn.Builtin {
+				http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("error: cannot delete builtin runner — disable it instead"), http.StatusFound)
+				return
+			}
+			continue
+		}
+		next = append(next, rn)
+	}
+	cfg.Runners = next
+	if err := machinemod.SaveConfig(r.Context(), s.Store, u.ID, cfg); err != nil {
+		http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("Runner removed"), http.StatusFound)
 }
 
 func (s *Server) saveMercadona(w http.ResponseWriter, r *http.Request) {

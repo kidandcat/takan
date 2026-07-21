@@ -16,7 +16,7 @@ type Info struct {
 
 // All known modules (static catalog). Keep IDs in sync with store.defaultModuleIDs.
 var Catalog = []Info{
-	{ID: "machine", Name: "Machine", Description: "Remote shell + long-running Claude/Grok jobs on your computers via takan-agent."},
+	{ID: "machine", Name: "Machine", Description: "Remote shell + configurable AI task runners (Claude, Grok, free commands) via takan-agent."},
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
 	{ID: "memory", Name: "Memory", Description: "Short-lived working memory for your AI client (per account)."},

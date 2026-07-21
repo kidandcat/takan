@@ -58,10 +58,11 @@ type Result struct {
 	Error    string
 }
 
-// AIJob is a long-running Claude/Grok headless task on a machine.
+// AIJob is a long-running AI task on a machine (any configured runner).
 type AIJob struct {
 	JobID      string `json:"job_id"`
-	Agent      string `json:"agent"`
+	Agent      string `json:"agent"` // runner id (legacy field name)
+	Runner     string `json:"runner,omitempty"`
 	Status     string `json:"status"` // running | done | failed | unknown
 	ExitCode   int    `json:"exit_code,omitempty"`
 	PID        int    `json:"pid,omitempty"`
@@ -77,32 +78,33 @@ type AIJob struct {
 type AIStartResult struct {
 	JobID  string `json:"job_id"`
 	Agent  string `json:"agent"`
+	Runner string `json:"runner,omitempty"`
 	Status string `json:"status"`
 	PID    int    `json:"pid,omitempty"`
 	Error  string `json:"error,omitempty"`
 }
 
 type wireMsg struct {
-	Type        string   `json:"type"`
-	TaskID      string   `json:"task_id,omitempty"`
-	Command     string   `json:"command,omitempty"`
-	ExitCode    int      `json:"exit_code,omitempty"`
-	Stdout      string   `json:"stdout,omitempty"`
-	Stderr      string   `json:"stderr,omitempty"`
-	Error       string   `json:"error,omitempty"`
-	Name        string   `json:"name,omitempty"`
-	Agent       string   `json:"agent,omitempty"`
-	Prompt      string   `json:"prompt,omitempty"`
-	Cwd         string   `json:"cwd,omitempty"`
-	AutoApprove bool     `json:"auto_approve"`
-	JobID       string   `json:"job_id,omitempty"`
-	Status      string   `json:"status,omitempty"`
-	PID         int      `json:"pid,omitempty"`
-	Output      string   `json:"output,omitempty"`
-	StartedAt   string   `json:"started_at,omitempty"`
-	FinishedAt  string   `json:"finished_at,omitempty"`
-	TailBytes   int      `json:"tail_bytes,omitempty"`
-	Jobs        []AIJob  `json:"jobs,omitempty"`
+	Type      string  `json:"type"`
+	TaskID    string  `json:"task_id,omitempty"`
+	Command   string  `json:"command,omitempty"`
+	ExitCode  int     `json:"exit_code,omitempty"`
+	Stdout    string  `json:"stdout,omitempty"`
+	Stderr    string  `json:"stderr,omitempty"`
+	Error     string  `json:"error,omitempty"`
+	Name      string  `json:"name,omitempty"`
+	Agent     string  `json:"agent,omitempty"`
+	Runner    string  `json:"runner,omitempty"`
+	Prompt    string  `json:"prompt,omitempty"`
+	Cwd       string  `json:"cwd,omitempty"`
+	JobID     string  `json:"job_id,omitempty"`
+	Status    string  `json:"status,omitempty"`
+	PID       int     `json:"pid,omitempty"`
+	Output    string  `json:"output,omitempty"`
+	StartedAt string  `json:"started_at,omitempty"`
+	FinishedAt string `json:"finished_at,omitempty"`
+	TailBytes int     `json:"tail_bytes,omitempty"`
+	Jobs      []AIJob `json:"jobs,omitempty"`
 }
 
 func New(auth Authenticator, touch Touch) *Hub {
@@ -200,23 +202,30 @@ func (h *Hub) RunBash(ctx context.Context, userID, machineName, command string, 
 	return &Result{ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr, Error: res.Error}, nil
 }
 
-// StartAI launches a long-running headless Claude/Grok job on the machine.
+// StartAI launches a long-running job on the machine using a command template.
+// commandTmpl may contain {{prompt}}; the agent shell-quotes and injects the prompt.
+// runnerID is stored for status display (e.g. "claude", "grok", custom id).
 // Returns as soon as the process has been spawned (does not wait for completion).
-func (h *Hub) StartAI(ctx context.Context, userID, machineName, agentName, prompt, cwd string, autoApprove bool) (*AIStartResult, error) {
-	agentName = strings.ToLower(strings.TrimSpace(agentName))
-	if agentName != "claude" && agentName != "grok" {
-		return nil, fmt.Errorf(`agent must be "claude" or "grok"`)
-	}
+func (h *Hub) StartAI(ctx context.Context, userID, machineName, runnerID, commandTmpl, prompt, cwd string) (*AIStartResult, error) {
+	runnerID = strings.TrimSpace(runnerID)
+	commandTmpl = strings.TrimSpace(commandTmpl)
 	prompt = strings.TrimSpace(prompt)
+	if commandTmpl == "" {
+		return nil, fmt.Errorf("command required")
+	}
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt required")
 	}
+	if runnerID == "" {
+		runnerID = "custom"
+	}
 	res, err := h.rpc(ctx, userID, machineName, wireMsg{
-		Type:        "ai_start",
-		Agent:       agentName,
-		Prompt:      prompt,
-		Cwd:         strings.TrimSpace(cwd),
-		AutoApprove: autoApprove,
+		Type:    "ai_start",
+		Agent:   runnerID,
+		Runner:  runnerID,
+		Command: commandTmpl,
+		Prompt:  prompt,
+		Cwd:     strings.TrimSpace(cwd),
 	}, 30*time.Second)
 	if err != nil {
 		return nil, err
@@ -226,7 +235,8 @@ func (h *Hub) StartAI(ctx context.Context, userID, machineName, agentName, promp
 	}
 	return &AIStartResult{
 		JobID:  res.JobID,
-		Agent:  agentName,
+		Agent:  runnerID,
+		Runner: runnerID,
 		Status: res.Status,
 		PID:    res.PID,
 		Error:  res.Error,

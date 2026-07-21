@@ -666,6 +666,30 @@ func (s *Store) ModuleEnabled(ctx context.Context, userID, moduleID string) (boo
 	return en != 0, err
 }
 
+// GetModuleConfig returns config_json for a module (empty string if missing).
+func (s *Store) GetModuleConfig(ctx context.Context, userID, moduleID string) (string, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT config_json FROM user_modules WHERE user_id = ? AND module_id = ?`, userID, moduleID).
+		Scan(&raw)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return raw, err
+}
+
+// SetModuleConfig upserts config_json without changing enabled.
+func (s *Store) SetModuleConfig(ctx context.Context, userID, moduleID, configJSON string) error {
+	if strings.TrimSpace(configJSON) == "" {
+		configJSON = "{}"
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO user_modules (user_id, module_id, enabled, config_json) VALUES (?,?,0,?)
+ON CONFLICT(user_id, module_id) DO UPDATE SET config_json = excluded.config_json`,
+		userID, moduleID, configJSON)
+	return err
+}
+
 // --- machines ---
 
 type Machine struct {

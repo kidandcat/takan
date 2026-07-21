@@ -21,25 +21,25 @@ import (
 )
 
 type wireMsg struct {
-	Type        string    `json:"type"`
-	TaskID      string    `json:"task_id,omitempty"`
-	Command     string    `json:"command,omitempty"`
-	ExitCode    int       `json:"exit_code,omitempty"`
-	Stdout      string    `json:"stdout,omitempty"`
-	Stderr      string    `json:"stderr,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	Agent       string    `json:"agent,omitempty"`
-	Prompt      string    `json:"prompt,omitempty"`
-	Cwd         string    `json:"cwd,omitempty"`
-	AutoApprove bool      `json:"auto_approve"`
-	JobID       string    `json:"job_id,omitempty"`
-	Status      string    `json:"status,omitempty"`
-	PID         int       `json:"pid,omitempty"`
-	Output      string    `json:"output,omitempty"`
-	StartedAt   string    `json:"started_at,omitempty"`
-	FinishedAt  string    `json:"finished_at,omitempty"`
-	TailBytes   int       `json:"tail_bytes,omitempty"`
-	Jobs        []jobMeta `json:"jobs,omitempty"`
+	Type       string    `json:"type"`
+	TaskID     string    `json:"task_id,omitempty"`
+	Command    string    `json:"command,omitempty"`
+	ExitCode   int       `json:"exit_code,omitempty"`
+	Stdout     string    `json:"stdout,omitempty"`
+	Stderr     string    `json:"stderr,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	Agent      string    `json:"agent,omitempty"`
+	Runner     string    `json:"runner,omitempty"`
+	Prompt     string    `json:"prompt,omitempty"`
+	Cwd        string    `json:"cwd,omitempty"`
+	JobID      string    `json:"job_id,omitempty"`
+	Status     string    `json:"status,omitempty"`
+	PID        int       `json:"pid,omitempty"`
+	Output     string    `json:"output,omitempty"`
+	StartedAt  string    `json:"started_at,omitempty"`
+	FinishedAt string    `json:"finished_at,omitempty"`
+	TailBytes  int       `json:"tail_bytes,omitempty"`
+	Jobs       []jobMeta `json:"jobs,omitempty"`
 }
 
 func main() {
@@ -100,7 +100,6 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 	defer c.Close()
 	log.Printf("connected to %s", base)
 
-	// Unblock ReadMessage promptly on SIGTERM/SIGINT.
 	go func() {
 		<-ctx.Done()
 		_ = c.Close()
@@ -152,7 +151,20 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 }
 
 func handleAIStart(jobs *jobManager, msg wireMsg) wireMsg {
-	meta, err := jobs.start(msg.Agent, msg.Prompt, msg.Cwd, msg.AutoApprove)
+	runner := strings.TrimSpace(msg.Runner)
+	if runner == "" {
+		runner = strings.TrimSpace(msg.Agent)
+	}
+	cmdTmpl := strings.TrimSpace(msg.Command)
+	// Backward compat: old hubs sent agent=claude|grok without command.
+	if cmdTmpl == "" && (runner == "claude" || runner == "grok") {
+		if runner == "claude" {
+			cmdTmpl = "claude -p --dangerously-skip-permissions " + promptPlaceholder
+		} else {
+			cmdTmpl = "grok --always-approve -p " + promptPlaceholder
+		}
+	}
+	meta, err := jobs.start(runner, cmdTmpl, msg.Prompt, msg.Cwd)
 	if err != nil && meta.JobID == "" {
 		return wireMsg{Error: err.Error(), Status: "failed"}
 	}
@@ -160,15 +172,17 @@ func handleAIStart(jobs *jobManager, msg wireMsg) wireMsg {
 		return wireMsg{
 			JobID:  meta.JobID,
 			Agent:  meta.Agent,
+			Runner: meta.Agent,
 			Status: meta.Status,
 			PID:    meta.PID,
 			Error:  err.Error(),
 		}
 	}
-	log.Printf("ai job started id=%s agent=%s pid=%d", meta.JobID, meta.Agent, meta.PID)
+	log.Printf("ai job started id=%s runner=%s pid=%d", meta.JobID, meta.Agent, meta.PID)
 	return wireMsg{
 		JobID:     meta.JobID,
 		Agent:     meta.Agent,
+		Runner:    meta.Agent,
 		Status:    meta.Status,
 		PID:       meta.PID,
 		StartedAt: meta.StartedAt,
@@ -187,11 +201,13 @@ func handleAIStatus(jobs *jobManager, msg wireMsg) wireMsg {
 	return wireMsg{
 		JobID:      meta.JobID,
 		Agent:      meta.Agent,
+		Runner:     meta.Agent,
 		Status:     meta.Status,
 		ExitCode:   meta.ExitCode,
 		PID:        meta.PID,
 		Cwd:        meta.Cwd,
 		Prompt:     meta.Prompt,
+		Command:    meta.Command,
 		Output:     out,
 		Error:      meta.Error,
 		StartedAt:  meta.StartedAt,
