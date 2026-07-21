@@ -162,29 +162,6 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 					return marshal(msg)
 				},
 			},
-			{
-				Tool: mcp.Tool{
-					Name:        "email_status",
-					Description: "Check Resend config: whether API key is set and which domains are enabled.",
-					InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-				},
-				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-					_, domains, ok, err := st.GetEmailSettings(ctx, userID)
-					if err != nil {
-						return "", err
-					}
-					if !ok {
-						return "Email not configured. Add Resend API key in the panel.", nil
-					}
-					return marshal(map[string]any{
-						"status":           "ready",
-						"enabled_domains":  store.EnabledEmailDomains(domains),
-						"all_domains":      domains,
-						"enabled_count":    len(store.EnabledEmailDomains(domains)),
-						"discovered_count": len(domains),
-					})
-				},
-			},
 		}
 	}
 }

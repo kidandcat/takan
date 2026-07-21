@@ -40,35 +40,15 @@ func (m *Module) svc(userID string) *Service {
 	return NewService(m.DB, userID, m.Acc)
 }
 
-// Lean MCP surface (4 tools): status, search, add (text|id|resolve), cart (list|remove|clear).
+// Lean MCP surface: search, add (text|id|resolve), cart (list|remove|clear).
+// Module readiness lives in takan_status (meta), not a per-module status tool.
 func (m *Module) tools() []mcp.RegisteredTool {
 	return []mcp.RegisteredTool{
 		{
 			Tool: mcp.Tool{
-				Name: "mercadona_status",
-				Description: "Check whether Mercadona is linked for this Takan account. " +
-					"If not linked, open the Takan panel → Mercadona and save credentials.",
-				InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-			},
-			Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-				email, _, postal, ok, err := m.Takan.GetMercadonaCreds(ctx, userID)
-				if err != nil {
-					return "", err
-				}
-				linked := HasLinkedSession(ctx, m.DB, userID)
-				if !ok && !linked {
-					return "Mercadona module ON but not configured. Open the Takan panel → Mercadona.", nil
-				}
-				if !linked {
-					return fmt.Sprintf("Credentials saved for %s (CP %s) but session not linked — re-save in the panel.", email, postal), nil
-				}
-				return fmt.Sprintf("Mercadona ready (%s, CP %s). Tools: search, add, cart.", email, postal), nil
-			},
-		},
-		{
-			Tool: mcp.Tool{
 				Name:        "mercadona_search",
-				Description: "Search Mercadona products by free text. Prefer mercadona_add to put items in the cart.",
+				Description: "Search Mercadona products by free text. Prefer mercadona_add to put items in the cart. " +
+					"If not linked, configure Mercadona in the Takan panel (see takan_status).",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{

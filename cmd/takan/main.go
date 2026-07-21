@@ -94,7 +94,11 @@ func main() {
 	}
 
 	prov := &modules.Provider{
-		Store:     st,
+		Store: st,
+		Hub:   hub,
+		MercadonaLinked: func(ctx context.Context, userID string) bool {
+			return mercadona.HasLinkedSession(ctx, st.DB(), userID)
+		},
 		Machine:   machine.Factory(st, hub, bashLimit),
 		Mercadona: mercMod.Factory(),
 		Email:     email.Factory(st, box),
