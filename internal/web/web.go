@@ -118,6 +118,7 @@ type pageData struct {
 	FlashIsError        bool
 	MCPURL              string
 	PublicURL           string
+	RepoURL             string // e.g. https://github.com/kidandcat/takan
 	OAuthClientID       string
 	OAuthAuthorize      string
 	OAuthToken          string
@@ -243,6 +244,12 @@ func (s *Server) page(w http.ResponseWriter, contentFile string, data pageData) 
 		data.Title = "Takan"
 	}
 	data.AllowRegister = s.AllowRegister
+	if data.PublicURL == "" {
+		data.PublicURL = s.PublicURL
+	}
+	if data.RepoURL == "" {
+		data.RepoURL = "https://github.com/kidandcat/takan"
+	}
 	t, err := template.ParseFS(tmplFS, "templates/layout.html", "templates/"+contentFile)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -289,7 +296,12 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
 		return
 	}
-	s.page(w, "home.html", pageData{Title: "Home", AllowRegister: s.AllowRegister})
+	s.page(w, "home.html", pageData{
+		Title:         "Home",
+		AllowRegister: s.AllowRegister,
+		PublicURL:     s.PublicURL,
+		RepoURL:       "https://github.com/kidandcat/takan",
+	})
 }
 
 func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {

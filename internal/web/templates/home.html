@@ -1,19 +1,41 @@
 {{define "content"}}
-<div class="card landing">
-  <h1>One MCP.<br/>Modules for the rest of your life.</h1>
-  <p class="lede">Connect Grok, Claude or Cursor once to Takan. Flip modules on from the panel — tools appear without reconfiguring the client.</p>
-  <div class="row">
-    <a class="btn" href="/login">Log in</a>
-    {{if .AllowRegister}}
-    <a class="btn secondary" href="/register">Sign up</a>
-    {{else}}
-    <a class="btn secondary" href="/register">Register with invite</a>
-    {{end}}
+<div class="landing">
+  <div class="landing-hero">
+    <div class="landing-badges">
+      <span class="landing-pill">MCP hub</span>
+      <span class="landing-pill soft">Open source · MIT</span>
+    </div>
+    <h1>One MCP.<br/><span class="landing-accent">Modules for the rest of your life.</span></h1>
+    <p class="lede">
+      Connect Grok, Claude or Cursor once. Flip modules on in the panel —
+      tools appear without reconfiguring the client.
+    </p>
+    <div class="landing-cta">
+      <a class="btn" href="/login">Log in</a>
+      {{if .AllowRegister}}
+      <a class="btn secondary" href="/register">Sign up</a>
+      {{else}}
+      <a class="btn secondary" href="/register">Register with invite</a>
+      {{end}}
+      <a class="btn ghost landing-gh" href="{{.RepoURL}}" target="_blank" rel="noopener noreferrer">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.23c-3.34.73-4.03-1.42-4.03-1.42-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5 1 .11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23.96-.27 1.98-.4 3-.4s2.04.13 3 .4c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.82.58C20.56 21.8 24 17.3 24 12 24 5.37 18.63 0 12 0z"/></svg>
+        GitHub
+      </a>
+    </div>
+    <div class="landing-url">
+      <span class="faint">MCP endpoint</span>
+      <div class="landing-url-row">
+        <code id="mcp-url">{{.PublicURL}}/mcp</code>
+        <button type="button" class="copy-btn" onclick="copyText('mcp-url', this)">Copy</button>
+      </div>
+    </div>
   </div>
+
+  <div class="landing-section-label">Modules</div>
   <div class="features">
     <div class="feat">
-      <div class="mod-icon machine" style="flex-shrink:0">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+      <div class="mod-icon machine">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
       </div>
       <div>
         <strong>Machine</strong>
@@ -21,8 +43,8 @@
       </div>
     </div>
     <div class="feat">
-      <div class="mod-icon mercadona" style="flex-shrink:0">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg>
+      <div class="mod-icon mercadona">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg>
       </div>
       <div>
         <strong>Mercadona</strong>
@@ -30,8 +52,8 @@
       </div>
     </div>
     <div class="feat">
-      <div class="mod-icon email" style="flex-shrink:0">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+      <div class="mod-icon email">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
       </div>
       <div>
         <strong>Email</strong>
@@ -39,8 +61,8 @@
       </div>
     </div>
     <div class="feat">
-      <div class="mod-icon memory" style="flex-shrink:0">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M12 3a6 6 0 0 0-6 6c0 4 6 12 6 12s6-8 6-12a6 6 0 0 0-6-6z"/><circle cx="12" cy="9" r="2"/></svg>
+      <div class="mod-icon memory">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a6 6 0 0 0-6 6c0 4 6 12 6 12s6-8 6-12a6 6 0 0 0-6-6z"/><circle cx="12" cy="9" r="2"/></svg>
       </div>
       <div>
         <strong>Memory</strong>
@@ -48,8 +70,8 @@
       </div>
     </div>
     <div class="feat">
-      <div class="mod-icon people" style="flex-shrink:0">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <div class="mod-icon people">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       </div>
       <div>
         <strong>People</strong>
@@ -57,8 +79,8 @@
       </div>
     </div>
     <div class="feat">
-      <div class="mod-icon connect" style="flex-shrink:0">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M10 13a5 5 0 0 0 7.07 0l1.41-1.41a5 5 0 0 0-7.07-7.07L10 5.93"/><path d="M14 11a5 5 0 0 0-7.07 0L5.5 12.41a5 5 0 0 0 7.07 7.07L14 18.07"/></svg>
+      <div class="mod-icon connect">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7.07 0l1.41-1.41a5 5 0 0 0-7.07-7.07L10 5.93"/><path d="M14 11a5 5 0 0 0-7.07 0L5.5 12.41a5 5 0 0 0 7.07 7.07L14 18.07"/></svg>
       </div>
       <div>
         <strong>Single connect</strong>
@@ -66,5 +88,13 @@
       </div>
     </div>
   </div>
+
+  <footer class="landing-foot">
+    <a href="{{.RepoURL}}" target="_blank" rel="noopener noreferrer" class="landing-foot-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58v-2.23c-3.34.73-4.03-1.42-4.03-1.42-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5 1 .11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23.96-.27 1.98-.4 3-.4s2.04.13 3 .4c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.82.58C20.56 21.8 24 17.3 24 12 24 5.37 18.63 0 12 0z"/></svg>
+      github.com/kidandcat/takan
+    </a>
+    <span class="faint">MIT License</span>
+  </footer>
 </div>
 {{end}}
