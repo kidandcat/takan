@@ -39,7 +39,7 @@ type Hub struct {
 
 type pendingTask struct {
 	machineID string
-	ch        chan Result
+	ch        chan wireMsg
 }
 
 type agent struct {
@@ -58,15 +58,51 @@ type Result struct {
 	Error    string
 }
 
+// AIJob is a long-running Claude/Grok headless task on a machine.
+type AIJob struct {
+	JobID      string `json:"job_id"`
+	Agent      string `json:"agent"`
+	Status     string `json:"status"` // running | done | failed | unknown
+	ExitCode   int    `json:"exit_code,omitempty"`
+	PID        int    `json:"pid,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
+	Output     string `json:"output,omitempty"`
+	Error      string `json:"error,omitempty"`
+	StartedAt  string `json:"started_at,omitempty"`
+	FinishedAt string `json:"finished_at,omitempty"`
+}
+
+// AIStartResult is returned when a headless AI job is launched.
+type AIStartResult struct {
+	JobID  string `json:"job_id"`
+	Agent  string `json:"agent"`
+	Status string `json:"status"`
+	PID    int    `json:"pid,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
 type wireMsg struct {
-	Type      string `json:"type"`
-	TaskID    string `json:"task_id,omitempty"`
-	Command   string `json:"command,omitempty"`
-	ExitCode  int    `json:"exit_code,omitempty"`
-	Stdout    string `json:"stdout,omitempty"`
-	Stderr    string `json:"stderr,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Name      string `json:"name,omitempty"`
+	Type        string   `json:"type"`
+	TaskID      string   `json:"task_id,omitempty"`
+	Command     string   `json:"command,omitempty"`
+	ExitCode    int      `json:"exit_code,omitempty"`
+	Stdout      string   `json:"stdout,omitempty"`
+	Stderr      string   `json:"stderr,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	Name        string   `json:"name,omitempty"`
+	Agent       string   `json:"agent,omitempty"`
+	Prompt      string   `json:"prompt,omitempty"`
+	Cwd         string   `json:"cwd,omitempty"`
+	AutoApprove bool     `json:"auto_approve"`
+	JobID       string   `json:"job_id,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	PID         int      `json:"pid,omitempty"`
+	Output      string   `json:"output,omitempty"`
+	StartedAt   string   `json:"started_at,omitempty"`
+	FinishedAt  string   `json:"finished_at,omitempty"`
+	TailBytes   int      `json:"tail_bytes,omitempty"`
+	Jobs        []AIJob  `json:"jobs,omitempty"`
 }
 
 func New(auth Authenticator, touch Touch) *Hub {
@@ -99,23 +135,30 @@ func (h *Hub) OnlineNames(userID string) []string {
 	return out
 }
 
-// RunBash sends a command to a machine owned by userID.
-func (h *Hub) RunBash(ctx context.Context, userID, machineName, command string, timeout time.Duration) (*Result, error) {
+func (h *Hub) findAgent(userID, machineName string) *agent {
 	h.mu.RLock()
-	var a *agent
+	defer h.mu.RUnlock()
 	for _, ag := range h.agents {
 		if ag.userID == userID && ag.name == machineName {
-			a = ag
-			break
+			return ag
 		}
 	}
-	h.mu.RUnlock()
+	return nil
+}
+
+// rpc sends a request to a machine and waits for a matching task_id reply.
+func (h *Hub) rpc(ctx context.Context, userID, machineName string, req wireMsg, timeout time.Duration) (*wireMsg, error) {
+	a := h.findAgent(userID, machineName)
 	if a == nil {
 		return nil, fmt.Errorf("machine %q is offline or unknown", machineName)
 	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 
 	taskID := uuid.NewString()
-	ch := make(chan Result, 1)
+	req.TaskID = taskID
+	ch := make(chan wireMsg, 1)
 	h.mu.Lock()
 	h.pending[taskID] = &pendingTask{machineID: a.machineID, ch: ch}
 	h.mu.Unlock()
@@ -125,9 +168,12 @@ func (h *Hub) RunBash(ctx context.Context, userID, machineName, command string, 
 		h.mu.Unlock()
 	}()
 
-	msg, _ := json.Marshal(wireMsg{Type: "bash", TaskID: taskID, Command: command})
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
 	a.writeMu.Lock()
-	err := a.conn.WriteMessage(websocket.TextMessage, msg)
+	err = a.conn.WriteMessage(websocket.TextMessage, raw)
 	a.writeMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("send: %w", err)
@@ -143,6 +189,86 @@ func (h *Hub) RunBash(ctx context.Context, userID, machineName, command string, 
 	case res := <-ch:
 		return &res, nil
 	}
+}
+
+// RunBash sends a command to a machine owned by userID.
+func (h *Hub) RunBash(ctx context.Context, userID, machineName, command string, timeout time.Duration) (*Result, error) {
+	res, err := h.rpc(ctx, userID, machineName, wireMsg{Type: "bash", Command: command}, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr, Error: res.Error}, nil
+}
+
+// StartAI launches a long-running headless Claude/Grok job on the machine.
+// Returns as soon as the process has been spawned (does not wait for completion).
+func (h *Hub) StartAI(ctx context.Context, userID, machineName, agentName, prompt, cwd string, autoApprove bool) (*AIStartResult, error) {
+	agentName = strings.ToLower(strings.TrimSpace(agentName))
+	if agentName != "claude" && agentName != "grok" {
+		return nil, fmt.Errorf(`agent must be "claude" or "grok"`)
+	}
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil, fmt.Errorf("prompt required")
+	}
+	res, err := h.rpc(ctx, userID, machineName, wireMsg{
+		Type:        "ai_start",
+		Agent:       agentName,
+		Prompt:      prompt,
+		Cwd:         strings.TrimSpace(cwd),
+		AutoApprove: autoApprove,
+	}, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if res.Error != "" && res.JobID == "" {
+		return nil, fmt.Errorf("%s", res.Error)
+	}
+	return &AIStartResult{
+		JobID:  res.JobID,
+		Agent:  agentName,
+		Status: res.Status,
+		PID:    res.PID,
+		Error:  res.Error,
+	}, nil
+}
+
+// AIStatus returns status (and log tail) for a job. Empty jobID lists recent jobs.
+func (h *Hub) AIStatus(ctx context.Context, userID, machineName, jobID string, tailBytes int) (*AIJob, []AIJob, error) {
+	if tailBytes <= 0 {
+		tailBytes = 12_000
+	}
+	if tailBytes > 100_000 {
+		tailBytes = 100_000
+	}
+	res, err := h.rpc(ctx, userID, machineName, wireMsg{
+		Type:      "ai_status",
+		JobID:     strings.TrimSpace(jobID),
+		TailBytes: tailBytes,
+	}, 20*time.Second)
+	if err != nil {
+		return nil, nil, err
+	}
+	if res.Error != "" && res.JobID == "" && len(res.Jobs) == 0 {
+		return nil, nil, fmt.Errorf("%s", res.Error)
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return nil, res.Jobs, nil
+	}
+	job := &AIJob{
+		JobID:      res.JobID,
+		Agent:      res.Agent,
+		Status:     res.Status,
+		ExitCode:   res.ExitCode,
+		PID:        res.PID,
+		Cwd:        res.Cwd,
+		Prompt:     res.Prompt,
+		Output:     res.Output,
+		Error:      res.Error,
+		StartedAt:  res.StartedAt,
+		FinishedAt: res.FinishedAt,
+	}
+	return job, nil, nil
 }
 
 // HandleWS is the /agent/ws endpoint.
@@ -224,7 +350,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 				_ = ag.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
 				ag.writeMu.Unlock()
 			}
-		case "bash_result":
+		case "bash_result", "ai_start_result", "ai_status_result":
 			h.mu.Lock()
 			pt := h.pending[msg.TaskID]
 			// Only the agent that owns the task may complete it.
@@ -233,7 +359,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			h.mu.Unlock()
 			if pt != nil {
-				pt.ch <- Result{ExitCode: msg.ExitCode, Stdout: msg.Stdout, Stderr: msg.Stderr, Error: msg.Error}
+				pt.ch <- msg
 			}
 		}
 	}

@@ -13,7 +13,7 @@ Integrations live under `modules/` as subpackages (add new ones there):
 
 | Module | Path | Tools | Setup |
 |--------|------|--------|--------|
-| **Machine** | `modules/machine` | `machine_list`, `machine_bash` | Install `takan-agent` on each PC (outbound WSS) |
+| **Machine** | `modules/machine` | `machine_list`, `machine_bash`, `machine_ai_run`, `machine_ai_status` | Install `takan-agent` on each PC (outbound WSS); Claude/Grok on the machine for AI jobs |
 | **Mercadona** | `modules/mercadona` | search, add, list, remove, clear, … | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get`, `email_status` | Resend API key; enable domains in panel |
 | **Memory** | `modules/memory` | `memory_get`, `memory_set` | Enable module |

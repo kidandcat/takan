@@ -1,4 +1,4 @@
-// takan-agent connects outbound to a Takan hub and runs bash commands.
+// takan-agent connects outbound to a Takan hub and runs bash / AI jobs.
 package main
 
 import (
@@ -21,13 +21,25 @@ import (
 )
 
 type wireMsg struct {
-	Type     string `json:"type"`
-	TaskID   string `json:"task_id,omitempty"`
-	Command  string `json:"command,omitempty"`
-	ExitCode int    `json:"exit_code,omitempty"`
-	Stdout   string `json:"stdout,omitempty"`
-	Stderr   string `json:"stderr,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Type        string    `json:"type"`
+	TaskID      string    `json:"task_id,omitempty"`
+	Command     string    `json:"command,omitempty"`
+	ExitCode    int       `json:"exit_code,omitempty"`
+	Stdout      string    `json:"stdout,omitempty"`
+	Stderr      string    `json:"stderr,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	Agent       string    `json:"agent,omitempty"`
+	Prompt      string    `json:"prompt,omitempty"`
+	Cwd         string    `json:"cwd,omitempty"`
+	AutoApprove bool      `json:"auto_approve"`
+	JobID       string    `json:"job_id,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	PID         int       `json:"pid,omitempty"`
+	Output      string    `json:"output,omitempty"`
+	StartedAt   string    `json:"started_at,omitempty"`
+	FinishedAt  string    `json:"finished_at,omitempty"`
+	TailBytes   int       `json:"tail_bytes,omitempty"`
+	Jobs        []jobMeta `json:"jobs,omitempty"`
 }
 
 func main() {
@@ -40,11 +52,16 @@ func main() {
 	}
 	_ = name
 
+	jobs, err := newJobManager()
+	if err != nil {
+		log.Fatalf("jobs dir: %v", err)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	for ctx.Err() == nil {
-		err := runOnce(ctx, *baseURL, *token)
+		err := runOnce(ctx, *baseURL, *token, jobs)
 		if ctx.Err() != nil {
 			return
 		}
@@ -57,7 +74,7 @@ func main() {
 	}
 }
 
-func runOnce(ctx context.Context, base, token string) error {
+func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 	u, err := url.Parse(strings.TrimRight(base, "/"))
 	if err != nil {
 		return err
@@ -115,8 +132,70 @@ func runOnce(ctx context.Context, base, token string) error {
 			if err := c.WriteJSON(res); err != nil {
 				return err
 			}
+		case "ai_start":
+			res := handleAIStart(jobs, msg)
+			res.Type = "ai_start_result"
+			res.TaskID = msg.TaskID
+			if err := c.WriteJSON(res); err != nil {
+				return err
+			}
+		case "ai_status":
+			res := handleAIStatus(jobs, msg)
+			res.Type = "ai_status_result"
+			res.TaskID = msg.TaskID
+			if err := c.WriteJSON(res); err != nil {
+				return err
+			}
 		case "pong":
 		}
+	}
+}
+
+func handleAIStart(jobs *jobManager, msg wireMsg) wireMsg {
+	meta, err := jobs.start(msg.Agent, msg.Prompt, msg.Cwd, msg.AutoApprove)
+	if err != nil && meta.JobID == "" {
+		return wireMsg{Error: err.Error(), Status: "failed"}
+	}
+	if err != nil {
+		return wireMsg{
+			JobID:  meta.JobID,
+			Agent:  meta.Agent,
+			Status: meta.Status,
+			PID:    meta.PID,
+			Error:  err.Error(),
+		}
+	}
+	log.Printf("ai job started id=%s agent=%s pid=%d", meta.JobID, meta.Agent, meta.PID)
+	return wireMsg{
+		JobID:     meta.JobID,
+		Agent:     meta.Agent,
+		Status:    meta.Status,
+		PID:       meta.PID,
+		StartedAt: meta.StartedAt,
+	}
+}
+
+func handleAIStatus(jobs *jobManager, msg wireMsg) wireMsg {
+	jobID := strings.TrimSpace(msg.JobID)
+	if jobID == "" {
+		return wireMsg{Jobs: jobs.list(), Status: "ok"}
+	}
+	meta, out, err := jobs.status(jobID, msg.TailBytes)
+	if err != nil {
+		return wireMsg{Error: err.Error(), JobID: jobID, Status: "unknown"}
+	}
+	return wireMsg{
+		JobID:      meta.JobID,
+		Agent:      meta.Agent,
+		Status:     meta.Status,
+		ExitCode:   meta.ExitCode,
+		PID:        meta.PID,
+		Cwd:        meta.Cwd,
+		Prompt:     meta.Prompt,
+		Output:     out,
+		Error:      meta.Error,
+		StartedAt:  meta.StartedAt,
+		FinishedAt: meta.FinishedAt,
 	}
 }
 
