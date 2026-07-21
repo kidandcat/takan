@@ -26,6 +26,7 @@ var Catalog = []Info{
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
 	{ID: "memory", Name: "Memory", Description: "Short-lived working memory for your AI client (per account)."},
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
+	{ID: "health", Name: "Health", Description: "Personal health: profile, daily diary, injuries and conditions."},
 }
 
 // Provider builds tools for enabled modules.
@@ -41,6 +42,7 @@ type Provider struct {
 	Email     ToolFactory
 	Memory    ToolFactory
 	People    ToolFactory
+	Health    ToolFactory
 }
 
 // ToolFactory produces tools when the module is enabled.
@@ -78,6 +80,10 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.People != nil {
 				out = append(out, p.People(ctx, userID)...)
 			}
+		case "health":
+			if p.Health != nil {
+				out = append(out, p.Health(ctx, userID)...)
+			}
 		}
 	}
 	return out
@@ -88,7 +94,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, Mercadona linked, email domains, memory, people). " +
+				"(machines online, Mercadona linked, email domains, memory, people, health). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -219,6 +225,28 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			return false, "error counting people"
 		}
 		return true, fmt.Sprintf("%d people", n)
+	case "health":
+		prof, hasProf, err := p.Store.GetHealthProfile(ctx, userID)
+		if err != nil {
+			return false, "error reading health profile"
+		}
+		nLog, _ := p.Store.CountHealthLog(ctx, userID)
+		nIss, _ := p.Store.CountHealthIssues(ctx, userID, "")
+		nOpen, _ := p.Store.CountHealthIssues(ctx, userID, "recovering")
+		nActive, _ := p.Store.CountHealthIssues(ctx, userID, "active")
+		open := nOpen + nActive
+		if !hasProf && nLog == 0 && nIss == 0 {
+			return true, "empty"
+		}
+		bits := []string{}
+		if prof.WeightKG != nil {
+			bits = append(bits, fmt.Sprintf("%.1f kg", *prof.WeightKG))
+		}
+		if prof.HeightCM != nil {
+			bits = append(bits, fmt.Sprintf("%.0f cm", *prof.HeightCM))
+		}
+		bits = append(bits, fmt.Sprintf("%d log days", nLog), fmt.Sprintf("%d open issues", open))
+		return true, strings.Join(bits, " · ")
 	default:
 		return true, "enabled"
 	}

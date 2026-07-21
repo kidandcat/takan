@@ -78,6 +78,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
 	mux.HandleFunc("GET /dashboard/memory", s.dashMemory)
 	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
+	mux.HandleFunc("GET /dashboard/health", s.dashHealth)
 	mux.HandleFunc("GET /dashboard/invites", s.dashInvites)
 	mux.HandleFunc("GET /dashboard/admin", s.dashAdmin)
 	// Old routes → overview / integrations
@@ -108,6 +109,12 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/people/{id}", s.updatePerson)
 	mux.HandleFunc("POST /dashboard/people/{id}/delete", s.deletePerson)
 	mux.HandleFunc("GET /dashboard/people/{id}/photo", s.personPhoto)
+	mux.HandleFunc("POST /dashboard/health/profile", s.saveHealthProfile)
+	mux.HandleFunc("POST /dashboard/health/log", s.saveHealthLog)
+	mux.HandleFunc("POST /dashboard/health/log/{day}/delete", s.deleteHealthLog)
+	mux.HandleFunc("POST /dashboard/health/issues", s.createHealthIssue)
+	mux.HandleFunc("POST /dashboard/health/issues/{id}", s.updateHealthIssue)
+	mux.HandleFunc("POST /dashboard/health/issues/{id}/delete", s.deleteHealthIssue)
 }
 
 type pageData struct {
@@ -141,6 +148,12 @@ type pageData struct {
 	MemoryUpdated       string
 	People              []personView
 	PeopleCount         int
+	// Health module
+	HealthProfile     healthProfileView
+	HealthLog         []healthLogView
+	HealthIssues      []healthIssueView
+	HealthLogCount    int
+	HealthIssueCount  int
 	// Dashboard stats (precomputed for templates)
 	ModEnabledCount int
 	ModTotalCount   int
@@ -187,6 +200,21 @@ type personView struct {
 
 type personContactView struct {
 	Key, Value string
+}
+
+type healthProfileView struct {
+	HeightCM, WeightKG string
+	Notes              string
+	Updated            string
+	HasData            bool
+}
+
+type healthLogView struct {
+	Day, WeightKG, Sleep, Training, Symptoms, Pain, Medication, Notes string
+}
+
+type healthIssueView struct {
+	ID, Title, Status, StartedOn, EndedOn, BodyPart, Diagnosis, Treatment, Notes string
 }
 
 type modView struct {
@@ -474,6 +502,9 @@ func (s *Server) dashMemory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashPeople(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "people", "People", "people.html")
 }
+func (s *Server) dashHealth(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "health", "Health", "health.html")
+}
 func (s *Server) dashInvites(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "invites", "Invites", "invites.html")
 }
@@ -604,6 +635,30 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				}
 			}
 			mv.Ready = m.Enabled
+		case "health":
+			mv.Path = "/dashboard/health"
+			prof, hasProf, _ := s.Store.GetHealthProfile(ctx, u.ID)
+			nLog, _ := s.Store.CountHealthLog(ctx, u.ID)
+			nIss, _ := s.Store.CountHealthIssues(ctx, u.ID, "")
+			nActive, _ := s.Store.CountHealthIssues(ctx, u.ID, "active")
+			nRec, _ := s.Store.CountHealthIssues(ctx, u.ID, "recovering")
+			if !hasProf && nLog == 0 && nIss == 0 {
+				mv.Summary = "Empty"
+			} else {
+				mv.Summary = fmt.Sprintf("%d diary days · %d open", nLog, nActive+nRec)
+				var bits []string
+				if prof != nil && prof.WeightKG != nil {
+					bits = append(bits, fmt.Sprintf("%.1f kg", *prof.WeightKG))
+				}
+				if prof != nil && prof.HeightCM != nil {
+					bits = append(bits, fmt.Sprintf("%.0f cm", *prof.HeightCM))
+				}
+				if nIss > 0 {
+					bits = append(bits, fmt.Sprintf("%d issues", nIss))
+				}
+				mv.DetailsLine = strings.Join(bits, " · ")
+			}
+			mv.Ready = m.Enabled
 		default:
 			mv.Path = "/dashboard/" + m.ModuleID
 		}
@@ -675,6 +730,46 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				pv.PhotoURL = fmt.Sprintf("/dashboard/people/%s/photo?v=%d", url.PathEscape(p.ID), p.UpdatedAt.Unix())
 			}
 			data.People = append(data.People, pv)
+		}
+	}
+	if prof, hasProf, err := s.Store.GetHealthProfile(ctx, u.ID); err == nil {
+		data.HealthProfile.HasData = hasProf
+		data.HealthProfile.Notes = prof.Notes
+		if prof.HeightCM != nil {
+			data.HealthProfile.HeightCM = fmt.Sprintf("%.0f", *prof.HeightCM)
+		}
+		if prof.WeightKG != nil {
+			data.HealthProfile.WeightKG = fmt.Sprintf("%.1f", *prof.WeightKG)
+		}
+		if !prof.UpdatedAt.IsZero() {
+			data.HealthProfile.Updated = prof.UpdatedAt.UTC().Format("2006-01-02 15:04")
+		}
+	}
+	if n, err := s.Store.CountHealthLog(ctx, u.ID); err == nil {
+		data.HealthLogCount = n
+	}
+	if n, err := s.Store.CountHealthIssues(ctx, u.ID, ""); err == nil {
+		data.HealthIssueCount = n
+	}
+	if logs, err := s.Store.ListHealthLog(ctx, u.ID, "", "", 60); err == nil {
+		for _, e := range logs {
+			lv := healthLogView{
+				Day: e.Day, Sleep: e.Sleep, Training: e.Training,
+				Symptoms: e.Symptoms, Pain: e.Pain, Medication: e.Medication, Notes: e.Notes,
+			}
+			if e.WeightKG != nil {
+				lv.WeightKG = fmt.Sprintf("%.1f", *e.WeightKG)
+			}
+			data.HealthLog = append(data.HealthLog, lv)
+		}
+	}
+	if issues, err := s.Store.ListHealthIssues(ctx, u.ID, "", 100); err == nil {
+		for _, iss := range issues {
+			data.HealthIssues = append(data.HealthIssues, healthIssueView{
+				ID: iss.ID, Title: iss.Title, Status: iss.Status,
+				StartedOn: iss.StartedOn, EndedOn: iss.EndedOn, BodyPart: iss.BodyPart,
+				Diagnosis: iss.Diagnosis, Treatment: iss.Treatment, Notes: iss.Notes,
+			})
 		}
 	}
 	// Invites panel data
@@ -1188,6 +1283,154 @@ func (s *Server) saveMemory(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/memory?flash=Memory+saved", http.StatusFound)
+}
+
+func parseOptionalFloat(s string) (*float64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	// allow comma decimal
+	s = strings.ReplaceAll(s, ",", ".")
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid number %q", s)
+	}
+	return &f, nil
+}
+
+func (s *Server) saveHealthProfile(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	height, err := parseOptionalFloat(r.FormValue("height_cm"))
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/health?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	weight, err := parseOptionalFloat(r.FormValue("weight_kg"))
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/health?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	notes := r.FormValue("notes")
+	// Always set notes from form (may be empty).
+	if _, err := s.Store.UpsertHealthProfile(r.Context(), u.ID, height, weight, &notes); err != nil {
+		http.Redirect(w, r, "/dashboard/health?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "health", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/health?flash=Profile+saved", http.StatusFound)
+}
+
+func (s *Server) saveHealthLog(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	day := r.FormValue("day")
+	weight, err := parseOptionalFloat(r.FormValue("weight_kg"))
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/health?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	sleep := r.FormValue("sleep")
+	training := r.FormValue("training")
+	symptoms := r.FormValue("symptoms")
+	pain := r.FormValue("pain")
+	medication := r.FormValue("medication")
+	notes := r.FormValue("notes")
+	// Panel always replaces text fields when submitted.
+	if _, err := s.Store.UpsertHealthLog(r.Context(), u.ID, day, weight,
+		&sleep, &training, &symptoms, &pain, &medication, &notes, ""); err != nil {
+		http.Redirect(w, r, "/dashboard/health?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "health", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/health?flash=Diary+saved", http.StatusFound)
+}
+
+func (s *Server) deleteHealthLog(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	day := r.PathValue("day")
+	_ = s.Store.DeleteHealthLog(r.Context(), u.ID, day)
+	http.Redirect(w, r, "/dashboard/health", http.StatusFound)
+}
+
+func (s *Server) createHealthIssue(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	iss := store.HealthIssue{
+		UserID:     u.ID,
+		Title:      r.FormValue("title"),
+		Status:     r.FormValue("status"),
+		StartedOn:  r.FormValue("started_on"),
+		EndedOn:    r.FormValue("ended_on"),
+		BodyPart:   r.FormValue("body_part"),
+		Diagnosis:  r.FormValue("diagnosis"),
+		Treatment:  r.FormValue("treatment"),
+		Notes:      r.FormValue("notes"),
+	}
+	if _, err := s.Store.CreateHealthIssue(r.Context(), iss); err != nil {
+		http.Redirect(w, r, "/dashboard/health?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "health", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/health?flash=Issue+added", http.StatusFound)
+}
+
+func (s *Server) updateHealthIssue(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	id := r.PathValue("id")
+	fields := map[string]string{
+		"title":      r.FormValue("title"),
+		"status":     r.FormValue("status"),
+		"started_on": r.FormValue("started_on"),
+		"ended_on":   r.FormValue("ended_on"),
+		"body_part":  r.FormValue("body_part"),
+		"diagnosis":  r.FormValue("diagnosis"),
+		"treatment":  r.FormValue("treatment"),
+		"notes":      r.FormValue("notes"),
+	}
+	if _, err := s.Store.UpdateHealthIssue(r.Context(), u.ID, id, fields); err != nil {
+		http.Redirect(w, r, "/dashboard/health?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/health?flash=Issue+updated", http.StatusFound)
+}
+
+func (s *Server) deleteHealthIssue(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = s.Store.DeleteHealthIssue(r.Context(), u.ID, r.PathValue("id"))
+	http.Redirect(w, r, "/dashboard/health", http.StatusFound)
 }
 
 func splitCSV(s string) []string {

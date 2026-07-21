@@ -1,0 +1,235 @@
+{{define "content"}}
+<section class="section hero">
+  <div class="row" style="justify-content:space-between;align-items:flex-start;width:100%">
+    <div>
+      <h1>Health</h1>
+      <p class="muted" style="margin-top:.4rem;max-width:52ch">Baseline metrics, daily diary, and injuries/conditions for your AI client.</p>
+    </div>
+    <div class="row" style="gap:.55rem;align-items:center">
+      <span class="pill neutral">{{.HealthLogCount}} diary days</span>
+      <span class="pill neutral">{{.HealthIssueCount}} issues</span>
+    </div>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Profile</h3>
+        <p class="muted">{{if .HealthProfile.Updated}}Updated {{.HealthProfile.Updated}}{{else}}Height, weight, baseline notes{{end}}</p>
+      </div>
+    </div>
+    <form method="post" action="/dashboard/health/profile" class="stack" style="gap:.75rem">
+      <div class="row" style="gap:1rem;flex-wrap:wrap">
+        <div style="flex:1;min-width:8rem">
+          <label for="height_cm">Height (cm)</label>
+          <input id="height_cm" name="height_cm" type="text" inputmode="decimal" placeholder="179" value="{{.HealthProfile.HeightCM}}"/>
+        </div>
+        <div style="flex:1;min-width:8rem">
+          <label for="weight_kg">Weight (kg)</label>
+          <input id="weight_kg" name="weight_kg" type="text" inputmode="decimal" placeholder="87" value="{{.HealthProfile.WeightKG}}"/>
+        </div>
+      </div>
+      <div>
+        <label for="profile_notes">Notes</label>
+        <textarea id="profile_notes" name="notes" rows="3" placeholder="Allergies, blood type, ongoing context…">{{.HealthProfile.Notes}}</textarea>
+      </div>
+      <button type="submit">Save profile &amp; enable module</button>
+    </form>
+  </div>
+</section>
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Daily diary</h3>
+        <p class="muted">One entry per day. Empty day defaults to today (Europe/Madrid). Tools: <code>health_log_upsert</code>.</p>
+      </div>
+    </div>
+    <form method="post" action="/dashboard/health/log" class="stack" style="gap:.75rem">
+      <div class="row" style="gap:1rem;flex-wrap:wrap">
+        <div style="flex:1;min-width:8rem">
+          <label for="log_day">Day</label>
+          <input id="log_day" name="day" type="date"/>
+        </div>
+        <div style="flex:1;min-width:8rem">
+          <label for="log_weight">Weight (kg)</label>
+          <input id="log_weight" name="weight_kg" type="text" inputmode="decimal" placeholder="optional"/>
+        </div>
+      </div>
+      <div class="row" style="gap:1rem;flex-wrap:wrap">
+        <div style="flex:1;min-width:10rem">
+          <label for="log_sleep">Sleep</label>
+          <input id="log_sleep" name="sleep" type="text" placeholder="hours / quality"/>
+        </div>
+        <div style="flex:1;min-width:10rem">
+          <label for="log_training">Training</label>
+          <input id="log_training" name="training" type="text" placeholder="what you did"/>
+        </div>
+      </div>
+      <div>
+        <label for="log_symptoms">Symptoms</label>
+        <textarea id="log_symptoms" name="symptoms" rows="2"></textarea>
+      </div>
+      <div>
+        <label for="log_pain">Pain</label>
+        <textarea id="log_pain" name="pain" rows="2" placeholder="where, intensity 0–10, notes"></textarea>
+      </div>
+      <div>
+        <label for="log_meds">Medication</label>
+        <input id="log_meds" name="medication" type="text"/>
+      </div>
+      <div>
+        <label for="log_notes">Notes</label>
+        <textarea id="log_notes" name="notes" rows="3" placeholder="Freeform diary for the day"></textarea>
+      </div>
+      <button type="submit">Save diary day</button>
+    </form>
+  </div>
+</section>
+
+{{if .HealthLog}}
+<section class="section">
+  <h3 style="margin-bottom:.75rem">Recent diary</h3>
+  <div class="stack" style="gap:.65rem">
+    {{range .HealthLog}}
+    <article class="card" style="padding:1rem 1.1rem">
+      <div class="row" style="justify-content:space-between;align-items:flex-start;gap:.75rem">
+        <div>
+          <strong>{{.Day}}</strong>
+          {{if .WeightKG}}<span class="muted"> · {{.WeightKG}} kg</span>{{end}}
+        </div>
+        <form method="post" action="/dashboard/health/log/{{.Day}}/delete" onsubmit="return confirm('Delete {{.Day}}?')">
+          <button type="submit" class="secondary" style="margin-top:0">Delete</button>
+        </form>
+      </div>
+      <div class="muted" style="margin-top:.45rem;font-size:.9rem;white-space:pre-wrap">
+        {{if .Sleep}}<div><strong>Sleep:</strong> {{.Sleep}}</div>{{end}}
+        {{if .Training}}<div><strong>Training:</strong> {{.Training}}</div>{{end}}
+        {{if .Symptoms}}<div><strong>Symptoms:</strong> {{.Symptoms}}</div>{{end}}
+        {{if .Pain}}<div><strong>Pain:</strong> {{.Pain}}</div>{{end}}
+        {{if .Medication}}<div><strong>Meds:</strong> {{.Medication}}</div>{{end}}
+        {{if .Notes}}<div style="margin-top:.25rem">{{.Notes}}</div>{{end}}
+      </div>
+    </article>
+    {{end}}
+  </div>
+</section>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Injuries &amp; conditions</h3>
+        <p class="muted">Historial — active, recovering, chronic, resolved. Tools: <code>health_issue_add</code>.</p>
+      </div>
+    </div>
+    <form method="post" action="/dashboard/health/issues" class="stack" style="gap:.75rem">
+      <div class="row" style="gap:1rem;flex-wrap:wrap">
+        <div style="flex:2;min-width:12rem">
+          <label for="iss_title">Title</label>
+          <input id="iss_title" name="title" type="text" required placeholder="Right calf fibrillar tear"/>
+        </div>
+        <div style="flex:1;min-width:8rem">
+          <label for="iss_status">Status</label>
+          <select id="iss_status" name="status">
+            <option value="active">active</option>
+            <option value="recovering" selected>recovering</option>
+            <option value="chronic">chronic</option>
+            <option value="resolved">resolved</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="gap:1rem;flex-wrap:wrap">
+        <div style="flex:1;min-width:8rem">
+          <label for="iss_started">Started</label>
+          <input id="iss_started" name="started_on" type="date"/>
+        </div>
+        <div style="flex:1;min-width:8rem">
+          <label for="iss_ended">Ended</label>
+          <input id="iss_ended" name="ended_on" type="date"/>
+        </div>
+        <div style="flex:1;min-width:8rem">
+          <label for="iss_body">Body part</label>
+          <input id="iss_body" name="body_part" type="text" placeholder="right calf"/>
+        </div>
+      </div>
+      <div>
+        <label for="iss_dx">Diagnosis</label>
+        <textarea id="iss_dx" name="diagnosis" rows="2"></textarea>
+      </div>
+      <div>
+        <label for="iss_tx">Treatment</label>
+        <textarea id="iss_tx" name="treatment" rows="2"></textarea>
+      </div>
+      <div>
+        <label for="iss_notes">Notes</label>
+        <textarea id="iss_notes" name="notes" rows="2"></textarea>
+      </div>
+      <button type="submit">Add issue</button>
+    </form>
+  </div>
+</section>
+
+{{if .HealthIssues}}
+<section class="section">
+  <h3 style="margin-bottom:.75rem">Issue list</h3>
+  <div class="stack" style="gap:.65rem">
+    {{range .HealthIssues}}
+    <article class="card" style="padding:1rem 1.1rem">
+      <form method="post" action="/dashboard/health/issues/{{.ID}}" class="stack" style="gap:.65rem">
+        <div class="row" style="justify-content:space-between;gap:.75rem;flex-wrap:wrap">
+          <input name="title" type="text" value="{{.Title}}" required style="flex:1;min-width:12rem;font-weight:600"/>
+          <select name="status">
+            <option value="active"{{if eq .Status "active"}} selected{{end}}>active</option>
+            <option value="recovering"{{if eq .Status "recovering"}} selected{{end}}>recovering</option>
+            <option value="chronic"{{if eq .Status "chronic"}} selected{{end}}>chronic</option>
+            <option value="resolved"{{if eq .Status "resolved"}} selected{{end}}>resolved</option>
+          </select>
+        </div>
+        <div class="row" style="gap:1rem;flex-wrap:wrap">
+          <div style="flex:1;min-width:7rem">
+            <label>Started</label>
+            <input name="started_on" type="date" value="{{.StartedOn}}"/>
+          </div>
+          <div style="flex:1;min-width:7rem">
+            <label>Ended</label>
+            <input name="ended_on" type="date" value="{{.EndedOn}}"/>
+          </div>
+          <div style="flex:1;min-width:7rem">
+            <label>Body part</label>
+            <input name="body_part" type="text" value="{{.BodyPart}}"/>
+          </div>
+        </div>
+        <div>
+          <label>Diagnosis</label>
+          <textarea name="diagnosis" rows="2">{{.Diagnosis}}</textarea>
+        </div>
+        <div>
+          <label>Treatment</label>
+          <textarea name="treatment" rows="2">{{.Treatment}}</textarea>
+        </div>
+        <div>
+          <label>Notes</label>
+          <textarea name="notes" rows="2">{{.Notes}}</textarea>
+        </div>
+        <div class="row" style="gap:.55rem">
+          <button type="submit" style="margin-top:0">Save</button>
+        </div>
+      </form>
+      <form method="post" action="/dashboard/health/issues/{{.ID}}/delete" style="margin-top:.5rem" onsubmit="return confirm('Delete this issue?')">
+        <button type="submit" class="secondary">Delete</button>
+      </form>
+    </article>
+    {{end}}
+  </div>
+</section>
+{{end}}
+{{end}}

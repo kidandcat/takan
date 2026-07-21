@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+func strPtr(s string) *string { return &s }
+
 func TestCrossTenantIsolation(t *testing.T) {
 	dir := t.TempDir()
 	st, err := Open(dir, nil)
@@ -57,6 +59,37 @@ func TestCrossTenantIsolation(t *testing.T) {
 	listB, _ := st.ListPeople(ctx, b.ID, "", 50)
 	if len(listB) != 0 {
 		t.Fatalf("user B people should be empty, got %d", len(listB))
+	}
+
+	// Health isolation
+	h := 179.0
+	w := 87.0
+	if _, err := st.UpsertHealthProfile(ctx, a.ID, &h, &w, strPtr("private-a")); err != nil {
+		t.Fatal(err)
+	}
+	weight := 90.0
+	if _, err := st.UpsertHealthLog(ctx, a.ID, "2026-07-17", &weight, nil, nil, nil, nil, nil, strPtr("hurt calf"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateHealthIssue(ctx, HealthIssue{UserID: a.ID, Title: "calf tear", Status: "recovering"}); err != nil {
+		t.Fatal(err)
+	}
+	pb, _, _ := st.GetHealthProfile(ctx, b.ID)
+	if pb.Notes == "private-a" {
+		t.Fatal("health profile leaked to B")
+	}
+	logsB, _ := st.ListHealthLog(ctx, b.ID, "", "", 10)
+	if len(logsB) != 0 {
+		t.Fatalf("B health log should be empty, got %d", len(logsB))
+	}
+	issB, _ := st.ListHealthIssues(ctx, b.ID, "", 10)
+	if len(issB) != 0 {
+		t.Fatalf("B health issues should be empty, got %d", len(issB))
+	}
+	// A can read own
+	logA, err := st.GetHealthLog(ctx, a.ID, "2026-07-17")
+	if err != nil || logA.Notes != "hurt calf" {
+		t.Fatalf("A log: %+v err=%v", logA, err)
 	}
 
 	// Machines isolation

@@ -21,6 +21,7 @@ import (
 	"github.com/kidandcat/takan/internal/web"
 	"github.com/kidandcat/takan/modules"
 	"github.com/kidandcat/takan/modules/email"
+	"github.com/kidandcat/takan/modules/health"
 	"github.com/kidandcat/takan/modules/machine"
 	"github.com/kidandcat/takan/modules/memory"
 	"github.com/kidandcat/takan/modules/mercadona"
@@ -104,6 +105,7 @@ func main() {
 		Email:     email.Factory(st, box),
 		Memory:    memory.Factory(st),
 		People:    people.Factory(st),
+		Health:    health.Factory(st),
 	}
 
 	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir, cfg.AllowRegister, cfg.DefaultInviteQuota)

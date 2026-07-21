@@ -83,6 +83,10 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		_ = node.Close()
 		return nil, err
 	}
+	if err := s.migrateHealth(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -615,7 +619,7 @@ type ModuleState struct {
 }
 
 // defaultModuleIDs must stay in sync with modules.Catalog.
-var defaultModuleIDs = []string{"machine", "mercadona", "email", "memory", "people"}
+var defaultModuleIDs = []string{"machine", "mercadona", "email", "memory", "people", "health"}
 
 func (s *Store) ListModules(ctx context.Context, userID string) ([]ModuleState, error) {
 	// ensure defaults exist
