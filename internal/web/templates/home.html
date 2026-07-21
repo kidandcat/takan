@@ -1,23 +1,69 @@
 {{define "content"}}
 <div class="card landing">
   <h1>One MCP.<br/>Modules for the rest of your life.</h1>
-  <p class="lede">Connect Grok, Claude or Cursor once to Takan. Flip modules on from the panel — tools appear and disappear without reconfiguring the client.</p>
+  <p class="lede">Connect Grok, Claude or Cursor once to Takan. Flip modules on from the panel — tools appear without reconfiguring the client.</p>
   <div class="row">
     <a class="btn" href="/login">Log in</a>
+    {{if .AllowRegister}}
+    <a class="btn secondary" href="/register">Sign up</a>
+    {{else}}
     <a class="btn secondary" href="/register">Register with invite</a>
+    {{end}}
   </div>
   <div class="features">
     <div class="feat">
-      <div class="mod-icon machine" style="flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div>
-      <div><strong>Machine</strong>Remote shell on your PCs via outbound agent — no inbound SSH.</div>
+      <div class="mod-icon machine" style="flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+      </div>
+      <div>
+        <strong>Machine</strong>
+        Remote shell on your PCs plus long-running AI jobs (Claude Code, Grok Build, free commands).
+      </div>
     </div>
     <div class="feat">
-      <div class="mod-icon mercadona" style="flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg></div>
-      <div><strong>Mercadona</strong>Cart tools in your AI client — search, add, list, and more.</div>
+      <div class="mod-icon mercadona" style="flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg>
+      </div>
+      <div>
+        <strong>Mercadona</strong>
+        Search products and manage the shopping cart from your AI client.
+      </div>
     </div>
     <div class="feat">
-      <div class="mod-icon" style="flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M10 13a5 5 0 0 0 7.07 0l1.41-1.41a5 5 0 0 0-7.07-7.07L10 5.93"/><path d="M14 11a5 5 0 0 0-7.07 0L5.5 12.41a5 5 0 0 0 7.07 7.07L14 18.07"/></svg></div>
-      <div><strong>Single connect</strong>OAuth + PKCE MCP URL — one paste, tools update live.</div>
+      <div class="mod-icon email" style="flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+      </div>
+      <div>
+        <strong>Email</strong>
+        Send and read mail via Resend — pick domains you enable in the panel.
+      </div>
+    </div>
+    <div class="feat">
+      <div class="mod-icon memory" style="flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M12 3a6 6 0 0 0-6 6c0 4 6 12 6 12s6-8 6-12a6 6 0 0 0-6-6z"/><circle cx="12" cy="9" r="2"/></svg>
+      </div>
+      <div>
+        <strong>Memory</strong>
+        Short-lived working memory shared across your AI sessions.
+      </div>
+    </div>
+    <div class="feat">
+      <div class="mod-icon people" style="flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </div>
+      <div>
+        <strong>People</strong>
+        Personal CRM — relationships, context and notes your AI can use.
+      </div>
+    </div>
+    <div class="feat">
+      <div class="mod-icon connect" style="flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20"><path d="M10 13a5 5 0 0 0 7.07 0l1.41-1.41a5 5 0 0 0-7.07-7.07L10 5.93"/><path d="M14 11a5 5 0 0 0-7.07 0L5.5 12.41a5 5 0 0 0 7.07 7.07L14 18.07"/></svg>
+      </div>
+      <div>
+        <strong>Single connect</strong>
+        One MCP URL with OAuth + PKCE. <code>takan_status</code> shows every module’s readiness.
+      </div>
     </div>
   </div>
 </div>

@@ -289,7 +289,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
 		return
 	}
-	s.page(w, "home.html", pageData{Title: "Home"})
+	s.page(w, "home.html", pageData{Title: "Home", AllowRegister: s.AllowRegister})
 }
 
 func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
