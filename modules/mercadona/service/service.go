@@ -380,9 +380,9 @@ func (s *Service) Add(ctx context.Context, text string, qty float64) (*AddResult
 		return nil, fmt.Errorf("save pending: %w", err)
 	}
 	pendingID, _ := res.LastInsertId()
-	msg := "ambiguous — pick a product_id and call mercadona_resolve"
+	msg := "ambiguous — pick a product_id and call mercadona_add with pending_id"
 	if len(prefHits) > 1 {
-		msg = "ambiguous (several preferred) — pick a product_id and call mercadona_resolve"
+		msg = "ambiguous (several preferred) — pick a product_id and call mercadona_add with pending_id"
 	}
 	return &AddResult{
 		Status:    "asked",
