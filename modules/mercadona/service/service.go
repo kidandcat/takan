@@ -298,7 +298,7 @@ func (s *Service) GetCart(ctx context.Context) (*client.Cart, error) {
 //  1. Exact free-text alias for this query
 //  2. Search hits: auto-add when a single clear match, or when exactly one hit
 //     is on the preferred list (product chosen in a past session)
-//  3. Otherwise status=asked with options (agent must call mercadona_resolve)
+//  3. Otherwise status=asked with options (agent must call mercadona_add with pending_id)
 func (s *Service) Add(ctx context.Context, text string, qty float64) (*AddResult, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {

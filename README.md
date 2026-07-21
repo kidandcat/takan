@@ -14,7 +14,7 @@ Integrations live under `modules/` as subpackages (add new ones there):
 | Module | Path | Tools | Setup |
 |--------|------|--------|--------|
 | **Machine** | `modules/machine` | `machine_list`, `machine_bash`, `machine_ai_runners`, `machine_ai_run`, `machine_ai_status` | Install `takan-agent`; configure AI runners in panel (Claude/Grok presets + free commands) |
-| **Mercadona** | `modules/mercadona` | search, add, list, remove, clear, … | Credentials in panel |
+| **Mercadona** | `modules/mercadona` | `mercadona_status`, `search`, `add`, `cart` | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get`, `email_status` | Resend API key; enable domains in panel |
 | **Memory** | `modules/memory` | `memory_get`, `memory_set` | Enable module |
 | **People** | `modules/people` | `people_list/get/add/update/delete` | Personal CRM in panel |

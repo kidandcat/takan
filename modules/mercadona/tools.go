@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/kidandcat/takan/internal/mcp"
 	"github.com/kidandcat/takan/internal/store"
@@ -39,6 +40,7 @@ func (m *Module) svc(userID string) *Service {
 	return NewService(m.DB, userID, m.Acc)
 }
 
+// Lean MCP surface (4 tools): status, search, add (text|id|resolve), cart (list|remove|clear).
 func (m *Module) tools() []mcp.RegisteredTool {
 	return []mcp.RegisteredTool{
 		{
@@ -60,18 +62,18 @@ func (m *Module) tools() []mcp.RegisteredTool {
 				if !linked {
 					return fmt.Sprintf("Credentials saved for %s (CP %s) but session not linked — re-save in the panel.", email, postal), nil
 				}
-				return fmt.Sprintf("Mercadona ready (%s, CP %s). Tools: search, add, list, remove, clear, resolve.", email, postal), nil
+				return fmt.Sprintf("Mercadona ready (%s, CP %s). Tools: search, add, cart.", email, postal), nil
 			},
 		},
 		{
 			Tool: mcp.Tool{
 				Name:        "mercadona_search",
-				Description: "Search Mercadona products by free text. Prefer mercadona_add for cart adds.",
+				Description: "Search Mercadona products by free text. Prefer mercadona_add to put items in the cart.",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"query": map[string]any{"type": "string"},
-						"limit": map[string]any{"type": "integer"},
+						"limit": map[string]any{"type": "integer", "description": "Max hits (default 5, max 20)"},
 					},
 					"required": []string{"query"},
 				},
@@ -95,15 +97,26 @@ func (m *Module) tools() []mcp.RegisteredTool {
 		{
 			Tool: mcp.Tool{
 				Name: "mercadona_add",
-				Description: "Add item to Mercadona cart by free-text name. " +
-					"May return status=asked with options + pending_id → mercadona_resolve.",
+				Description: "Add to cart. Modes: (1) text= free-name search/add; (2) product_id= direct add " +
+					"(optional text= to learn alias); (3) pending_id+product_id= resolve a previous ambiguous add " +
+					"(product_id empty string skips). May return status=asked with options + pending_id.",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"text":     map[string]any{"type": "string"},
-						"quantity": map[string]any{"type": "number"},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "Free-text product name (mode 1), or original query when adding by id",
+						},
+						"product_id": map[string]any{
+							"type":        "string",
+							"description": "Known product id (mode 2) or choice when resolving pending (mode 3)",
+						},
+						"pending_id": map[string]any{
+							"type":        "integer",
+							"description": "Pending disambiguation id from a previous add (mode 3)",
+						},
+						"quantity": map[string]any{"type": "number", "description": "Quantity (default 1)"},
 					},
-					"required": []string{"text"},
 				},
 			},
 			Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
@@ -111,144 +124,101 @@ func (m *Module) tools() []mcp.RegisteredTool {
 					return "", err
 				}
 				text, _ := args["text"].(string)
-				res, err := m.svc(userID).Add(ctx, text, numArg(args, "quantity", 1))
-				if err != nil {
-					return "", err
-				}
-				return marshal(res)
-			},
-		},
-		{
-			Tool: mcp.Tool{
-				Name:        "mercadona_add_by_id",
-				Description: "Add known product_id to cart. Pass text= original query to learn alias.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"product_id": map[string]any{"type": "string"},
-						"quantity":   map[string]any{"type": "number"},
-						"text":       map[string]any{"type": "string"},
-					},
-					"required": []string{"product_id"},
-				},
-			},
-			Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-				if err := m.requireLinked(ctx, userID); err != nil {
-					return "", err
-				}
-				id, _ := args["product_id"].(string)
-				text, _ := args["text"].(string)
-				res, err := m.svc(userID).AddByID(ctx, id, numArg(args, "quantity", 1), text)
-				if err != nil {
-					return "", err
-				}
-				return marshal(res)
-			},
-		},
-		{
-			Tool: mcp.Tool{
-				Name:        "mercadona_resolve",
-				Description: "Resolve pending mercadona_add. product_id=\"\" skips.",
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"pending_id": map[string]any{"type": "integer"},
-						"product_id": map[string]any{"type": "string"},
-					},
-					"required": []string{"pending_id", "product_id"},
-				},
-			},
-			Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-				if err := m.requireLinked(ctx, userID); err != nil {
-					return "", err
-				}
-				pid := int64(numArg(args, "pending_id", 0))
-				if pid <= 0 {
-					return "", fmt.Errorf("pending_id required")
-				}
 				productID, _ := args["product_id"].(string)
-				product, cart, err := m.svc(userID).Resolve(ctx, pid, productID)
+				text = strings.TrimSpace(text)
+				productID = strings.TrimSpace(productID)
+				qty := numArg(args, "quantity", 1)
+				pendingID := int64(numArg(args, "pending_id", 0))
+
+				// Mode 3: resolve pending disambiguation
+				if pendingID > 0 {
+					product, cart, err := m.svc(userID).Resolve(ctx, pendingID, productID)
+					if err != nil {
+						return "", err
+					}
+					if product == nil {
+						return marshal(map[string]any{"status": "skipped"})
+					}
+					return marshal(map[string]any{
+						"status": "added", "product": product, "cart_total": cart.Total, "preferred": true,
+					})
+				}
+
+				// Mode 2: add by product id
+				if productID != "" {
+					res, err := m.svc(userID).AddByID(ctx, productID, qty, text)
+					if err != nil {
+						return "", err
+					}
+					return marshal(res)
+				}
+
+				// Mode 1: free-text add
+				if text == "" {
+					return "", fmt.Errorf("provide text= (name), product_id=, or pending_id=+product_id=")
+				}
+				res, err := m.svc(userID).Add(ctx, text, qty)
 				if err != nil {
 					return "", err
 				}
-				if product == nil {
-					return marshal(map[string]any{"status": "skipped"})
-				}
-				return marshal(map[string]any{
-					"status": "added", "product": product, "cart_total": cart.Total, "preferred": true,
-				})
+				return marshal(res)
 			},
 		},
 		{
 			Tool: mcp.Tool{
-				Name:        "mercadona_remove",
-				Description: "Remove cart line whose name contains text.",
+				Name: "mercadona_cart",
+				Description: "Cart operations. action=list (default) shows lines + total; " +
+					"action=remove needs text= (match line name); action=clear empties the cart.",
 				InputSchema: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"text": map[string]any{"type": "string"}},
-					"required":   []string{"text"},
+					"type": "object",
+					"properties": map[string]any{
+						"action": map[string]any{
+							"type":        "string",
+							"enum":        []string{"list", "remove", "clear"},
+							"description": "list | remove | clear (default list)",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "Required for remove: substring match on cart line name",
+						},
+					},
 				},
 			},
 			Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
 				if err := m.requireLinked(ctx, userID); err != nil {
 					return "", err
 				}
-				text, _ := args["text"].(string)
-				removed, err := m.svc(userID).Remove(ctx, text)
-				if err != nil {
-					return "", err
+				action, _ := args["action"].(string)
+				action = strings.ToLower(strings.TrimSpace(action))
+				if action == "" {
+					action = "list"
 				}
-				return marshal(map[string]any{"status": "removed", "product": removed})
-			},
-		},
-		{
-			Tool: mcp.Tool{
-				Name:        "mercadona_list",
-				Description: "List current Mercadona cart lines and total.",
-				InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-			},
-			Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-				if err := m.requireLinked(ctx, userID); err != nil {
-					return "", err
+				switch action {
+				case "list":
+					cart, err := m.svc(userID).GetCart(ctx)
+					if err != nil {
+						return "", err
+					}
+					return marshal(cart)
+				case "remove":
+					text, _ := args["text"].(string)
+					text = strings.TrimSpace(text)
+					if text == "" {
+						return "", fmt.Errorf("text required for action=remove")
+					}
+					removed, err := m.svc(userID).Remove(ctx, text)
+					if err != nil {
+						return "", err
+					}
+					return marshal(map[string]any{"status": "removed", "product": removed})
+				case "clear":
+					if err := m.svc(userID).Clear(ctx); err != nil {
+						return "", err
+					}
+					return "cart cleared", nil
+				default:
+					return "", fmt.Errorf(`action must be "list", "remove", or "clear"`)
 				}
-				cart, err := m.svc(userID).GetCart(ctx)
-				if err != nil {
-					return "", err
-				}
-				return marshal(cart)
-			},
-		},
-		{
-			Tool: mcp.Tool{
-				Name:        "mercadona_clear",
-				Description: "Empty the Mercadona cart.",
-				InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-			},
-			Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-				if err := m.requireLinked(ctx, userID); err != nil {
-					return "", err
-				}
-				if err := m.svc(userID).Clear(ctx); err != nil {
-					return "", err
-				}
-				return "cart cleared", nil
-			},
-		},
-		{
-			Tool: mcp.Tool{
-				Name:        "mercadona_aliases_list",
-				Description: "List saved free-text → product aliases.",
-				InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
-			},
-			Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-				if err := m.requireLinked(ctx, userID); err != nil {
-					return "", err
-				}
-				list, err := m.svc(userID).ListAliases(ctx)
-				if err != nil {
-					return "", err
-				}
-				return marshal(list)
 			},
 		},
 	}
