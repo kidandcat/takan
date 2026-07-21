@@ -8,29 +8,29 @@
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <style>
     :root {
-      /* Soft bone / warm parchment — not pure white, not cold gray */
+      /* Neutral bone — warm enough, not parchment-yellow */
       --primary: #3a6b7a;
       --primary-dark: #2c5561;
       --primary-light: #5a8a98;
-      --accent-glow: rgba(58, 107, 122, 0.12);
-      --accent-soft: rgba(58, 107, 122, 0.08);
-      --bg: #f3efe6;
-      --bg-soft: #ebe4d6;
-      --bg-card: #f7f3eb;
-      --bg-card-hover: #efe9dd;
-      --text: #2a2620;
-      --text-secondary: #635a4e;
-      --text-muted: #918778;
-      --border: #ddd2c2;
-      --border-strong: #c9bba8;
-      --on-primary: #f7f3eb;
+      --accent-glow: rgba(58, 107, 122, 0.11);
+      --accent-soft: rgba(58, 107, 122, 0.07);
+      --bg: #f1efea;
+      --bg-soft: #e9e6e0;
+      --bg-card: #f5f3ef;
+      --bg-card-hover: #ebe8e2;
+      --text: #272521;
+      --text-secondary: #5e5a54;
+      --text-muted: #8c877f;
+      --border: #d8d4cb;
+      --border-strong: #c4bfb4;
+      --on-primary: #f5f3ef;
       --ok: #3a7d66;
-      --ok-bg: rgba(58, 125, 102, 0.12);
+      --ok-bg: rgba(58, 125, 102, 0.11);
       --warn: #a67c1a;
-      --warn-bg: rgba(166, 124, 26, 0.12);
+      --warn-bg: rgba(166, 124, 26, 0.11);
       --bad: #a84a42;
-      --bad-bg: rgba(168, 74, 66, 0.11);
-      --code-bg: #ebe4d6;
+      --bad-bg: rgba(168, 74, 66, 0.10);
+      --code-bg: #e9e6e0;
       --code-text: #2c5561;
       /* aliases used across components */
       --acc: var(--primary);
@@ -45,9 +45,9 @@
       --sidebar-w: 260px;
       --radius: 14px;
       --radius-sm: 10px;
-      --shadow-sm: 0 1px 2px rgba(42, 38, 32, 0.05), 0 0 0 1px rgba(42, 38, 32, 0.03);
-      --shadow: 0 10px 28px rgba(42, 38, 32, 0.07), 0 2px 6px rgba(42, 38, 32, 0.04);
-      --shadow-lg: 0 22px 48px rgba(42, 38, 32, 0.11);
+      --shadow-sm: 0 1px 2px rgba(39, 37, 33, 0.045), 0 0 0 1px rgba(39, 37, 33, 0.025);
+      --shadow: 0 10px 28px rgba(39, 37, 33, 0.06), 0 2px 6px rgba(39, 37, 33, 0.035);
+      --shadow-lg: 0 22px 48px rgba(39, 37, 33, 0.10);
       --font: "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
@@ -62,7 +62,7 @@
       background: var(--bg-soft);
       position: relative;
     }
-    /* Soft ambient wash — warm bone, slight parchment depth */
+    /* Soft ambient wash — neutral bone, barely warm */
     body::before {
       content: "";
       position: fixed;
@@ -70,9 +70,9 @@
       z-index: 0;
       pointer-events: none;
       background:
-        radial-gradient(900px 520px at 12% -8%, rgba(210, 185, 140, 0.18), transparent 55%),
-        radial-gradient(700px 480px at 92% 8%, rgba(58, 107, 122, 0.06), transparent 50%),
-        radial-gradient(600px 400px at 50% 100%, rgba(90, 70, 45, 0.05), transparent 55%),
+        radial-gradient(900px 520px at 12% -8%, rgba(180, 170, 155, 0.12), transparent 55%),
+        radial-gradient(700px 480px at 92% 8%, rgba(58, 107, 122, 0.05), transparent 50%),
+        radial-gradient(600px 400px at 50% 100%, rgba(50, 48, 44, 0.035), transparent 55%),
         var(--bg-soft);
     }
     a { color: var(--primary); text-decoration: none; }
@@ -102,7 +102,7 @@
       justify-content: space-between;
       padding: 1.1rem 1.5rem;
       border-bottom: 1px solid var(--border);
-      background: rgba(243, 239, 230, 0.86);
+      background: rgba(241, 239, 234, 0.86);
       backdrop-filter: blur(14px) saturate(1.1);
     }
     .public-main {
@@ -165,7 +165,7 @@
       display: flex;
       flex-direction: column;
       padding: 1.25rem 0.9rem;
-      background: rgba(239, 233, 221, 0.90);
+      background: rgba(236, 233, 227, 0.90);
       border-right: 1px solid var(--border);
       backdrop-filter: blur(16px) saturate(1.05);
     }
@@ -280,7 +280,7 @@
 
     /* —— Surfaces —— */
     .card {
-      background: rgba(247, 243, 235, 0.94);
+      background: rgba(245, 243, 239, 0.94);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 1.25rem 1.35rem;
@@ -331,7 +331,7 @@
       padding: 0.65rem 0.8rem;
       border-radius: var(--radius-sm);
       border: 1px solid var(--border);
-      background: rgba(235, 228, 214, 0.88);
+      background: rgba(233, 230, 224, 0.88);
       color: var(--text);
       font: inherit;
       transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
@@ -349,7 +349,7 @@
       -webkit-text-fill-color: var(--text) !important;
       caret-color: var(--text);
       border: 1px solid var(--border) !important;
-      box-shadow: 0 0 0 1000px #ebe4d6 inset !important;
+      box-shadow: 0 0 0 1000px #e9e6e0 inset !important;
       transition: background-color 99999s ease-out 0s;
     }
     button, .btn {
@@ -373,7 +373,7 @@
     button:hover, .btn:hover { background: var(--primary-dark); filter: none; transform: translateY(-1px); }
     button:active, .btn:active { transform: translateY(0); }
     button.secondary, .btn.secondary {
-      background: rgba(235, 228, 214, 0.92);
+      background: rgba(233, 230, 224, 0.92);
       color: var(--text);
       border: 1px solid var(--border);
       box-shadow: none;
@@ -385,7 +385,7 @@
     }
     button.danger, .btn.danger {
       background: var(--bad);
-      color: #f3efe6;
+      color: #f1efea;
       box-shadow: none;
     }
     button.ghost {
@@ -482,7 +482,7 @@
       padding: 0.9rem 1rem;
       border-radius: var(--radius);
       border: 1px solid var(--border);
-      background: rgba(247, 243, 235, 0.92);
+      background: rgba(245, 243, 239, 0.92);
       box-shadow: var(--shadow-sm);
       transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
     }
@@ -512,7 +512,7 @@
       gap: 0.9rem;
     }
     .mod-card {
-      background: rgba(247, 243, 235, 0.94);
+      background: rgba(245, 243, 239, 0.94);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 1.15rem;
@@ -621,7 +621,7 @@
       position: absolute;
       inset: 0;
       cursor: pointer;
-      background: #d4c9b6;
+      background: #d2cdc4;
       border: 1px solid var(--border);
       border-radius: 999px;
       transition: 0.2s;
@@ -633,7 +633,7 @@
       width: 18px;
       left: 3px;
       top: 3px;
-      background: #f3efe6;
+      background: #f1efea;
       border-radius: 50%;
       transition: 0.2s;
       box-shadow: 0 1px 3px rgba(42, 38, 32, 0.14);
@@ -644,7 +644,7 @@
     }
     .switch input:checked + .slider::before {
       transform: translateX(20px);
-      background: #f0ebe0;
+      background: #eeece7;
     }
 
     /* Machines */
@@ -663,7 +663,7 @@
       padding: 1rem 1.05rem;
       border-radius: var(--radius);
       border: 1px solid var(--border);
-      background: rgba(247, 243, 235, 0.94);
+      background: rgba(245, 243, 239, 0.94);
       box-shadow: var(--shadow-sm);
       min-height: 140px;
       transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
@@ -809,7 +809,7 @@
       padding: 0.8rem 0.95rem;
       border-radius: 12px;
       border: 1px solid var(--border);
-      background: rgba(232, 224, 208, 0.70);
+      background: rgba(229, 225, 218, 0.70);
     }
     .machine-row .name { font-weight: 600; }
 
@@ -937,7 +937,7 @@
       padding: 0.5rem 0.65rem;
       border-radius: 10px;
       border: 1px solid var(--border);
-      background: rgba(232, 224, 208, 0.58);
+      background: rgba(229, 225, 218, 0.58);
     }
     .split-two .ai-runner-head {
       display: flex;
@@ -1037,7 +1037,7 @@
       border-radius: 12px;
       color: var(--text-secondary);
       font-size: 0.9rem;
-      background: rgba(232, 224, 208, 0.48);
+      background: rgba(229, 225, 218, 0.48);
     }
 
     /* Landing */
@@ -1087,7 +1087,7 @@
     .modal {
       width: min(100%, 560px);
       margin: 4vh auto 2rem;
-      background: rgba(243, 239, 230, 0.97);
+      background: rgba(241, 239, 234, 0.97);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       box-shadow: var(--shadow-lg);
@@ -1165,7 +1165,7 @@
       }
       .split-two:has(#mtab-machines:checked) .page-tabs label[for="mtab-machines"],
       .split-two:has(#mtab-tasks:checked) .page-tabs label[for="mtab-tasks"] {
-        background: rgba(247, 243, 235, 0.96);
+        background: rgba(245, 243, 239, 0.96);
         color: var(--text);
         box-shadow: var(--shadow-sm);
       }
