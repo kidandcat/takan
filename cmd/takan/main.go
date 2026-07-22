@@ -25,6 +25,7 @@ import (
 	"github.com/kidandcat/takan/modules/machine"
 	"github.com/kidandcat/takan/modules/mercadona"
 	"github.com/kidandcat/takan/modules/people"
+	"github.com/kidandcat/takan/modules/telegram"
 )
 
 func main() {
@@ -104,6 +105,7 @@ func main() {
 		Email:     email.Factory(st, box),
 		People:    people.Factory(st),
 		Health:    health.Factory(st),
+		Telegram:  telegram.Factory(st, box),
 	}
 
 	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir, cfg.AllowRegister, cfg.DefaultInviteQuota)

@@ -201,6 +201,15 @@ CREATE TABLE IF NOT EXISTS email_settings (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS telegram_settings (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  bot_token_enc TEXT NOT NULL,
+  bot_username TEXT NOT NULL DEFAULT '',
+  default_chat_id TEXT NOT NULL DEFAULT '',
+  allowed_chats TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS people (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -617,7 +626,7 @@ type ModuleState struct {
 }
 
 // defaultModuleIDs must stay in sync with modules.Catalog.
-var defaultModuleIDs = []string{"machine", "mercadona", "email", "people", "health"}
+var defaultModuleIDs = []string{"machine", "mercadona", "email", "people", "health", "telegram"}
 
 func (s *Store) ListModules(ctx context.Context, userID string) ([]ModuleState, error) {
 	// ensure defaults exist
@@ -1005,6 +1014,140 @@ func (s *Store) GetEmailSettings(ctx context.Context, userID string) (apiKeyEnc 
 func (s *Store) DeleteEmailSettings(ctx context.Context, userID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM email_settings WHERE user_id = ?`, userID)
 	return err
+}
+
+// --- telegram (Bot API) ---
+
+// TelegramChat is an allowed destination for telegram_send.
+type TelegramChat struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+}
+
+// TelegramSettings is the per-user Telegram bot config (token stored encrypted).
+type TelegramSettings struct {
+	BotTokenEnc   string
+	BotUsername   string
+	DefaultChatID string
+	AllowedChats  []TelegramChat
+}
+
+func (s *Store) SaveTelegramSettings(ctx context.Context, userID, botTokenEnc, botUsername, defaultChatID string, chats []TelegramChat) error {
+	if chats == nil {
+		chats = []TelegramChat{}
+	}
+	raw, err := json.Marshal(chats)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO telegram_settings (user_id, bot_token_enc, bot_username, default_chat_id, allowed_chats, updated_at)
+VALUES (?,?,?,?,?,?)
+ON CONFLICT(user_id) DO UPDATE SET
+  bot_token_enc = excluded.bot_token_enc,
+  bot_username = excluded.bot_username,
+  default_chat_id = excluded.default_chat_id,
+  allowed_chats = excluded.allowed_chats,
+  updated_at = excluded.updated_at`,
+		userID, botTokenEnc, botUsername, strings.TrimSpace(defaultChatID), string(raw),
+		time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+// UpdateTelegramMeta updates username/chats without changing the encrypted token.
+func (s *Store) UpdateTelegramMeta(ctx context.Context, userID, botUsername, defaultChatID string, chats []TelegramChat) error {
+	if chats == nil {
+		chats = []TelegramChat{}
+	}
+	raw, err := json.Marshal(chats)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `
+UPDATE telegram_settings SET bot_username = ?, default_chat_id = ?, allowed_chats = ?, updated_at = ?
+WHERE user_id = ?`,
+		botUsername, strings.TrimSpace(defaultChatID), string(raw),
+		time.Now().UTC().Format(time.RFC3339), userID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("telegram not configured")
+	}
+	return nil
+}
+
+func (s *Store) GetTelegramSettings(ctx context.Context, userID string) (TelegramSettings, bool, error) {
+	var ts TelegramSettings
+	var raw string
+	err := s.db.QueryRowContext(ctx, `
+SELECT bot_token_enc, bot_username, default_chat_id, allowed_chats
+FROM telegram_settings WHERE user_id = ?`, userID).
+		Scan(&ts.BotTokenEnc, &ts.BotUsername, &ts.DefaultChatID, &raw)
+	if err == sql.ErrNoRows {
+		return TelegramSettings{}, false, nil
+	}
+	if err != nil {
+		return TelegramSettings{}, false, err
+	}
+	if strings.TrimSpace(raw) != "" {
+		_ = json.Unmarshal([]byte(raw), &ts.AllowedChats)
+	}
+	if ts.AllowedChats == nil {
+		ts.AllowedChats = []TelegramChat{}
+	}
+	return ts, true, nil
+}
+
+func (s *Store) DeleteTelegramSettings(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM telegram_settings WHERE user_id = ?`, userID)
+	return err
+}
+
+// NormalizeTelegramChats trims, dedupes by id, and ensures default chat is listed.
+func NormalizeTelegramChats(defaultChatID string, chats []TelegramChat) (string, []TelegramChat) {
+	defaultChatID = strings.TrimSpace(defaultChatID)
+	seen := map[string]int{}
+	var out []TelegramChat
+	for _, c := range chats {
+		id := strings.TrimSpace(c.ID)
+		if id == "" {
+			continue
+		}
+		label := strings.TrimSpace(c.Label)
+		if i, ok := seen[id]; ok {
+			if label != "" && out[i].Label == "" {
+				out[i].Label = label
+			}
+			continue
+		}
+		seen[id] = len(out)
+		out = append(out, TelegramChat{ID: id, Label: label})
+	}
+	if defaultChatID != "" {
+		if _, ok := seen[defaultChatID]; !ok {
+			out = append([]TelegramChat{{ID: defaultChatID, Label: "default"}}, out...)
+		}
+	}
+	return defaultChatID, out
+}
+
+// ChatAllowed reports whether chatID is the default or in the allowlist.
+func ChatAllowed(defaultChatID string, chats []TelegramChat, chatID string) bool {
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return false
+	}
+	if chatID == strings.TrimSpace(defaultChatID) {
+		return true
+	}
+	for _, c := range chats {
+		if strings.TrimSpace(c.ID) == chatID {
+			return true
+		}
+	}
+	return false
 }
 
 // EnabledEmailDomains returns names of domains the user enabled for tools.

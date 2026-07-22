@@ -26,6 +26,7 @@ var Catalog = []Info{
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
 	{ID: "health", Name: "Health", Description: "Personal health: profile, daily diary, injuries and conditions."},
+	{ID: "telegram", Name: "Telegram", Description: "Send messages via your Telegram bot (token + allowed chats in panel)."},
 }
 
 // Provider builds tools for enabled modules.
@@ -41,6 +42,7 @@ type Provider struct {
 	Email     ToolFactory
 	People    ToolFactory
 	Health    ToolFactory
+	Telegram  ToolFactory
 }
 
 // ToolFactory produces tools when the module is enabled.
@@ -78,6 +80,10 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.Health != nil {
 				out = append(out, p.Health(ctx, userID)...)
 			}
+		case "telegram":
+			if p.Telegram != nil {
+				out = append(out, p.Telegram(ctx, userID)...)
+			}
 		}
 	}
 	return out
@@ -88,7 +94,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, Mercadona linked, email domains, people, health). " +
+				"(machines online, Mercadona linked, email domains, people, health, telegram). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -228,6 +234,30 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 		}
 		bits = append(bits, fmt.Sprintf("%d log days", nLog), fmt.Sprintf("%d open issues", open))
 		return true, strings.Join(bits, " · ")
+	case "telegram":
+		ts, ok, err := p.Store.GetTelegramSettings(ctx, userID)
+		if err != nil {
+			return false, "error reading telegram settings"
+		}
+		if !ok {
+			return false, "not configured (panel → Telegram)"
+		}
+		bot := strings.TrimPrefix(ts.BotUsername, "@")
+		if bot == "" {
+			bot = "bot"
+		}
+		if strings.TrimSpace(ts.DefaultChatID) == "" && len(ts.AllowedChats) == 0 {
+			return false, fmt.Sprintf("@%s · no chats", bot)
+		}
+		n := len(ts.AllowedChats)
+		if n == 0 && ts.DefaultChatID != "" {
+			n = 1
+		}
+		detail := fmt.Sprintf("@%s · %d chat(s)", bot, n)
+		if ts.DefaultChatID != "" {
+			detail += " · default " + ts.DefaultChatID
+		}
+		return true, detail
 	default:
 		return true, "enabled"
 	}

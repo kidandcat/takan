@@ -1,0 +1,82 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Telegram</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:56ch">
+      Create a bot with <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>,
+      paste the token, then set which chats the AI may message.
+    </p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Bot token</h3>
+        <p class="muted">Stored encrypted. Validated with Telegram <code>getMe</code> on save.</p>
+      </div>
+      {{if .TelegramConfigured}}
+        <span class="pill on"><span class="live"></span>
+          {{if .TelegramBotUsername}}@{{.TelegramBotUsername}}{{else}}Token saved{{end}}
+        </span>
+      {{else}}
+        <span class="pill off">Not configured</span>
+      {{end}}
+    </div>
+
+    <form method="post" action="/dashboard/telegram" class="form-stack" style="max-width:100%">
+      <div>
+        <label for="bot_token">Bot token</label>
+        <input id="bot_token" name="bot_token" type="password" {{if not .TelegramConfigured}}required{{end}}
+          placeholder="{{if .TelegramConfigured}}leave blank to keep current token{{else}}123456:ABC-DEF…{{end}}"
+          autocomplete="off"/>
+      </div>
+      <div>
+        <label for="default_chat_id">Default chat id</label>
+        <input id="default_chat_id" name="default_chat_id" type="text"
+          value="{{.TelegramDefaultChat}}"
+          placeholder="e.g. 282611642 (your user id) or -100… for groups"
+          autocomplete="off"/>
+        <p class="muted" style="margin-top:.35rem;font-size:.8rem">
+          Used when <code>telegram_send</code> omits <code>chat_id</code>. Message the bot first so it can see your chat.
+        </p>
+      </div>
+      <div>
+        <label for="allowed_chats">Allowed chats</label>
+        <textarea id="allowed_chats" name="allowed_chats" rows="5"
+          placeholder="One per line: chat_id or chat_id|label&#10;282611642|me&#10;-1001234567890|family">{{.TelegramChatsText}}</textarea>
+        <p class="muted" style="margin-top:.35rem;font-size:.8rem">
+          The AI can only send to these ids (default is always included). Use Discover after messaging the bot.
+        </p>
+      </div>
+      <div class="row">
+        <button type="submit">{{if .TelegramConfigured}}Save{{else}}Save &amp; enable{{end}}</button>
+        {{if .TelegramConfigured}}
+        <button type="submit" formaction="/dashboard/telegram/discover" class="secondary" formnovalidate
+          title="Calls getUpdates once — do not share this bot with another long-poller">Discover chats</button>
+        <button type="submit" formaction="/dashboard/telegram/clear" class="secondary" formnovalidate
+          onclick="return confirm('Remove Telegram bot token and chats?')">Clear</button>
+        {{end}}
+      </div>
+    </form>
+
+    {{if .TelegramConfigured}}
+    <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <h3 style="margin-bottom:.35rem">MCP tools</h3>
+      <p class="muted" style="margin-bottom:.5rem">
+        When this module is enabled: <code>telegram_chats</code>, <code>telegram_send</code>.
+        Readiness is included in <code>takan_status</code>.
+      </p>
+      <p class="faint">
+        Tip: use a dedicated bot for Takan. Discover uses <code>getUpdates</code> and can conflict with another service polling the same token.
+      </p>
+    </div>
+    {{end}}
+  </div>
+</section>
+{{end}}

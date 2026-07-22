@@ -108,6 +108,22 @@ func TestCrossTenantIsolation(t *testing.T) {
 	if n != 0 {
 		t.Fatal("B should not have mercadona account row")
 	}
+
+	// Telegram isolation
+	if err := st.SaveTelegramSettings(ctx, a.ID, "enc-token-a", "bot_a", "111", []TelegramChat{{ID: "111", Label: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, okB, err := st.GetTelegramSettings(ctx, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if okB {
+		t.Fatal("user B must not see telegram settings of A")
+	}
+	tsA, okA, err := st.GetTelegramSettings(ctx, a.ID)
+	if err != nil || !okA || tsA.BotUsername != "bot_a" || tsA.DefaultChatID != "111" {
+		t.Fatalf("A telegram: %+v ok=%v err=%v", tsA, okA, err)
+	}
 }
 
 func TestInviteQuotaAndUnlimited(t *testing.T) {

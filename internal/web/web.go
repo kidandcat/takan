@@ -22,6 +22,7 @@ import (
 	"github.com/kidandcat/takan/modules"
 	emailmod "github.com/kidandcat/takan/modules/email"
 	machinemod "github.com/kidandcat/takan/modules/machine"
+	telegrammod "github.com/kidandcat/takan/modules/telegram"
 )
 
 //go:embed templates/*.html
@@ -76,6 +77,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
+	mux.HandleFunc("GET /dashboard/telegram", s.dashTelegram)
 	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
 	mux.HandleFunc("GET /dashboard/health", s.dashHealth)
 	mux.HandleFunc("GET /dashboard/invites", s.dashInvites)
@@ -103,6 +105,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/email/refresh", s.refreshEmail)
 	mux.HandleFunc("POST /dashboard/email/clear", s.clearEmail)
 	mux.HandleFunc("POST /dashboard/email/domains/toggle", s.toggleEmailDomain)
+	mux.HandleFunc("POST /dashboard/telegram", s.saveTelegram)
+	mux.HandleFunc("POST /dashboard/telegram/discover", s.discoverTelegram)
+	mux.HandleFunc("POST /dashboard/telegram/clear", s.clearTelegram)
 	mux.HandleFunc("POST /dashboard/people", s.createPerson)
 	mux.HandleFunc("POST /dashboard/people/{id}", s.updatePerson)
 	mux.HandleFunc("POST /dashboard/people/{id}/delete", s.deletePerson)
@@ -142,6 +147,11 @@ type pageData struct {
 	EmailConfigured     bool
 	EmailDomainRows     []emailDomainView
 	EmailKeySet         bool
+	// Telegram module
+	TelegramConfigured  bool
+	TelegramBotUsername string
+	TelegramDefaultChat string
+	TelegramChatsText   string // textarea: one "id" or "id|label" per line
 	People              []personView
 	PeopleCount         int
 	// Health module
@@ -492,6 +502,9 @@ func (s *Server) dashMercadona(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashEmail(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "email", "Email", "email.html")
 }
+func (s *Server) dashTelegram(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "telegram", "Telegram", "telegram.html")
+}
 func (s *Server) dashPeople(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "people", "People", "people.html")
 }
@@ -626,6 +639,28 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.DetailsLine = strings.Join(bits, " · ")
 			}
 			mv.Ready = m.Enabled
+		case "telegram":
+			mv.Path = "/dashboard/telegram"
+			ts, ok, _ := s.Store.GetTelegramSettings(ctx, u.ID)
+			if !ok {
+				mv.Summary = "No bot token"
+			} else {
+				bot := strings.TrimPrefix(ts.BotUsername, "@")
+				if bot == "" {
+					bot = "bot"
+				}
+				n := len(ts.AllowedChats)
+				if n == 0 && ts.DefaultChatID != "" {
+					n = 1
+				}
+				mv.Summary = fmt.Sprintf("@%s · %d chat(s)", bot, n)
+				if ts.DefaultChatID != "" {
+					mv.DetailsLine = "default " + ts.DefaultChatID
+				} else {
+					mv.DetailsLine = "no default chat"
+				}
+			}
+			mv.Ready = m.Enabled && ok && (ts.DefaultChatID != "" || len(ts.AllowedChats) > 0)
 		default:
 			mv.Path = "/dashboard/" + m.ModuleID
 		}
@@ -661,6 +696,20 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				Name: d.Name, Status: d.Status, Sending: d.Sending, Receiving: d.Receiving, Enabled: d.Enabled,
 			})
 		}
+	}
+	if ts, tok, _ := s.Store.GetTelegramSettings(ctx, u.ID); tok {
+		data.TelegramConfigured = true
+		data.TelegramBotUsername = strings.TrimPrefix(ts.BotUsername, "@")
+		data.TelegramDefaultChat = ts.DefaultChatID
+		var lines []string
+		for _, c := range ts.AllowedChats {
+			if c.Label != "" && c.Label != "default" {
+				lines = append(lines, c.ID+"|"+c.Label)
+			} else {
+				lines = append(lines, c.ID)
+			}
+		}
+		data.TelegramChatsText = strings.Join(lines, "\n")
 	}
 	if plist, err := s.Store.ListPeople(ctx, u.ID, "", 100); err == nil {
 		data.PeopleCount = len(plist)
@@ -1226,6 +1275,153 @@ func (s *Server) clearEmail(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/email", http.StatusFound)
+}
+
+func parseTelegramChatsText(raw string) []store.TelegramChat {
+	var out []store.TelegramChat
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		id, label := line, ""
+		if i := strings.IndexByte(line, '|'); i >= 0 {
+			id = strings.TrimSpace(line[:i])
+			label = strings.TrimSpace(line[i+1:])
+		} else if i := strings.IndexByte(line, ' '); i >= 0 {
+			// "id label with spaces"
+			id = strings.TrimSpace(line[:i])
+			label = strings.TrimSpace(line[i+1:])
+		}
+		if id == "" {
+			continue
+		}
+		out = append(out, store.TelegramChat{ID: id, Label: label})
+	}
+	return out
+}
+
+func (s *Server) saveTelegram(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	tokenIn := strings.TrimSpace(r.FormValue("bot_token"))
+	defaultChat := strings.TrimSpace(r.FormValue("default_chat_id"))
+	chats := parseTelegramChatsText(r.FormValue("allowed_chats"))
+
+	var plainToken string
+	var enc string
+	var botUsername string
+	if tokenIn == "" {
+		prev, ok, _ := s.Store.GetTelegramSettings(r.Context(), u.ID)
+		if !ok {
+			http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("bot token required"), http.StatusFound)
+			return
+		}
+		var err error
+		plainToken, err = s.Box.Open(prev.BotTokenEnc)
+		if err != nil {
+			http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("re-enter bot token"), http.StatusFound)
+			return
+		}
+		enc = prev.BotTokenEnc
+		botUsername = prev.BotUsername
+		// Keep previous chats if textarea empty and default not changing wholesale
+		if strings.TrimSpace(r.FormValue("allowed_chats")) == "" && len(chats) == 0 {
+			chats = prev.AllowedChats
+		}
+		if defaultChat == "" {
+			defaultChat = prev.DefaultChatID
+		}
+	} else {
+		plainToken = tokenIn
+		var err error
+		enc, err = s.Box.Seal(tokenIn)
+		if err != nil {
+			http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(err.Error()), http.StatusFound)
+			return
+		}
+	}
+
+	me, err := telegrammod.GetMe(r.Context(), plainToken)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("token invalid: "+err.Error()), http.StatusFound)
+		return
+	}
+	botUsername = me.Username
+	defaultChat, chats = store.NormalizeTelegramChats(defaultChat, chats)
+
+	if err := s.Store.SaveTelegramSettings(r.Context(), u.ID, enc, botUsername, defaultChat, chats); err != nil {
+		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "telegram", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	flash := "Telegram saved"
+	if botUsername != "" {
+		flash = "Telegram saved (@" + botUsername + ")"
+	}
+	http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(flash), http.StatusFound)
+}
+
+func (s *Server) discoverTelegram(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	prev, ok, _ := s.Store.GetTelegramSettings(r.Context(), u.ID)
+	if !ok {
+		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("save bot token first"), http.StatusFound)
+		return
+	}
+	token, err := s.Box.Open(prev.BotTokenEnc)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("decrypt token failed"), http.StatusFound)
+		return
+	}
+	found, err := telegrammod.DiscoverChats(r.Context(), token)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if len(found) == 0 {
+		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("no chats found — open the bot in Telegram and send /start, then Discover again"), http.StatusFound)
+		return
+	}
+	// Merge discovered chats into allowlist; set default if empty.
+	chats := append([]store.TelegramChat{}, prev.AllowedChats...)
+	for _, c := range found {
+		chats = append(chats, store.TelegramChat{ID: c.ID, Label: telegrammod.FormatChatLabel(c)})
+	}
+	def := prev.DefaultChatID
+	if def == "" && len(found) > 0 {
+		def = found[0].ID
+	}
+	def, chats = store.NormalizeTelegramChats(def, chats)
+	if err := s.Store.UpdateTelegramMeta(r.Context(), u.ID, prev.BotUsername, def, chats); err != nil {
+		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(fmt.Sprintf("Discovered %d chat(s)", len(found))), http.StatusFound)
+}
+
+func (s *Server) clearTelegram(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = s.Store.DeleteTelegramSettings(r.Context(), u.ID)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/telegram", http.StatusFound)
 }
 
 func parseOptionalFloat(s string) (*float64, error) {

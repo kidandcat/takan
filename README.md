@@ -19,6 +19,7 @@ Integrations live under `modules/` as subpackages:
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get` | Resend API key; enable domains |
 | **People** | `modules/people` | `people_list` / `get` / `add` / `update` / `delete` | Personal CRM in panel |
 | **Health** | `modules/health` | `health_status`, `health_profile_set`, `health_log_*`, `health_issue_*` | Profile + daily diary + injuries |
+| **Telegram** | `modules/telegram` | `telegram_chats`, `telegram_send` | Bot token + allowed chats in panel |
 | **meta** | `modules` | `takan_status` | Always on — all modules + readiness |
 
 When the tool set changes, Takan may return **401** until the client refreshes OAuth so MCP clients that ignore `tools/list_changed` still reload tools.
