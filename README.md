@@ -18,7 +18,7 @@ Integrations live under `modules/` as subpackages:
 | **Mercadona** | `modules/mercadona` | `mercadona_search`, `mercadona_add`, `mercadona_cart` | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get` | Resend API key; enable domains |
 | **People** | `modules/people` | `people_list` / `get` / `add` / `update` / `delete` | Personal CRM in panel |
-| **Health** | `modules/health` | `health_status`, `health_profile_set`, `health_log_*`, `health_issue_*` | Profile + daily diary + injuries |
+| **Health** | `modules/health` | `health_status`, `health_log`, `health_issue` | Profile + daily diary + injuries |
 | **Telegram** | `modules/telegram` | `telegram_chats`, `telegram_send` | Bot token + allowed chats in panel |
 | **meta** | `modules` | `takan_status` | Always on — all modules + readiness |
 
