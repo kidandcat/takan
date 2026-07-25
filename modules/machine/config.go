@@ -16,6 +16,9 @@ const PromptPlaceholder = "{{prompt}}"
 
 // Config is per-user machine module settings (stored in user_modules.config_json).
 type Config struct {
+	// BashEnabled gates the machine_bash tool. Default true (see ParseConfig).
+	// When false, MCP clients only get AI agent tools (if enabled) — no direct shell.
+	BashEnabled bool `json:"bash_enabled"`
 	// AITasksEnabled gates machine_ai_* tools.
 	AITasksEnabled bool     `json:"ai_tasks_enabled"`
 	Runners        []Runner `json:"runners"`
@@ -37,6 +40,7 @@ type Runner struct {
 // DefaultConfig returns presets for Claude Code and Grok Build (both enabled).
 func DefaultConfig() Config {
 	return Config{
+		BashEnabled:    true,
 		AITasksEnabled: true,
 		Runners: []Runner{
 			{
@@ -72,16 +76,24 @@ func ParseConfig(raw string) Config {
 	if raw == "" || raw == "{}" {
 		return DefaultConfig()
 	}
+	// Probe keys so missing fields keep defaults (e.g. configs saved before bash_enabled).
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		return DefaultConfig()
+	}
 	var c Config
 	if err := json.Unmarshal([]byte(raw), &c); err != nil {
 		return DefaultConfig()
+	}
+	if _, ok := probe["bash_enabled"]; !ok {
+		c.BashEnabled = true
 	}
 	// If someone saved enabled=false with no runners, keep that; if runners empty
 	// and never configured meaningfully, seed presets.
 	if len(c.Runners) == 0 {
 		def := DefaultConfig()
 		c.Runners = def.Runners
-		// Preserve explicit AITasksEnabled even when runners were empty.
+		// Preserve explicit AITasksEnabled / BashEnabled even when runners were empty.
 	}
 	c.normalize()
 	return c

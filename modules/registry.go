@@ -166,6 +166,10 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			}
 		}
 		cfg, _ := machinemod.LoadConfig(ctx, p.Store, userID)
+		bash := "bash off"
+		if cfg.BashEnabled {
+			bash = "bash on"
+		}
 		ai := "AI tasks off"
 		if cfg.AITasksEnabled {
 			n := len(cfg.EnabledRunners())
@@ -175,7 +179,7 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 		if len(names) > 0 && len(names) <= 4 {
 			detail += " (" + strings.Join(names, ", ") + ")"
 		}
-		detail += "; " + ai
+		detail += "; " + bash + "; " + ai
 		return online > 0, detail
 	case "mercadona":
 		email, _, postal, ok, err := p.Store.GetMercadonaCreds(ctx, userID)

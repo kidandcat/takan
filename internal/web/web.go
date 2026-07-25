@@ -97,6 +97,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/invites/admin", s.adminInvitePolicy)
 	mux.HandleFunc("POST /dashboard/machines", s.createMachine)
 	mux.HandleFunc("POST /dashboard/machines/{id}/delete", s.deleteMachine)
+	mux.HandleFunc("POST /dashboard/machines/bash", s.saveMachineBash)
 	mux.HandleFunc("POST /dashboard/machines/ai", s.saveMachineAI)
 	mux.HandleFunc("POST /dashboard/machines/ai/delete-runner", s.deleteMachineAIRunner)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
@@ -136,7 +137,8 @@ type pageData struct {
 	Modules             []modView
 	Machines            []machView
 	InstallCmd          string
-	// Machine AI tasks (panel)
+	// Machine tool gates (panel)
+	BashEnabled    bool
 	AITasksEnabled bool
 	AIRunners      []machineAIRunnerView
 	// AITabActive selects the AI tasks tab on narrow screens (after AI save/error).
@@ -453,6 +455,7 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 			http.SetCookie(w, &http.Cookie{Name: "takan_install", Value: "", Path: "/", MaxAge: -1})
 		}
 		cfg, _ := machinemod.LoadConfig(r.Context(), s.Store, u.ID)
+		data.BashEnabled = cfg.BashEnabled
 		data.AITasksEnabled = cfg.AITasksEnabled
 		for _, rn := range cfg.Runners {
 			data.AIRunners = append(data.AIRunners, machineAIRunnerView{
@@ -975,13 +978,42 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard/machines", http.StatusFound)
 }
 
+func (s *Server) saveMachineBash(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	cfg, err := machinemod.LoadConfig(r.Context(), s.Store, u.ID)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		return
+	}
+	cfg.BashEnabled = r.FormValue("bash_enabled") == "1"
+	if err := machinemod.SaveConfig(r.Context(), s.Store, u.ID, cfg); err != nil {
+		http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	msg := "Direct bash enabled"
+	if !cfg.BashEnabled {
+		msg = "Direct bash disabled — MCP agents use AI runners only"
+	}
+	http.Redirect(w, r, "/dashboard/machines?flash="+urlQuery(msg), http.StatusFound)
+}
+
 func (s *Server) saveMachineAI(w http.ResponseWriter, r *http.Request) {
 	u := s.requireUser(w, r)
 	if u == nil {
 		return
 	}
 	_ = r.ParseForm()
+	// Preserve bash gate when saving AI settings (separate form).
+	existing, _ := machinemod.LoadConfig(r.Context(), s.Store, u.ID)
 	cfg := machinemod.Config{
+		BashEnabled:    existing.BashEnabled,
 		AITasksEnabled: r.FormValue("ai_tasks_enabled") == "1",
 	}
 	ids := r.Form["runner_id"]

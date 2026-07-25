@@ -18,7 +18,7 @@
   <div class="page-tabs" role="tablist" aria-label="Machines sections">
     <label for="mtab-machines" role="tab">
       Machines
-      <span class="tab-meta">{{.MachOnlineCount}} online · {{.MachTotalCount}} total</span>
+      <span class="tab-meta">{{.MachOnlineCount}} online · {{if .BashEnabled}}bash on{{else}}bash off{{end}}</span>
     </label>
     <label for="mtab-tasks" role="tab">
       AI tasks
@@ -37,6 +37,25 @@
         {{.MachOnlineCount}} online
       </span>
     </div>
+
+    <form method="post" action="/dashboard/machines/bash" class="form-stack" style="margin-bottom:.85rem">
+      <div class="machine-row ai-enable">
+        <div>
+          <div class="name">Enable direct bash</div>
+          <div class="faint">Off → hide <code>machine_bash</code> from MCP. Agents act only via AI runners (if enabled).</div>
+        </div>
+        <label class="switch" title="Enable direct bash">
+          <input type="checkbox" name="bash_enabled" value="1" {{if .BashEnabled}}checked{{end}}
+            onchange="this.form.submit()"/>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <noscript>
+        <div class="row">
+          <button type="submit">Save bash setting</button>
+        </div>
+      </noscript>
+    </form>
 
     {{if .Machines}}
     <div class="machine-list">

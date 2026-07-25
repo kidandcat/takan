@@ -19,6 +19,8 @@ type BashLimiter func(userID string) bool
 // Factory returns machine_* tools.
 func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx context.Context, userID string) []mcp.RegisteredTool {
 	return func(ctx context.Context, userID string) []mcp.RegisteredTool {
+		cfg, _ := LoadConfig(ctx, st, userID)
+
 		tools := []mcp.RegisteredTool{
 			{
 				Tool: mcp.Tool{
@@ -48,12 +50,16 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					return string(b), nil
 				},
 			},
-			{
+		}
+
+		if cfg.BashEnabled {
+			tools = append(tools, mcp.RegisteredTool{
 				Tool: mcp.Tool{
 					Name: "machine_bash",
 					Description: "Run a shell command on a registered machine via its takan-agent. " +
 						"The agent must be online. Prefer short non-interactive commands. " +
-						"Pass machine name from machine_list. For long-running AI work use machine_ai_run instead.",
+						"Pass machine name from machine_list. For long-running AI work use machine_ai_run instead. " +
+						"Disable in Takan panel → Machines if you want AI-agent-only access.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -67,6 +73,13 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					cfg, err := LoadConfig(ctx, st, userID)
+					if err != nil {
+						return "", err
+					}
+					if !cfg.BashEnabled {
+						return "", fmt.Errorf("direct bash is disabled — enable it in Takan panel → Machines, or use machine_ai_run")
+					}
 					if limit != nil && !limit(userID) {
 						return "", fmt.Errorf("rate limit: too many machine_bash calls — try again shortly")
 					}
@@ -115,11 +128,10 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					}
 					return b.String(), nil
 				},
-			},
+			})
 		}
 
-		cfg, err := LoadConfig(ctx, st, userID)
-		if err != nil || !cfg.AITasksEnabled {
+		if !cfg.AITasksEnabled {
 			return tools
 		}
 		enabled := cfg.EnabledRunners()

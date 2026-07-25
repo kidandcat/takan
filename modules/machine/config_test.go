@@ -7,6 +7,9 @@ func TestParseConfigDefaults(t *testing.T) {
 	if !c.AITasksEnabled {
 		t.Fatal("default AI tasks should be enabled")
 	}
+	if !c.BashEnabled {
+		t.Fatal("default bash should be enabled")
+	}
 	if len(c.Runners) < 2 {
 		t.Fatalf("expected builtin runners, got %d", len(c.Runners))
 	}
@@ -24,6 +27,7 @@ func TestParseConfigDefaults(t *testing.T) {
 
 func TestParseConfigPreservesCustom(t *testing.T) {
 	raw := `{
+	  "bash_enabled": false,
 	  "ai_tasks_enabled": false,
 	  "runners": [
 	    {"id":"claude","name":"Claude","enabled":false,"command":"claude -p {{prompt}}","builtin":true},
@@ -32,7 +36,10 @@ func TestParseConfigPreservesCustom(t *testing.T) {
 	}`
 	c := ParseConfig(raw)
 	if c.AITasksEnabled {
-		t.Fatal("expected disabled")
+		t.Fatal("expected AI disabled")
+	}
+	if c.BashEnabled {
+		t.Fatal("expected bash disabled")
 	}
 	r, ok := c.RunnerByID("mine")
 	if !ok || !r.Enabled || r.Command != "mycli {{prompt}}" {
@@ -41,5 +48,22 @@ func TestParseConfigPreservesCustom(t *testing.T) {
 	en := c.EnabledRunners()
 	if len(en) != 1 || en[0].ID != "mine" {
 		t.Fatalf("enabled: %+v", en)
+	}
+}
+
+func TestParseConfigMissingBashEnabledDefaultsTrue(t *testing.T) {
+	// Configs saved before bash_enabled existed must keep direct bash on.
+	raw := `{
+	  "ai_tasks_enabled": true,
+	  "runners": [
+	    {"id":"claude","name":"Claude","enabled":true,"command":"claude -p {{prompt}}","builtin":true}
+	  ]
+	}`
+	c := ParseConfig(raw)
+	if !c.BashEnabled {
+		t.Fatal("missing bash_enabled should default to true")
+	}
+	if !c.AITasksEnabled {
+		t.Fatal("expected AI enabled")
 	}
 }
