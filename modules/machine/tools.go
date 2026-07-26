@@ -184,10 +184,12 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 			mcp.RegisteredTool{
 				Tool: mcp.Tool{
 					Name: "machine_ai_run",
-					Description: "Start a long-running AI job on a machine (returns immediately with job_id). " +
+					Description: "Launch an autonomous AI agent on a machine. Returns immediately with job_id — " +
+						"do not wait for completion or poll/monitor the job; fire and forget. " +
+						"State a clear high-level goal only; agents are capable and do not need step-by-step instructions. " +
 						"Pick a runner id configured in the Takan panel (not free-form agent names). " +
 						"Enabled runners: " + runnersBlurb + ". " +
-						"Poll with machine_ai_status. The runner command template injects {{prompt}}.",
+						"The runner command template injects {{prompt}}.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -255,7 +257,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"command": r.Command,
 						"status":  res.Status,
 						"pid":     res.PID,
-						"hint":    "Poll with machine_ai_status(machine, job_id).",
+						"hint":    "Job runs autonomously; no need to wait or poll. Optional: machine_ai_status if you later need status/logs.",
 					}
 					if res.Error != "" {
 						out["error"] = res.Error
