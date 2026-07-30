@@ -1,0 +1,190 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>SIP</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:56ch">
+      Android phones (SIM) as cellular edges for Grok Voice. Phones connect <strong>outbound only</strong>
+      to this proxy — no public IP on the handset. Multiple gateways per account.
+    </p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+{{if .SIPDeviceToken}}
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Device token (shown once)</h3>
+        <p class="muted">Paste into the Android gateway app. Not stored in plaintext here.</p>
+      </div>
+      <span class="pill on"><span class="live"></span> Copy now</span>
+    </div>
+    <div class="install-box">
+      <p class="ok">WebSocket URL</p>
+      <div class="code-wrap">
+        <pre id="sip-connect">{{.SIPDeviceConnect}}</pre>
+        <button type="button" class="copy-btn" onclick="copyText('sip-connect', this)">Copy</button>
+      </div>
+      <p class="muted" style="margin-top:.75rem">Token only</p>
+      <div class="code-wrap">
+        <pre id="sip-token">{{.SIPDeviceToken}}</pre>
+        <button type="button" class="copy-btn" onclick="copyText('sip-token', this)">Copy</button>
+      </div>
+    </div>
+  </div>
+</section>
+{{end}}
+
+<section class="section split-two">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Grok Voice</h3>
+        <p class="muted">xAI API key stays encrypted. Bridge runs on this server.</p>
+      </div>
+      {{if .SIPHasKey}}
+        <span class="pill on"><span class="live"></span> Key saved</span>
+      {{else}}
+        <span class="pill off">No key</span>
+      {{end}}
+    </div>
+
+    <form method="post" action="/dashboard/sip" class="form-stack" style="max-width:100%">
+      <input type="hidden" name="auto_answer_present" value="1"/>
+      <div>
+        <label for="xai_api_key">xAI API key</label>
+        <input id="xai_api_key" name="xai_api_key" type="password"
+          placeholder="{{if .SIPHasKey}}leave blank to keep current key{{else}}xai-…{{end}}"
+          autocomplete="off" {{if not .SIPHasKey}}required{{end}}/>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.75rem">
+        <div>
+          <label for="voice">Voice</label>
+          <input id="voice" name="voice" type="text" value="{{.SIPVoice}}" placeholder="eve"/>
+        </div>
+        <div>
+          <label for="audio_rate">Audio rate (Hz)</label>
+          <select id="audio_rate" name="audio_rate">
+            <option value="8000" {{if eq .SIPAudioRate 8000}}selected{{end}}>8000</option>
+            <option value="16000" {{if eq .SIPAudioRate 16000}}selected{{end}}>16000</option>
+            <option value="24000" {{if eq .SIPAudioRate 24000}}selected{{end}}>24000</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label for="instructions">Agent instructions</label>
+        <textarea id="instructions" name="instructions" rows="4">{{.SIPInstructions}}</textarea>
+      </div>
+      <div class="machine-row ai-enable">
+        <div>
+          <div class="name">Auto-answer</div>
+          <div class="faint">When a gateway reports ringing, send <code>call.answer</code>.</div>
+        </div>
+        <label class="switch" title="Auto-answer">
+          <input type="checkbox" name="auto_answer" value="1" {{if .SIPAutoAnswer}}checked{{end}}/>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div>
+        <label for="bridge_mode">Bridge mode</label>
+        <select id="bridge_mode" name="bridge_mode">
+          <option value="realtime" {{if eq .SIPBridgeMode "realtime"}}selected{{end}}>Realtime (PCM ↔ Grok WS)</option>
+          <option value="sip" {{if eq .SIPBridgeMode "sip"}}selected{{end}}>SIP UAC → sip.voice.x.ai (planned)</option>
+        </select>
+        <p class="muted" style="margin-top:.35rem;font-size:.8rem">
+          Default is Realtime. SIP UAC mode will INVITE from this server (stable IP), not from the phone.
+        </p>
+      </div>
+      <div class="row">
+        <button type="submit">{{if .SIPConfigured}}Save{{else}}Save &amp; enable{{end}}</button>
+        {{if .SIPHasKey}}
+        <button type="submit" formaction="/dashboard/sip/clear" class="secondary" formnovalidate
+          onclick="return confirm('Clear xAI API key from SIP settings?')">Clear key</button>
+        {{end}}
+      </div>
+    </form>
+
+    <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <h3 style="margin-bottom:.35rem">MCP tools</h3>
+      <p class="muted" style="margin-bottom:.5rem">
+        When enabled: <code>sip_status</code>, <code>sip_devices</code>, <code>sip_calls</code>, <code>sip_hangup</code>.
+        Included in <code>takan_status</code>.
+      </p>
+      <p class="faint">Device WS base: <code>{{.SIPWSURL}}</code></p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Phone gateways</h3>
+        <p class="muted">Each device is one Android + SIM. Outbound WSS only.</p>
+      </div>
+      <span class="pill {{if gt .SIPOnlineCount 0}}on{{else}}neutral{{end}}">
+        {{if gt .SIPOnlineCount 0}}<span class="live"></span>{{end}}
+        {{.SIPOnlineCount}} online
+      </span>
+    </div>
+
+    {{if .SIPDevices}}
+    <div class="machine-list">
+      {{range .SIPDevices}}
+      <div class="machine-row">
+        <div>
+          <div class="row" style="gap:.45rem">
+            <span class="name">{{.Name}}</span>
+            {{if .Online}}
+              <span class="pill on"><span class="live"></span> Online</span>
+            {{else}}
+              <span class="pill off">Offline</span>
+            {{end}}
+          </div>
+          <div class="faint" style="margin-top:.2rem">
+            {{if .SimE164}}{{.SimE164}}{{else}}no SIM set{{end}}
+            {{if .LastSeen}} · seen {{.LastSeen}}{{end}}
+          </div>
+        </div>
+        <form method="post" action="/dashboard/sip/devices/{{.ID}}/delete"
+          onsubmit="return confirm('Remove gateway {{.Name}}?')">
+          <button type="submit" class="secondary">Remove</button>
+        </form>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">No gateways yet. Add one and put the token on the phone.</div>
+    {{end}}
+
+    <h3 class="subhead">Add gateway</h3>
+    <p class="subhead-help">Name is the device slug (e.g. honor-1). Token shown once.</p>
+    <form method="post" action="/dashboard/sip/devices" class="form-grid">
+      <div>
+        <label for="sip-name">Name</label>
+        <input id="sip-name" name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="honor-1"/>
+      </div>
+      <div>
+        <label for="sip-sim">SIM E.164</label>
+        <input id="sip-sim" name="sim_e164" type="text" placeholder="+34600…" autocomplete="off"/>
+      </div>
+      <button type="submit">Create device</button>
+    </form>
+
+    {{if .SIPCalls}}
+    <h3 class="subhead">Active calls</h3>
+    <div class="machine-list">
+      {{range .SIPCalls}}
+      <div class="machine-row">
+        <div class="faint">
+          {{index . "device_name"}} · {{index . "state"}} · {{index . "from"}} → {{index . "to"}}
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+</section>
+{{end}}

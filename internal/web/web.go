@@ -22,6 +22,7 @@ import (
 	"github.com/kidandcat/takan/modules"
 	emailmod "github.com/kidandcat/takan/modules/email"
 	machinemod "github.com/kidandcat/takan/modules/machine"
+	sipmod "github.com/kidandcat/takan/modules/sip"
 	telegrammod "github.com/kidandcat/takan/modules/telegram"
 )
 
@@ -48,7 +49,9 @@ type Server struct {
 	OnMercadonaClear func(ctx context.Context, userID string) error
 	// OnToolsChanged notifies MCP clients (tools/list_changed) after module changes.
 	OnToolsChanged func(userID string)
-	tmpl           *template.Template
+	// SIPHub optional: online gateways + active calls for the SIP module panel.
+	SIPHub *sipmod.Hub
+	tmpl   *template.Template
 }
 
 func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL, dataDir string, allowRegister bool, defaultInviteQuota int) (*Server, error) {
@@ -78,6 +81,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
 	mux.HandleFunc("GET /dashboard/telegram", s.dashTelegram)
+	mux.HandleFunc("GET /dashboard/sip", s.dashSIP)
 	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
 	mux.HandleFunc("GET /dashboard/health", s.dashHealth)
 	mux.HandleFunc("GET /dashboard/invites", s.dashInvites)
@@ -109,6 +113,10 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/telegram", s.saveTelegram)
 	mux.HandleFunc("POST /dashboard/telegram/discover", s.discoverTelegram)
 	mux.HandleFunc("POST /dashboard/telegram/clear", s.clearTelegram)
+	mux.HandleFunc("POST /dashboard/sip", s.saveSIP)
+	mux.HandleFunc("POST /dashboard/sip/clear", s.clearSIP)
+	mux.HandleFunc("POST /dashboard/sip/devices", s.createSIPDevice)
+	mux.HandleFunc("POST /dashboard/sip/devices/{id}/delete", s.deleteSIPDevice)
 	mux.HandleFunc("POST /dashboard/people", s.createPerson)
 	mux.HandleFunc("POST /dashboard/people/{id}", s.updatePerson)
 	mux.HandleFunc("POST /dashboard/people/{id}/delete", s.deletePerson)
@@ -154,7 +162,21 @@ type pageData struct {
 	TelegramBotUsername string
 	TelegramDefaultChat string
 	TelegramChatsText   string // textarea: one "id" or "id|label" per line
-	People              []personView
+	// SIP module (phone gateways → Grok Voice)
+	SIPConfigured    bool
+	SIPHasKey        bool
+	SIPVoice         string
+	SIPInstructions  string
+	SIPAutoAnswer    bool
+	SIPAudioRate     int
+	SIPBridgeMode    string
+	SIPDevices       []sipDeviceView
+	SIPOnlineCount   int
+	SIPCalls         []map[string]any
+	SIPWSURL         string
+	SIPDeviceToken   string // flash: token shown once after create
+	SIPDeviceConnect string // flash: full wss connect URL
+	People           []personView
 	PeopleCount         int
 	// Health module
 	HealthProfile     healthProfileView
@@ -223,6 +245,12 @@ type healthLogView struct {
 
 type healthIssueView struct {
 	ID, Title, Status, StartedOn, EndedOn, BodyPart, Diagnosis, Treatment, Notes string
+}
+
+type sipDeviceView struct {
+	ID, Name, SimE164 string
+	Online            bool
+	LastSeen          string
 }
 
 type modView struct {
@@ -475,6 +503,18 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 			http.SetCookie(w, &http.Cookie{Name: "takan_invite_code", Value: "", Path: "/", MaxAge: -1})
 		}
 	}
+	if nav == "sip" {
+		if c, err := r.Cookie("takan_sip_token"); err == nil && c.Value != "" {
+			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
+				data.SIPDeviceToken = string(raw)
+				wsBase := strings.TrimSuffix(s.PublicURL, "/")
+				wsBase = strings.Replace(wsBase, "https://", "wss://", 1)
+				wsBase = strings.Replace(wsBase, "http://", "ws://", 1)
+				data.SIPDeviceConnect = wsBase + "/sip/ws?token=" + string(raw)
+			}
+			http.SetCookie(w, &http.Cookie{Name: "takan_sip_token", Value: "", Path: "/", MaxAge: -1})
+		}
+	}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		data.Flash = f
 		lf := strings.ToLower(f)
@@ -507,6 +547,9 @@ func (s *Server) dashEmail(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) dashTelegram(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "telegram", "Telegram", "telegram.html")
+}
+func (s *Server) dashSIP(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "sip", "SIP", "sip.html")
 }
 func (s *Server) dashPeople(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "people", "People", "people.html")
@@ -664,6 +707,33 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				}
 			}
 			mv.Ready = m.Enabled && ok && (ts.DefaultChatID != "" || len(ts.AllowedChats) > 0)
+		case "sip":
+			mv.Path = "/dashboard/sip"
+			settings, sok, _ := s.Store.GetSIPSettings(ctx, u.ID)
+			devs, _ := s.Store.ListSIPDevices(ctx, u.ID)
+			onlineN := 0
+			for _, d := range devs {
+				on := s.SIPHub != nil && s.SIPHub.Online(d.ID)
+				kind := "offline"
+				if on {
+					onlineN++
+					kind = "online"
+				}
+				label := d.Name
+				if d.SimE164 != "" {
+					label += " " + d.SimE164
+				}
+				mv.Facts = append(mv.Facts, modFact{Label: label, Kind: kind})
+			}
+			if !sok || !settings.HasKey {
+				mv.Summary = "No xAI key"
+			} else if len(devs) == 0 {
+				mv.Summary = "Key set · no phones"
+			} else {
+				mv.Summary = fmt.Sprintf("%d online · %d total", onlineN, len(devs))
+				mv.DetailsLine = "voice " + settings.Voice
+			}
+			mv.Ready = m.Enabled && sok && settings.HasKey && len(devs) > 0
 		default:
 			mv.Path = "/dashboard/" + m.ModuleID
 		}
@@ -713,6 +783,45 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			}
 		}
 		data.TelegramChatsText = strings.Join(lines, "\n")
+	}
+	// SIP module panel data
+	wsBase := strings.TrimSuffix(s.PublicURL, "/")
+	wsBase = strings.Replace(wsBase, "https://", "wss://", 1)
+	wsBase = strings.Replace(wsBase, "http://", "ws://", 1)
+	data.SIPWSURL = wsBase + "/sip/ws"
+	data.SIPVoice = "eve"
+	data.SIPAutoAnswer = true
+	data.SIPAudioRate = 16000
+	data.SIPBridgeMode = "realtime"
+	data.SIPInstructions = "You are a helpful phone assistant. Speak concisely. Match the caller's language."
+	if ss, sok, _ := s.Store.GetSIPSettings(ctx, u.ID); sok {
+		data.SIPConfigured = true
+		data.SIPHasKey = ss.HasKey
+		data.SIPVoice = ss.Voice
+		data.SIPAutoAnswer = ss.AutoAnswer
+		data.SIPAudioRate = ss.AudioRate
+		data.SIPBridgeMode = ss.BridgeMode
+		if ss.Instructions != "" {
+			data.SIPInstructions = ss.Instructions
+		}
+	}
+	if sipDevs, err := s.Store.ListSIPDevices(ctx, u.ID); err == nil {
+		for _, d := range sipDevs {
+			on := s.SIPHub != nil && s.SIPHub.Online(d.ID)
+			if on {
+				data.SIPOnlineCount++
+			}
+			ls := ""
+			if d.LastSeen != nil {
+				ls = d.LastSeen.UTC().Format("2006-01-02 15:04")
+			}
+			data.SIPDevices = append(data.SIPDevices, sipDeviceView{
+				ID: d.ID, Name: d.Name, SimE164: d.SimE164, Online: on, LastSeen: ls,
+			})
+		}
+	}
+	if s.SIPHub != nil {
+		data.SIPCalls = s.SIPHub.Calls().Snapshot(u.ID)
 	}
 	if plist, err := s.Store.ListPeople(ctx, u.ID, "", 100); err == nil {
 		data.PeopleCount = len(plist)
@@ -1454,6 +1563,118 @@ func (s *Server) clearTelegram(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/telegram", http.StatusFound)
+}
+
+func (s *Server) saveSIP(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	keyIn := strings.TrimSpace(r.FormValue("xai_api_key"))
+	voice := strings.TrimSpace(r.FormValue("voice"))
+	if voice == "" {
+		voice = "eve"
+	}
+	instructions := strings.TrimSpace(r.FormValue("instructions"))
+	autoAnswer := r.FormValue("auto_answer") == "1" || r.FormValue("auto_answer") == "on"
+	// checkbox: if form always posts, use presence; allow hidden field
+	if r.FormValue("auto_answer_present") == "1" {
+		autoAnswer = r.FormValue("auto_answer") == "1"
+	}
+	audioRate, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("audio_rate")))
+	if audioRate != 8000 && audioRate != 16000 && audioRate != 24000 {
+		audioRate = 16000
+	}
+	bridgeMode := strings.TrimSpace(r.FormValue("bridge_mode"))
+	if bridgeMode != "sip" {
+		bridgeMode = "realtime"
+	}
+
+	enc := ""
+	if keyIn != "" {
+		var err error
+		enc, err = s.Box.Seal(keyIn)
+		if err != nil {
+			http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery(err.Error()), http.StatusFound)
+			return
+		}
+	} else {
+		// Keep existing key: SaveSIPSettings preserves empty enc on update.
+		prev, ok, _ := s.Store.GetSIPSettings(r.Context(), u.ID)
+		if !ok || !prev.HasKey {
+			http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("xAI API key required"), http.StatusFound)
+			return
+		}
+	}
+
+	if err := s.Store.SaveSIPSettings(r.Context(), u.ID, enc, voice, instructions, bridgeMode, autoAnswer, audioRate); err != nil {
+		http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "sip", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("SIP settings saved"), http.StatusFound)
+}
+
+func (s *Server) clearSIP(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = s.Store.ClearSIPSettings(r.Context(), u.ID)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("SIP API key cleared"), http.StatusFound)
+}
+
+func (s *Server) createSIPDevice(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	name := strings.TrimSpace(r.FormValue("name"))
+	sim := strings.TrimSpace(r.FormValue("sim_e164"))
+	dev, token, err := s.Store.CreateSIPDevice(r.Context(), u.ID, name, sim)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "sip", true)
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	// Show token once via short-lived cookie (same pattern as machine install).
+	http.SetCookie(w, &http.Cookie{
+		Name:     "takan_sip_token",
+		Value:    base64.RawURLEncoding.EncodeToString([]byte(token)),
+		Path:     "/",
+		MaxAge:   120,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	_ = dev
+	http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("Device created — copy the token now"), http.StatusFound)
+}
+
+func (s *Server) deleteSIPDevice(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.Store.DeleteSIPDevice(r.Context(), u.ID, id); err != nil {
+		http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery(err.Error()), http.StatusFound)
+		return
+	}
+	if s.OnToolsChanged != nil {
+		s.OnToolsChanged(u.ID)
+	}
+	http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("Device removed"), http.StatusFound)
 }
 
 func parseOptionalFloat(s string) (*float64, error) {

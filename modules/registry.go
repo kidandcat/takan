@@ -27,6 +27,7 @@ var Catalog = []Info{
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
 	{ID: "health", Name: "Health", Description: "Personal health: profile, daily diary, injuries and conditions."},
 	{ID: "telegram", Name: "Telegram", Description: "Send messages via your Telegram bot (token + allowed chats in panel)."},
+	{ID: "sip", Name: "SIP", Description: "Android SIM gateways → Grok Voice. Central proxy; phones connect outbound only."},
 }
 
 // Provider builds tools for enabled modules.
@@ -43,6 +44,13 @@ type Provider struct {
 	People    ToolFactory
 	Health    ToolFactory
 	Telegram  ToolFactory
+	SIP       ToolFactory
+
+	// SIPHub optional: online device / call counts for takan_status.
+	SIPHub interface {
+		OnlineCount(userID string) int
+		CallsSnapshot(userID string) []map[string]any
+	}
 }
 
 // ToolFactory produces tools when the module is enabled.
@@ -84,6 +92,10 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.Telegram != nil {
 				out = append(out, p.Telegram(ctx, userID)...)
 			}
+		case "sip":
+			if p.SIP != nil {
+				out = append(out, p.SIP(ctx, userID)...)
+			}
 		}
 	}
 	return out
@@ -94,7 +106,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, Mercadona linked, email domains, people, health, telegram). " +
+				"(machines online, Mercadona linked, email domains, people, health, telegram, SIP). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -262,6 +274,29 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			detail += " · default " + ts.DefaultChatID
 		}
 		return true, detail
+	case "sip":
+		settings, ok, err := p.Store.GetSIPSettings(ctx, userID)
+		if err != nil {
+			return false, "error reading sip settings"
+		}
+		nDev, _ := p.Store.CountSIPDevices(ctx, userID)
+		if !ok || !settings.HasKey {
+			return false, "not configured (panel → SIP: xAI API key)"
+		}
+		if nDev == 0 {
+			return false, "API key set · no phone gateways"
+		}
+		online := 0
+		nCalls := 0
+		if p.SIPHub != nil {
+			online = p.SIPHub.OnlineCount(userID)
+			nCalls = len(p.SIPHub.CallsSnapshot(userID))
+		}
+		detail := fmt.Sprintf("%d/%d online · voice %s", online, nDev, settings.Voice)
+		if nCalls > 0 {
+			detail += fmt.Sprintf(" · %d call(s)", nCalls)
+		}
+		return online > 0 || nDev > 0, detail
 	default:
 		return true, "enabled"
 	}

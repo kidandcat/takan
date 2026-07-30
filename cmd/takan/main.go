@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/kidandcat/takan/modules/machine"
 	"github.com/kidandcat/takan/modules/mercadona"
 	"github.com/kidandcat/takan/modules/people"
+	"github.com/kidandcat/takan/modules/sip"
 	"github.com/kidandcat/takan/modules/telegram"
 )
 
@@ -94,6 +96,46 @@ func main() {
 		return rl.Allow(key, max, time.Minute)
 	}
 
+	sipHub := sip.NewHub(
+		func(ctx context.Context, token string) (*store.SIPDevice, error) {
+			return st.SIPDeviceByToken(ctx, token)
+		},
+		func(ctx context.Context, deviceID string) {
+			_ = st.TouchSIPDevice(ctx, deviceID)
+		},
+		func(ctx context.Context, userID string) (sip.BridgeConfig, error) {
+			settings, ok, err := st.GetSIPSettings(ctx, userID)
+			if err != nil {
+				return sip.BridgeConfig{}, err
+			}
+			cfgOut := sip.BridgeConfig{
+				Voice:        "eve",
+				Instructions: "You are a helpful phone assistant. Speak concisely. Match the caller's language.",
+				AutoAnswer:   true,
+				AudioRate:    16000,
+				BridgeMode:   "realtime",
+			}
+			if !ok {
+				return cfgOut, nil
+			}
+			cfgOut.Voice = settings.Voice
+			if settings.Instructions != "" {
+				cfgOut.Instructions = settings.Instructions
+			}
+			cfgOut.AutoAnswer = settings.AutoAnswer
+			cfgOut.AudioRate = settings.AudioRate
+			cfgOut.BridgeMode = settings.BridgeMode
+			if settings.XAIAPIKeyEnc != "" {
+				key, err := box.Open(settings.XAIAPIKeyEnc)
+				if err != nil {
+					return cfgOut, fmt.Errorf("decrypt xAI key: %w", err)
+				}
+				cfgOut.APIKey = key
+			}
+			return cfgOut, nil
+		},
+	)
+
 	prov := &modules.Provider{
 		Store: st,
 		Hub:   hub,
@@ -106,12 +148,15 @@ func main() {
 		People:    people.Factory(st),
 		Health:    health.Factory(st),
 		Telegram:  telegram.Factory(st, box),
+		SIP:       sip.Factory(st, sipHub),
+		SIPHub:    sipHub,
 	}
 
 	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir, cfg.AllowRegister, cfg.DefaultInviteQuota)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}
+	webSrv.SIPHub = sipHub
 	webSrv.AuthRateLimit = authLimit
 	webSrv.OnMercadonaSave = func(ctx context.Context, userID, emailAddr, password, postal string) error {
 		return mercadona.LinkAccount(ctx, st.DB(), mbox, userID, emailAddr, password, postal)
@@ -170,6 +215,7 @@ func main() {
 	mux.HandleFunc("DELETE /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("OPTIONS /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("GET /agent/ws", hub.HandleWS)
+	mux.HandleFunc("GET /sip/ws", sipHub.HandleWS)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
