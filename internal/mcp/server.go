@@ -37,9 +37,6 @@ type Server struct {
 	Resolve   UserResolver
 	ToolsFor  ToolProvider
 	Sessions  *SessionHub
-
-	// reauth forces 401 after tool-set changes until the user gets a new OAuth token.
-	reauth forceReauth
 }
 
 func (s *Server) hub() *SessionHub {
@@ -50,30 +47,19 @@ func (s *Server) hub() *SessionHub {
 }
 
 // NotifyToolsChanged is called when the user's tool set may have changed
-// (module toggle, AI runners, etc.). Clients often ignore list_changed, so we:
-//  1. push list_changed on open SSE streams (best-effort)
-//  2. drop MCP sessions for that user
-//  3. mark the user so subsequent MCP calls return 401 until OAuth issues a new token
+// (module toggle, vault enable, AI runners, etc.).
+//
+// Best-effort only: push notifications/tools/list_changed on open SSE streams.
+// We intentionally do NOT force 401 / drop sessions — many clients (e.g. Grok on
+// mobile) cannot re-auth easily, and the MCP protocol has no error that reliably
+// forces a tools/list refresh. Stale clients keep old tool names until reconnect;
+// tools/call against a disabled module simply fails.
 func (s *Server) NotifyToolsChanged(userID string) {
 	if userID == "" {
 		return
 	}
-	s.hub().NotifyToolsChanged(userID)
-	n := s.hub().DropUserSessions(userID)
-	s.reauth.Mark(userID)
-	log.Printf("mcp: tools changed user=%s sessions_dropped=%d force_reauth=1", userID, n)
-}
-
-// ClearForceReauth is called after a successful OAuth access-token grant
-// (authorization_code or refresh_token) so the client can talk to MCP again.
-func (s *Server) ClearForceReauth(userID string) {
-	if userID == "" {
-		return
-	}
-	if s.reauth.Needs(userID) {
-		s.reauth.Clear(userID)
-		log.Printf("mcp: force_reauth cleared user=%s", userID)
-	}
+	n := s.hub().NotifyToolsChanged(userID)
+	log.Printf("mcp: tools changed user=%s list_changed_streams=%d (no force reauth)", userID, n)
 }
 
 func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
@@ -102,12 +88,6 @@ func (s *Server) authUser(w http.ResponseWriter, r *http.Request) (string, bool)
 	userID, err := s.Resolve(r.Context(), bearer)
 	if err != nil || userID == "" {
 		s.writeUnauthorized(w, "unauthorized")
-		return "", false
-	}
-	// Tool set changed since this client's last OAuth grant — force re-auth
-	// so clients re-run initialize + tools/list (list_changed is often ignored).
-	if s.reauth.Needs(userID) {
-		s.writeUnauthorized(w, "tools changed; re-authenticate")
 		return "", false
 	}
 	return userID, true

@@ -28,7 +28,7 @@ Takan is a **multi-tenant personal hub**. Operators store user secrets (session 
 
 | Surface | Notes |
 |---------|--------|
-| **MCP / OAuth** | Bearer access tokens; refresh rotation; redirect URI allowlist. Tool-set changes may force re-auth (401) so clients reload tools. |
+| **MCP / OAuth** | Bearer access tokens; refresh rotation; redirect URI allowlist. Tool-set changes push list_changed (best-effort); no force re-auth. |
 | **Web panel** | Session cookie signed with `TAKAN_SESSION_KEY`. Protect this key like a production secret. |
 | **Machine agent** | Outbound WSS + `machine_bash` / AI jobs run **on the machine that installed the agent**. Treat agent tokens as root-equivalent for that host. |
 | **Mercadona** | Unofficial store API; credentials encrypted at rest with the session key material. See README disclaimer. |

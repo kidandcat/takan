@@ -79,7 +79,8 @@ func (h *SessionHub) DropUserSessions(userID string) int {
 
 // NotifyToolsChanged sends notifications/tools/list_changed to all SSE
 // streams belonging to sessions of userID (MCP Streamable HTTP).
-func (h *SessionHub) NotifyToolsChanged(userID string) {
+// Returns the number of SSE streams that received the notification.
+func (h *SessionHub) NotifyToolsChanged(userID string) int {
 	payload, _ := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "notifications/tools/list_changed",
@@ -92,12 +93,15 @@ func (h *SessionHub) NotifyToolsChanged(userID string) {
 		}
 	}
 	h.mu.RUnlock()
+	total := 0
 	for _, s := range targets {
 		n := s.broadcast(payload)
+		total += n
 		if n > 0 {
 			log.Printf("mcp: tools/list_changed user=%s session=%s streams=%d", userID, s.ID, n)
 		}
 	}
+	return total
 }
 
 func (s *Session) addStream() chan []byte {
