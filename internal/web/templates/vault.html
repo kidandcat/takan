@@ -1,18 +1,19 @@
 {{define "content"}}
 <section class="section hero">
-  <div class="row" style="justify-content:space-between;align-items:flex-start;width:100%">
+  <div class="row" style="justify-content:space-between;align-items:flex-start;width:100%;gap:1rem">
     <div>
       <h1>Vault</h1>
-      <p class="muted" style="margin-top:.4rem;max-width:56ch">
-        Password manager for you and agents. Agents never read secrets freely —
-        they call <code>secrets_request</code>; you approve here (mobile biometrics later).
+      <p class="muted" style="margin-top:.4rem;max-width:48ch">
+        Encrypted logins for you and agents. Agents request secrets; you approve grants here.
       </p>
     </div>
-    <div class="row" style="gap:.55rem;align-items:center">
-      <span class="pill neutral">{{.VaultItemCount}} logins</span>
+    <div class="toolbar">
       {{if gt .VaultPendingCount 0}}
       <span class="pill on"><span class="live"></span>{{.VaultPendingCount}} pending</span>
       {{end}}
+      <span class="pill neutral">{{.VaultItemCount}} logins</span>
+      <button type="button" class="secondary" onclick="openImportModal()">Import CSV</button>
+      <button type="button" onclick="openVaultModal()">Add login</button>
     </div>
   </div>
 </section>
@@ -23,51 +24,48 @@
 
 {{if .VaultGrants}}
 <section class="section">
-  <div class="card">
-    <div class="card-head">
-      <div>
-        <h3>Agent grants</h3>
-        <p class="muted">Approve so the agent can use credentials once (or for a short session).</p>
-      </div>
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:1rem 1.2rem 0.75rem">
+      <h3>Agent grants</h3>
+      <p class="muted" style="margin-top:.3rem">Approve so the agent can use credentials once (or for a short session).</p>
     </div>
     <div style="overflow-x:auto">
-      <table class="table" style="width:100%;border-collapse:collapse;font-size:.9rem">
+      <table class="data-table">
         <thead>
-          <tr style="text-align:left;border-bottom:1px solid var(--border)">
-            <th style="padding:.5rem">When</th>
-            <th style="padding:.5rem">Purpose</th>
-            <th style="padding:.5rem">Item</th>
-            <th style="padding:.5rem">Fields</th>
-            <th style="padding:.5rem">Status</th>
-            <th style="padding:.5rem"></th>
+          <tr>
+            <th>When</th>
+            <th>Purpose</th>
+            <th>Item</th>
+            <th>Scope</th>
+            <th>Status</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           {{range .VaultGrants}}
-          <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:.55rem;white-space:nowrap" class="muted">{{.Created}}</td>
-            <td style="padding:.55rem">{{if .Purpose}}{{.Purpose}}{{else}}—{{end}}</td>
-            <td style="padding:.55rem">
+          <tr>
+            <td class="muted" style="white-space:nowrap">{{.Created}}</td>
+            <td>{{if .Purpose}}{{.Purpose}}{{else}}—{{end}}</td>
+            <td>
               {{if .ItemName}}<strong>{{.ItemName}}</strong>{{else}}<span class="muted">unmatched</span>{{end}}
-              {{if .ItemURL}}<div class="faint" style="font-size:.75rem">{{.ItemURL}}</div>{{end}}
+              {{if .ItemURL}}<div class="faint" style="font-size:.75rem;margin-top:.1rem">{{.ItemURL}}</div>{{end}}
             </td>
-            <td style="padding:.55rem"><code>{{.Fields}}</code> · {{.Mode}} · {{.TTL}}s</td>
-            <td style="padding:.55rem">
+            <td><code style="font-size:.78rem">{{.Fields}}</code>
+              <span class="faint"> · {{.Mode}} · {{.TTL}}s</span>
+            </td>
+            <td>
               {{if eq .Status "pending"}}<span class="pill on">pending</span>
               {{else if eq .Status "approved"}}<span class="pill on">approved</span>
               {{else}}<span class="pill off">{{.Status}}</span>{{end}}
             </td>
-            <td style="padding:.55rem">
+            <td>
               {{if eq .Status "pending"}}
-              <div class="row" style="gap:.35rem">
+              <div class="actions">
                 <form method="post" action="/dashboard/vault/grants/{{.ID}}/approve">
-                  {{if not .ItemID}}
-                  <input type="hidden" name="item_id" value=""/>
-                  {{end}}
-                  <button type="submit" style="margin:0">Approve</button>
+                  <button type="submit">Approve</button>
                 </form>
                 <form method="post" action="/dashboard/vault/grants/{{.ID}}/deny">
-                  <button type="submit" class="secondary" style="margin:0">Deny</button>
+                  <button type="submit" class="secondary">Deny</button>
                 </form>
               </div>
               {{end}}
@@ -82,108 +80,57 @@
 {{end}}
 
 <section class="section">
-  <div class="card">
-    <div class="card-head">
-      <div>
-        <h3>Add login</h3>
-        <p class="muted">Stored encrypted at rest. Enabling the module exposes MCP tools to agents.</p>
-      </div>
-    </div>
-    <form method="post" action="/dashboard/vault" class="form-stack" style="max-width:100%">
-      <div class="row" style="gap:1rem;flex-wrap:wrap">
-        <div style="flex:1;min-width:12rem">
-          <label for="v-name">Name</label>
-          <input id="v-name" name="name" type="text" placeholder="BankSync" autocomplete="off"/>
-        </div>
-        <div style="flex:1;min-width:12rem">
-          <label for="v-url">URL</label>
-          <input id="v-url" name="url" type="url" placeholder="https://…" autocomplete="off"/>
-        </div>
-      </div>
-      <div class="row" style="gap:1rem;flex-wrap:wrap">
-        <div style="flex:1;min-width:12rem">
-          <label for="v-user">Username</label>
-          <input id="v-user" name="username" type="text" autocomplete="off"/>
-        </div>
-        <div style="flex:1;min-width:12rem">
-          <label for="v-pass">Password</label>
-          <input id="v-pass" name="password" type="password" autocomplete="new-password"/>
-        </div>
-      </div>
-      <div class="row" style="gap:1rem;flex-wrap:wrap">
-        <div style="flex:1;min-width:12rem">
-          <label for="v-totp">TOTP / 2FA secret <span class="faint">(base32 or otpauth://…)</span></label>
-          <input id="v-totp" name="totp" type="text" placeholder="JBSWY3DPEHPK3PXP or otpauth://totp/…" autocomplete="off"/>
-        </div>
-        <div style="flex:1;min-width:12rem">
-          <label for="v-folder">Folder</label>
-          <input id="v-folder" name="folder" type="text" autocomplete="off"/>
-        </div>
-      </div>
-      <div>
-        <label for="v-notes">Notes</label>
-        <textarea id="v-notes" name="notes" rows="2"></textarea>
-      </div>
-      <button type="submit">Save &amp; enable Vault</button>
-    </form>
-  </div>
-</section>
-
-<section class="section">
-  <div class="card">
-    <div class="card-head">
-      <div>
-        <h3>Import CSV</h3>
-        <p class="muted">Chrome / Google Password Manager export (<code>name,url,username,password,note</code>).</p>
-      </div>
-    </div>
-    <form method="post" action="/dashboard/vault/import" enctype="multipart/form-data" class="form-stack">
-      <input type="file" name="csv" accept=".csv,text/csv" required/>
-      <button type="submit" class="secondary">Import</button>
-    </form>
-  </div>
-</section>
-
-<section class="section">
-  <div class="card">
-    <div class="card-head">
+  <div class="card" style="padding:0;overflow:hidden">
+    <div class="card-head" style="padding:1rem 1.2rem 0.75rem;margin:0">
       <div>
         <h3>Logins</h3>
-        <p class="muted">Passwords stay encrypted. Agents use <code>secrets_search</code> (metadata) + <code>secrets_request</code>.</p>
+        <p class="muted" style="margin-top:.3rem">Passwords stay encrypted. OTP refreshes when you open this page.</p>
       </div>
     </div>
     {{if .VaultItems}}
     <div style="overflow-x:auto">
-      <table class="table" style="width:100%;border-collapse:collapse;font-size:.9rem">
+      <table class="data-table">
         <thead>
-          <tr style="text-align:left;border-bottom:1px solid var(--border)">
-            <th style="padding:.5rem">Name</th>
-            <th style="padding:.5rem">Username</th>
-            <th style="padding:.5rem">OTP</th>
-            <th style="padding:.5rem">URL</th>
-            <th style="padding:.5rem"></th>
+          <tr>
+            <th>Name</th>
+            <th>Username</th>
+            <th>OTP</th>
+            <th>URL</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           {{range .VaultItems}}
-          <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:.55rem"><strong>{{.Name}}</strong></td>
-            <td style="padding:.55rem">{{.Username}}</td>
-            <td style="padding:.55rem">
+          <tr>
+            <td><strong>{{.Name}}</strong></td>
+            <td>{{if .Username}}{{.Username}}{{else}}<span class="faint">—</span>{{end}}</td>
+            <td>
               {{if .OTPCode}}
-                <code style="font-size:1rem;letter-spacing:.08em">{{.OTPCode}}</code>
-                <span class="faint" style="font-size:.75rem"> {{.OTPRemaining}}s</span>
+                <span class="otp-code">{{.OTPCode}}</span><span class="otp-rem">{{.OTPRemaining}}s</span>
               {{else if .HasTOTP}}
                 <span class="faint">—</span>
               {{else}}
                 <span class="faint">·</span>
               {{end}}
             </td>
-            <td style="padding:.55rem" class="muted" style="max-width:18rem;overflow:hidden;text-overflow:ellipsis">{{.URL}}</td>
-            <td style="padding:.55rem">
-              <form method="post" action="/dashboard/vault/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?')">
-                <button type="submit" class="secondary" style="margin:0">Delete</button>
-              </form>
+            <td class="muted" style="max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              {{if .URL}}{{.URL}}{{else}}—{{end}}
+            </td>
+            <td>
+              <div class="actions">
+                <button type="button" class="secondary"
+                  data-id="{{.ID}}"
+                  data-name="{{.Name}}"
+                  data-username="{{.Username}}"
+                  data-url="{{.URL}}"
+                  data-folder="{{.Folder}}"
+                  data-has-password="{{if .HasPassword}}1{{else}}0{{end}}"
+                  data-has-totp="{{if .HasTOTP}}1{{else}}0{{end}}"
+                  onclick="openVaultModal(this)">Edit</button>
+                <form method="post" action="/dashboard/vault/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?')">
+                  <button type="submit" class="secondary">Delete</button>
+                </form>
+              </div>
             </td>
           </tr>
           {{end}}
@@ -191,7 +138,11 @@
       </table>
     </div>
     {{else}}
-    <div class="empty">No logins yet. Add one above or import a CSV from Google/Chrome.</div>
+    <div class="empty" style="padding:1.5rem 1.2rem">
+      No logins yet.
+      <button type="button" class="ghost" onclick="openVaultModal()" style="font-size:.9rem">Add one</button>
+      or import a Chrome / Google CSV.
+    </div>
     {{end}}
   </div>
 </section>
@@ -199,11 +150,158 @@
 <section class="section">
   <div class="card">
     <h3 style="margin-bottom:.35rem">MCP tools</h3>
-    <p class="muted" style="margin-bottom:.5rem">
-      When enabled: <code>secrets_search</code>, <code>secrets_request</code>, <code>secrets_status</code>,
-      <code>secrets_store</code>, <code>secrets_generate</code>, <code>secrets_delete</code>.
-      Readiness is in <code>takan_status</code>.
+    <p class="muted" style="margin:0;line-height:1.5">
+      <code>secrets_search</code> · <code>secrets_request</code> · <code>secrets_status</code> ·
+      <code>secrets_store</code> · <code>secrets_generate</code> · <code>secrets_delete</code>.
+      Prefer field <code>otp</code> for 2FA codes.
     </p>
   </div>
 </section>
+
+<!-- Add / Edit login modal -->
+<div class="modal-backdrop" id="vault-modal" hidden onclick="if(event.target===this)closeVaultModal()">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="vault-modal-title">
+    <div class="modal-head">
+      <h3 id="vault-modal-title">Add login</h3>
+      <button type="button" class="icon-btn" aria-label="Close" onclick="closeVaultModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <form method="post" action="/dashboard/vault" id="vault-form" class="form-stack">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="v-name">Name</label>
+          <input id="v-name" name="name" type="text" placeholder="BankSync" autocomplete="off"/>
+        </div>
+        <div>
+          <label for="v-url">URL</label>
+          <input id="v-url" name="url" type="url" placeholder="https://…" autocomplete="off"/>
+        </div>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="v-user">Username</label>
+          <input id="v-user" name="username" type="text" autocomplete="off"/>
+        </div>
+        <div>
+          <label for="v-pass">Password</label>
+          <input id="v-pass" name="password" type="password" autocomplete="new-password"/>
+          <p class="faint" id="v-pass-hint" style="margin:.3rem 0 0;font-size:.75rem" hidden>Leave blank to keep current password</p>
+        </div>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="v-totp">TOTP secret</label>
+          <input id="v-totp" name="totp" type="text" placeholder="base32 or otpauth://…" autocomplete="off"/>
+          <p class="faint" id="v-totp-hint" style="margin:.3rem 0 0;font-size:.75rem" hidden>Leave blank to keep current secret</p>
+        </div>
+        <div>
+          <label for="v-folder">Folder</label>
+          <input id="v-folder" name="folder" type="text" autocomplete="off"/>
+        </div>
+      </div>
+      <div>
+        <label for="v-notes">Notes</label>
+        <textarea id="v-notes" name="notes" rows="2" placeholder="Optional"></textarea>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="secondary" onclick="closeVaultModal()">Cancel</button>
+        <button type="submit" id="vault-submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Import CSV modal -->
+<div class="modal-backdrop" id="import-modal" hidden onclick="if(event.target===this)closeImportModal()">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-modal-title" style="width:min(100%,420px)">
+    <div class="modal-head">
+      <h3 id="import-modal-title">Import CSV</h3>
+      <button type="button" class="icon-btn" aria-label="Close" onclick="closeImportModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <form method="post" action="/dashboard/vault/import" enctype="multipart/form-data" class="form-stack">
+      <p class="muted" style="margin:0 0 .5rem;font-size:.9rem">
+        Chrome or Google Password Manager export
+        (<code style="font-size:.78rem">name,url,username,password,note</code>.
+      </p>
+      <div>
+        <label for="v-csv">CSV file</label>
+        <input id="v-csv" type="file" name="csv" accept=".csv,text/csv" required/>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="secondary" onclick="closeImportModal()">Cancel</button>
+        <button type="submit">Import</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var modal = document.getElementById('vault-modal');
+  var form = document.getElementById('vault-form');
+  var title = document.getElementById('vault-modal-title');
+  var submit = document.getElementById('vault-submit');
+  var passHint = document.getElementById('v-pass-hint');
+  var totpHint = document.getElementById('v-totp-hint');
+  var importModal = document.getElementById('import-modal');
+
+  function setVal(id, v) {
+    var el = document.getElementById(id);
+    if (el) el.value = v || '';
+  }
+
+  window.openVaultModal = function (btn) {
+    if (!modal || !form) return;
+    form.reset();
+    setVal('v-notes', '');
+    if (btn && btn.dataset && btn.dataset.id) {
+      title.textContent = 'Edit login';
+      submit.textContent = 'Save changes';
+      form.action = '/dashboard/vault/' + btn.dataset.id;
+      setVal('v-name', btn.dataset.name);
+      setVal('v-user', btn.dataset.username);
+      setVal('v-url', btn.dataset.url);
+      setVal('v-folder', btn.dataset.folder);
+      setVal('v-pass', '');
+      setVal('v-totp', '');
+      if (passHint) passHint.hidden = false;
+      if (totpHint) totpHint.hidden = false;
+    } else {
+      title.textContent = 'Add login';
+      submit.textContent = 'Save';
+      form.action = '/dashboard/vault';
+      if (passHint) passHint.hidden = true;
+      if (totpHint) totpHint.hidden = true;
+    }
+    modal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    var focus = document.getElementById('v-name');
+    if (focus) setTimeout(function () { focus.focus(); }, 30);
+  };
+
+  window.closeVaultModal = function () {
+    if (modal) modal.hidden = true;
+    document.body.style.overflow = '';
+  };
+
+  window.openImportModal = function () {
+    if (!importModal) return;
+    importModal.hidden = false;
+    document.body.style.overflow = 'hidden';
+  };
+  window.closeImportModal = function () {
+    if (importModal) importModal.hidden = true;
+    document.body.style.overflow = '';
+  };
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    closeVaultModal();
+    closeImportModal();
+  });
+})();
+</script>
 {{end}}
