@@ -21,6 +21,7 @@ Integrations live under `modules/` as subpackages:
 | **Health** | `modules/health` | `health_status`, `health_log`, `health_issue` | Profile + daily diary + injuries |
 | **Telegram** | `modules/telegram` | `telegram_chats`, `telegram_send` | Bot token + allowed chats in panel |
 | **SIP** | `modules/sip` | `sip_status`, `sip_devices`, `sip_calls`, `sip_hangup` | xAI key + Android gateways in panel; phones → `wss://…/sip/ws` |
+| **Vault** | `modules/vault` | `secrets_search`, `secrets_request`, `secrets_status`, `secrets_store`, `secrets_generate`, `secrets_delete` | Password manager; agent reads require panel (or later mobile) approve |
 | **meta** | `modules` | `takan_status` | Always on — all modules + readiness |
 
 When the tool set changes, Takan may return **401** until the client refreshes OAuth so MCP clients that ignore `tools/list_changed` still reload tools.

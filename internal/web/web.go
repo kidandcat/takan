@@ -84,6 +84,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/sip", s.dashSIP)
 	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
 	mux.HandleFunc("GET /dashboard/health", s.dashHealth)
+	mux.HandleFunc("GET /dashboard/vault", s.dashVault)
 	mux.HandleFunc("GET /dashboard/invites", s.dashInvites)
 	mux.HandleFunc("GET /dashboard/admin", s.dashAdmin)
 	// Old routes → overview / integrations
@@ -127,6 +128,12 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/health/issues", s.createHealthIssue)
 	mux.HandleFunc("POST /dashboard/health/issues/{id}", s.updateHealthIssue)
 	mux.HandleFunc("POST /dashboard/health/issues/{id}/delete", s.deleteHealthIssue)
+	mux.HandleFunc("POST /dashboard/vault", s.createVaultItem)
+	mux.HandleFunc("POST /dashboard/vault/{id}", s.updateVaultItem)
+	mux.HandleFunc("POST /dashboard/vault/{id}/delete", s.deleteVaultItem)
+	mux.HandleFunc("POST /dashboard/vault/grants/{id}/approve", s.approveVaultGrant)
+	mux.HandleFunc("POST /dashboard/vault/grants/{id}/deny", s.denyVaultGrant)
+	mux.HandleFunc("POST /dashboard/vault/import", s.importVaultCSV)
 }
 
 type pageData struct {
@@ -184,6 +191,11 @@ type pageData struct {
 	HealthIssues      []healthIssueView
 	HealthLogCount    int
 	HealthIssueCount  int
+	// Vault module
+	VaultItems       []vaultItemView
+	VaultItemCount   int
+	VaultGrants      []vaultGrantView
+	VaultPendingCount int
 	// Dashboard stats (precomputed for templates)
 	ModEnabledCount int
 	ModTotalCount   int
@@ -734,6 +746,21 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.DetailsLine = "voice " + settings.Voice
 			}
 			mv.Ready = m.Enabled && sok && settings.HasKey && len(devs) > 0
+		case "vault":
+			mv.Path = "/dashboard/vault"
+			n, _ := s.Store.CountVaultItems(ctx, u.ID)
+			pending, _ := s.Store.CountVaultGrantsPending(ctx, u.ID)
+			if n == 0 {
+				mv.Summary = "Empty"
+			} else {
+				mv.Summary = fmt.Sprintf("%d login(s)", n)
+			}
+			if pending > 0 {
+				mv.DetailsLine = fmt.Sprintf("%d pending grant(s)", pending)
+			} else {
+				mv.DetailsLine = "agent grants via secrets_request"
+			}
+			mv.Ready = m.Enabled
 		default:
 			mv.Path = "/dashboard/" + m.ModuleID
 		}
@@ -891,6 +918,38 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				ID: iss.ID, Title: iss.Title, Status: iss.Status,
 				StartedOn: iss.StartedOn, EndedOn: iss.EndedOn, BodyPart: iss.BodyPart,
 				Diagnosis: iss.Diagnosis, Treatment: iss.Treatment, Notes: iss.Notes,
+			})
+		}
+	}
+	// Vault module panel data
+	if n, err := s.Store.CountVaultItems(ctx, u.ID); err == nil {
+		data.VaultItemCount = n
+	}
+	if items, err := s.Store.ListVaultItems(ctx, u.ID, 200); err == nil {
+		for _, it := range items {
+			v := vaultItemView{
+				ID: it.ID, Name: it.Name, Username: it.Username, Folder: it.Folder,
+				Favorite: it.Favorite, HasPassword: it.PasswordEnc != "", HasTOTP: it.TOTPEnc != "",
+			}
+			if len(it.URLs) > 0 {
+				v.URL = it.URLs[0]
+			}
+			if len(it.Tags) > 0 {
+				v.TagsLine = strings.Join(it.Tags, ", ")
+			}
+			data.VaultItems = append(data.VaultItems, v)
+		}
+	}
+	if pending, err := s.Store.CountVaultGrantsPending(ctx, u.ID); err == nil {
+		data.VaultPendingCount = pending
+	}
+	if grants, err := s.Store.ListVaultGrants(ctx, u.ID, "", 40); err == nil {
+		for _, g := range grants {
+			data.VaultGrants = append(data.VaultGrants, vaultGrantView{
+				ID: g.ID, ItemID: g.ItemID, ItemName: g.ItemName, ItemURL: g.ItemURL,
+				Purpose: g.Purpose, Status: g.Status, Mode: g.Mode,
+				Fields: strings.Join(g.Fields, ", "), TTL: g.TTLSeconds,
+				Created: g.CreatedAt.UTC().Format("2006-01-02 15:04"),
 			})
 		}
 	}

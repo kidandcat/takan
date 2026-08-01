@@ -28,6 +28,7 @@ var Catalog = []Info{
 	{ID: "health", Name: "Health", Description: "Personal health: profile, daily diary, injuries and conditions."},
 	{ID: "telegram", Name: "Telegram", Description: "Send messages via your Telegram bot (token + allowed chats in panel)."},
 	{ID: "sip", Name: "SIP", Description: "Android SIM gateways → Grok Voice. Central proxy; phones connect outbound only."},
+	{ID: "vault", Name: "Vault", Description: "Password manager: encrypted logins + agent secret grants (approve in panel / mobile)."},
 }
 
 // Provider builds tools for enabled modules.
@@ -45,6 +46,7 @@ type Provider struct {
 	Health    ToolFactory
 	Telegram  ToolFactory
 	SIP       ToolFactory
+	Vault     ToolFactory
 
 	// SIPHub optional: online device / call counts for takan_status.
 	SIPHub interface {
@@ -96,6 +98,10 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.SIP != nil {
 				out = append(out, p.SIP(ctx, userID)...)
 			}
+		case "vault":
+			if p.Vault != nil {
+				out = append(out, p.Vault(ctx, userID)...)
+			}
 		}
 	}
 	return out
@@ -106,7 +112,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, Mercadona linked, email domains, people, health, telegram, SIP). " +
+				"(machines online, Mercadona linked, email domains, people, health, telegram, SIP, vault). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -297,6 +303,24 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			detail += fmt.Sprintf(" · %d call(s)", nCalls)
 		}
 		return online > 0 || nDev > 0, detail
+	case "vault":
+		n, err := p.Store.CountVaultItems(ctx, userID)
+		if err != nil {
+			return false, "error counting vault items"
+		}
+		pending, _ := p.Store.CountVaultGrantsPending(ctx, userID)
+		if n == 0 {
+			detail := "empty"
+			if pending > 0 {
+				detail = fmt.Sprintf("empty · %d pending grant(s)", pending)
+			}
+			return true, detail
+		}
+		detail := fmt.Sprintf("%d login(s)", n)
+		if pending > 0 {
+			detail += fmt.Sprintf(" · %d pending grant(s)", pending)
+		}
+		return true, detail
 	default:
 		return true, "enabled"
 	}
