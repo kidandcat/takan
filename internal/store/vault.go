@@ -38,7 +38,7 @@ type VaultGrant struct {
 	ItemID     string
 	MatchURL   string
 	MatchQuery string
-	Fields     []string // username | password | totp | notes
+	Fields     []string // username | password | otp | totp | notes
 	Purpose    string
 	Status     string // pending | approved | denied | expired | consumed
 	Mode       string // once | session
@@ -467,12 +467,12 @@ func (s *Store) CreateVaultGrant(ctx context.Context, g VaultGrant) (VaultGrant,
 	for _, f := range g.Fields {
 		f = strings.ToLower(strings.TrimSpace(f))
 		switch f {
-		case "username", "password", "totp", "notes":
+		case "username", "password", "otp", "totp", "notes":
 			fields = append(fields, f)
 		}
 	}
 	if len(fields) == 0 {
-		return g, fmt.Errorf("fields must include username, password, totp, and/or notes")
+		return g, fmt.Errorf("fields must include username, password, otp, totp, and/or notes")
 	}
 	g.Fields = fields
 

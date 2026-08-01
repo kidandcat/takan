@@ -926,6 +926,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		data.VaultItemCount = n
 	}
 	if items, err := s.Store.ListVaultItems(ctx, u.ID, 200); err == nil {
+		encTOTP := map[string]string{}
 		for _, it := range items {
 			v := vaultItemView{
 				ID: it.ID, Name: it.Name, Username: it.Username, Folder: it.Folder,
@@ -937,8 +938,12 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			if len(it.Tags) > 0 {
 				v.TagsLine = strings.Join(it.Tags, ", ")
 			}
+			if it.TOTPEnc != "" {
+				encTOTP[it.ID] = it.TOTPEnc
+			}
 			data.VaultItems = append(data.VaultItems, v)
 		}
+		s.fillVaultOTP(data.VaultItems, encTOTP)
 	}
 	if pending, err := s.Store.CountVaultGrantsPending(ctx, u.ID); err == nil {
 		data.VaultPendingCount = pending

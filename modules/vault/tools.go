@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/mcp"
@@ -58,7 +59,8 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 					Name: "secrets_request",
 					Description: "Request access to secret fields of a vault item. Creates a pending grant the user must approve " +
 						"(panel → Vault, later mobile biometrics). Pass item_id and/or url/query to match. " +
-						"fields: username, password, totp, notes. mode: once (default, single consume) or session (until ttl). " +
+						"fields: username, password, otp (current 6-digit TOTP), totp (base32 secret), notes. " +
+						"Prefer otp for 2FA fill-in. mode: once (default) or session (until ttl). " +
 						"Then poll secrets_status with grant_id until approved/denied/expired.",
 					InputSchema: map[string]any{
 						"type": "object",
@@ -69,7 +71,7 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 							"fields": map[string]any{
 								"type":        "array",
 								"items":       map[string]any{"type": "string"},
-								"description": "username | password | totp | notes (default username+password)",
+								"description": "username | password | otp | totp | notes (default username+password). otp = current authenticator code",
 							},
 							"purpose": map[string]any{"type": "string", "description": "Why the agent needs this (shown to user)"},
 							"ttl":     map[string]any{"type": "integer", "description": "Seconds secret is usable after approve (default 120, max 3600)"},
@@ -208,7 +210,7 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 							"name":     map[string]any{"type": "string"},
 							"username": map[string]any{"type": "string"},
 							"password": map[string]any{"type": "string"},
-							"totp":     map[string]any{"type": "string", "description": "TOTP secret (base32), optional"},
+							"totp":     map[string]any{"type": "string", "description": "TOTP secret: base32 or otpauth://totp/… URI"},
 							"notes":    map[string]any{"type": "string"},
 							"url":      map[string]any{"type": "string", "description": "Primary URL"},
 							"urls":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
@@ -246,6 +248,7 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 						}
 					}
 					if totp != "" {
+						totp = NormalizeTOTPForStore(totp)
 						totpEnc, err = box.Seal(totp)
 						if err != nil {
 							return "", err
@@ -353,6 +356,8 @@ func itemMeta(it store.VaultItem) map[string]any {
 
 func decryptFields(box *cryptox.Box, it store.VaultItem, fields []string) (map[string]string, error) {
 	out := map[string]string{}
+	wantOTP := false
+	wantSecret := false
 	for _, f := range fields {
 		switch f {
 		case "username":
@@ -367,16 +372,11 @@ func decryptFields(box *cryptox.Box, it store.VaultItem, fields []string) (map[s
 				return nil, fmt.Errorf("decrypt password: %w", err)
 			}
 			out["password"] = p
+		case "otp":
+			wantOTP = true
 		case "totp":
-			if it.TOTPEnc == "" {
-				out["totp"] = ""
-				continue
-			}
-			p, err := box.Open(it.TOTPEnc)
-			if err != nil {
-				return nil, fmt.Errorf("decrypt totp: %w", err)
-			}
-			out["totp"] = p
+			wantSecret = true
+			wantOTP = true // always include current code when releasing secret
 		case "notes":
 			if it.NotesEnc == "" {
 				out["notes"] = ""
@@ -387,6 +387,33 @@ func decryptFields(box *cryptox.Box, it store.VaultItem, fields []string) (map[s
 				return nil, fmt.Errorf("decrypt notes: %w", err)
 			}
 			out["notes"] = p
+		}
+	}
+	if wantOTP || wantSecret {
+		if it.TOTPEnc == "" {
+			if wantOTP {
+				out["otp"] = ""
+			}
+			if wantSecret {
+				out["totp"] = ""
+			}
+			return out, nil
+		}
+		secret, err := box.Open(it.TOTPEnc)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt totp: %w", err)
+		}
+		if wantSecret {
+			out["totp"] = secret
+		}
+		if wantOTP {
+			code, rem, period, err := currentOTP(secret, time.Now())
+			if err != nil {
+				return nil, fmt.Errorf("generate otp: %w", err)
+			}
+			out["otp"] = code
+			out["otp_remaining"] = fmt.Sprintf("%d", rem)
+			out["otp_period"] = fmt.Sprintf("%d", period)
 		}
 	}
 	return out, nil

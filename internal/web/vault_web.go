@@ -8,13 +8,16 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/kidandcat/takan/internal/store"
+	"github.com/kidandcat/takan/modules/vault"
 )
 
 type vaultItemView struct {
 	ID, Name, Username, URL, Folder, TagsLine string
 	Favorite, HasPassword, HasTOTP            bool
+	OTPCode, OTPRemaining                     string // current code when HasTOTP (panel only)
 }
 
 type vaultGrantView struct {
@@ -192,6 +195,7 @@ func (s *Server) sealVaultForm(name, username, password, totp, notes, folder str
 		}
 	}
 	if totp != "" {
+		totp = normalizeVaultTOTPInput(totp)
 		totpEnc, err = s.Box.Seal(totp)
 		if err != nil {
 			return store.VaultItem{}, err
@@ -208,6 +212,31 @@ func (s *Server) sealVaultForm(name, username, password, totp, notes, folder str
 		PasswordEnc: passEnc, TOTPEnc: totpEnc, NotesEnc: notesEnc,
 		URLs: urls, Folder: folder,
 	}, nil
+}
+
+func normalizeVaultTOTPInput(raw string) string {
+	return vault.NormalizeTOTPForStore(raw)
+}
+
+// fillVaultOTP populates current TOTP codes for panel display.
+func (s *Server) fillVaultOTP(items []vaultItemView, encSecrets map[string]string) {
+	now := time.Now()
+	for i := range items {
+		sec := encSecrets[items[i].ID]
+		if sec == "" {
+			continue
+		}
+		plain, err := s.Box.Open(sec)
+		if err != nil {
+			continue
+		}
+		code, rem, _, err := vault.CurrentOTPCode(plain, now)
+		if err != nil {
+			continue
+		}
+		items[i].OTPCode = code
+		items[i].OTPRemaining = fmt.Sprintf("%d", rem)
+	}
 }
 
 // importChromeCSV imports Chrome / Google Password Manager CSV exports.

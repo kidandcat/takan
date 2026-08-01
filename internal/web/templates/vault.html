@@ -112,8 +112,8 @@
       </div>
       <div class="row" style="gap:1rem;flex-wrap:wrap">
         <div style="flex:1;min-width:12rem">
-          <label for="v-totp">TOTP secret <span class="faint">(optional)</span></label>
-          <input id="v-totp" name="totp" type="text" autocomplete="off"/>
+          <label for="v-totp">TOTP / 2FA secret <span class="faint">(base32 or otpauth://…)</span></label>
+          <input id="v-totp" name="totp" type="text" placeholder="JBSWY3DPEHPK3PXP or otpauth://totp/…" autocomplete="off"/>
         </div>
         <div style="flex:1;min-width:12rem">
           <label for="v-folder">Folder</label>
@@ -159,6 +159,7 @@
           <tr style="text-align:left;border-bottom:1px solid var(--border)">
             <th style="padding:.5rem">Name</th>
             <th style="padding:.5rem">Username</th>
+            <th style="padding:.5rem">OTP</th>
             <th style="padding:.5rem">URL</th>
             <th style="padding:.5rem"></th>
           </tr>
@@ -166,10 +167,18 @@
         <tbody>
           {{range .VaultItems}}
           <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:.55rem"><strong>{{.Name}}</strong>
-              {{if .HasTOTP}} <span class="faint">· TOTP</span>{{end}}
-            </td>
+            <td style="padding:.55rem"><strong>{{.Name}}</strong></td>
             <td style="padding:.55rem">{{.Username}}</td>
+            <td style="padding:.55rem">
+              {{if .OTPCode}}
+                <code style="font-size:1rem;letter-spacing:.08em">{{.OTPCode}}</code>
+                <span class="faint" style="font-size:.75rem"> {{.OTPRemaining}}s</span>
+              {{else if .HasTOTP}}
+                <span class="faint">—</span>
+              {{else}}
+                <span class="faint">·</span>
+              {{end}}
+            </td>
             <td style="padding:.55rem" class="muted" style="max-width:18rem;overflow:hidden;text-overflow:ellipsis">{{.URL}}</td>
             <td style="padding:.55rem">
               <form method="post" action="/dashboard/vault/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?')">
