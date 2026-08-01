@@ -130,6 +130,11 @@ type moduleStatus struct {
 	Detail  string `json:"detail"`
 }
 
+// StatusJSON returns takan_status payload for API/MCP.
+func (p *Provider) StatusJSON(ctx context.Context, userID string) (string, error) {
+	return p.statusJSON(ctx, userID)
+}
+
 func (p *Provider) statusJSON(ctx context.Context, userID string) (string, error) {
 	mods, err := p.Store.ListModules(ctx, userID)
 	if err != nil {

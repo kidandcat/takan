@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kidandcat/takan/internal/agenthub"
+	"github.com/kidandcat/takan/internal/api"
 	"github.com/kidandcat/takan/internal/config"
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/mcp"
@@ -182,6 +183,13 @@ func main() {
 	}
 	webSrv.OnToolsChanged = mcpSrv.NotifyToolsChanged
 
+	apiSrv := &api.Server{
+		Store: st, Box: box, PublicURL: cfg.PublicURL,
+		OnToolsChanged: mcpSrv.NotifyToolsChanged,
+		AuthRateLimit:  authLimit,
+		StatusJSON:     prov.StatusJSON,
+	}
+
 	oauthSrv := &oauth.Server{
 		Store:            st,
 		PublicURL:        cfg.PublicURL,
@@ -210,6 +218,7 @@ func main() {
 	mux := http.NewServeMux()
 	webSrv.Routes(mux)
 	oauthSrv.Routes(mux)
+	apiSrv.Routes(mux)
 	mux.HandleFunc("POST /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("GET /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("DELETE /mcp", mcpSrv.HandleHTTP)

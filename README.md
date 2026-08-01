@@ -34,6 +34,26 @@ Only the URL is needed. Clients discover OAuth (PKCE), open a browser login, and
 https://<your-host>/mcp
 ```
 
+## Mobile API
+
+JSON REST for the Flutter app (`takan-app`). Bearer access tokens (same store as OAuth).
+
+| Method | Path | Notes |
+|--------|------|--------|
+| POST | `/api/v1/auth/login` | `{email,password}` → access + refresh |
+| POST | `/api/v1/auth/refresh` | rotate refresh |
+| POST | `/api/v1/auth/logout` | revoke access |
+| GET | `/api/v1/me` | current user |
+| GET | `/api/v1/status` | module readiness |
+| GET/POST | `/api/v1/modules` · `…/{id}/toggle` | enable modules |
+| GET/POST/DELETE | `/api/v1/vault/…` | items + grants |
+| GET/POST | `/api/v1/approvals` | agent auth inbox (vault grants) |
+| GET/POST/DELETE | `/api/v1/people` | directory |
+| GET | `/api/v1/health` | snapshot |
+| GET/POST | `/api/v1/invites` | invite codes |
+
+Credential reads for agents still use vault grants (`secrets_request` → approve in app or panel).
+
 ## Multi-user
 
 - Isolation by `user_id` (modules, machines, secrets, people, health, Mercadona, email).
