@@ -14,10 +14,18 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+// readWait must exceed hub ping interval (30s) and match hub's read deadline (120s).
+// Without resetting this on inbound protocol pings, idle agents disconnect every ~2 min.
+const (
+	readWait  = 120 * time.Second
+	pingEvery = 30 * time.Second
 )
 
 type wireMsg struct {
@@ -105,13 +113,62 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 		_ = c.Close()
 	}()
 
-	_ = c.WriteJSON(wireMsg{Type: "hello"})
+	// Serialize writes: protocol pongs, app pings, and task results share the conn.
+	var writeMu sync.Mutex
+	writeJSON := func(v any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return c.WriteJSON(v)
+	}
+
+	// Hub sends WebSocket Ping frames every 30s. Those are control frames: they do
+	// not make ReadMessage return, so a fixed SetReadDeadline before ReadMessage
+	// expires after 120s of pure control traffic → i/o timeout + flapping offline.
+	// Reset the deadline on every inbound ping (and reply with pong).
+	c.SetPingHandler(func(appData string) error {
+		writeMu.Lock()
+		err := c.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(5*time.Second))
+		writeMu.Unlock()
+		if err == websocket.ErrCloseSent {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return c.SetReadDeadline(time.Now().Add(readWait))
+	})
+
+	if err := writeJSON(wireMsg{Type: "hello"}); err != nil {
+		return err
+	}
+
+	// App-level keepalive: hub Touch() + server read deadline need data messages
+	// (protocol pings alone only keep the client deadline if SetPingHandler runs).
+	pingStop := make(chan struct{})
+	defer close(pingStop)
+	go func() {
+		t := time.NewTicker(pingEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingStop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := writeJSON(wireMsg{Type: "ping"}); err != nil {
+					_ = c.Close()
+					return
+				}
+			}
+		}
+	}()
 
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		_ = c.SetReadDeadline(time.Now().Add(120 * time.Second))
+		_ = c.SetReadDeadline(time.Now().Add(readWait))
 		_, raw, err := c.ReadMessage()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -119,6 +176,8 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 			}
 			return err
 		}
+		// Data frames also prove liveness.
+		_ = c.SetReadDeadline(time.Now().Add(readWait))
 		var msg wireMsg
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			continue
@@ -128,24 +187,25 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 			res := runBash(ctx, msg.Command)
 			res.Type = "bash_result"
 			res.TaskID = msg.TaskID
-			if err := c.WriteJSON(res); err != nil {
+			if err := writeJSON(res); err != nil {
 				return err
 			}
 		case "ai_start":
 			res := handleAIStart(jobs, msg)
 			res.Type = "ai_start_result"
 			res.TaskID = msg.TaskID
-			if err := c.WriteJSON(res); err != nil {
+			if err := writeJSON(res); err != nil {
 				return err
 			}
 		case "ai_status":
 			res := handleAIStatus(jobs, msg)
 			res.Type = "ai_status_result"
 			res.TaskID = msg.TaskID
-			if err := c.WriteJSON(res); err != nil {
+			if err := writeJSON(res); err != nil {
 				return err
 			}
-		case "pong":
+		case "pong", "ping":
+			// Hub may echo pong for our app pings; ignore.
 		}
 	}
 }
