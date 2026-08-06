@@ -85,6 +85,22 @@ func TestVaultIsolationAndGrantOnce(t *testing.T) {
 		t.Fatalf("second consume status=%s", g2.Status)
 	}
 
+	// Auto-approve actor is recorded separately
+	gAuto, err := st.CreateVaultGrant(ctx, VaultGrant{
+		UserID: a.ID, ItemID: item.ID, Fields: []string{"password"},
+		Purpose: "auto path", Mode: "once", TTLSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gAuto, err = st.DecideVaultGrantAs(ctx, a.ID, gAuto.ID, true, "", "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gAuto.Status != "approved" {
+		t.Fatalf("auto approve status=%s", gAuto.Status)
+	}
+
 	// Session mode does not consume
 	gS, err := st.CreateVaultGrant(ctx, VaultGrant{
 		UserID: a.ID, ItemID: item.ID, Fields: []string{"password"},

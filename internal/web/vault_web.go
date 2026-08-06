@@ -29,6 +29,29 @@ func (s *Server) dashVault(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "vault", "Vault", "vault.html")
 }
 
+func (s *Server) saveVaultSettings(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	cfg, err := vault.LoadConfig(r.Context(), s.Store, u.ID)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/vault?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		return
+	}
+	cfg.RequireApproval = r.FormValue("require_approval") == "1"
+	if err := vault.SaveConfig(r.Context(), s.Store, u.ID, cfg); err != nil {
+		http.Redirect(w, r, "/dashboard/vault?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		return
+	}
+	msg := "Agent secret requests require your approval"
+	if !cfg.RequireApproval {
+		msg = "Agent secret requests are auto-approved (no panel step)"
+	}
+	http.Redirect(w, r, "/dashboard/vault?flash="+urlQuery(msg), http.StatusFound)
+}
+
 func (s *Server) createVaultItem(w http.ResponseWriter, r *http.Request) {
 	u := s.requireUser(w, r)
 	if u == nil {

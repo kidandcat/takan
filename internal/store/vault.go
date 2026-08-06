@@ -576,8 +576,16 @@ UPDATE vault_grants SET status=?, approved_at=COALESCE(?, approved_at), expires_
 	return err
 }
 
-// DecideVaultGrant approves or denies a pending grant. On approve, sets expires_at from now+ttl.
+// DecideVaultGrant approves or denies a pending grant (actor "user"). On approve, sets expires_at from now+ttl.
 func (s *Store) DecideVaultGrant(ctx context.Context, userID, id string, approve bool, itemID string) (VaultGrant, error) {
+	return s.DecideVaultGrantAs(ctx, userID, id, approve, itemID, "user")
+}
+
+// DecideVaultGrantAs is DecideVaultGrant with an explicit audit actor (e.g. "user", "auto").
+func (s *Store) DecideVaultGrantAs(ctx context.Context, userID, id string, approve bool, itemID, actor string) (VaultGrant, error) {
+	if strings.TrimSpace(actor) == "" {
+		actor = "user"
+	}
 	g, err := s.GetVaultGrant(ctx, userID, id)
 	if err != nil {
 		return g, err
@@ -590,7 +598,7 @@ func (s *Store) DecideVaultGrant(ctx context.Context, userID, id string, approve
 		if err := s.setGrantStatus(ctx, userID, id, "denied", &now, nil, nil); err != nil {
 			return g, err
 		}
-		_ = s.AddVaultAudit(ctx, userID, "grant_deny", g.ItemID, id, "user", "")
+		_ = s.AddVaultAudit(ctx, userID, "grant_deny", g.ItemID, id, actor, "")
 		g.Status = "denied"
 		return g, nil
 	}
@@ -612,7 +620,11 @@ UPDATE vault_grants SET status='approved', item_id=?, approved_at=?, expires_at=
 	if err != nil {
 		return g, err
 	}
-	_ = s.AddVaultAudit(ctx, userID, "grant_approve", g.ItemID, id, "user", g.Purpose)
+	action := "grant_approve"
+	if actor == "auto" {
+		action = "grant_auto_approve"
+	}
+	_ = s.AddVaultAudit(ctx, userID, action, g.ItemID, id, actor, g.Purpose)
 	g.Status = "approved"
 	g.ApprovedAt = &now
 	g.ExpiresAt = &exp

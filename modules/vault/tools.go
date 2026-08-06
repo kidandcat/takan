@@ -57,8 +57,9 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 			{
 				Tool: mcp.Tool{
 					Name: "secrets_request",
-					Description: "Request access to secret fields of a vault item. Creates a pending grant the user must approve " +
-						"(panel → Vault, later mobile biometrics). Pass item_id and/or url/query to match. " +
+					Description: "Request access to secret fields of a vault item. By default creates a pending grant the user must approve " +
+						"(panel → Vault). If the user disabled require_approval in Vault settings, grants with a matched item are " +
+						"auto-approved and secrets_status returns secrets immediately. Pass item_id and/or url/query to match. " +
 						"fields: username, password, otp (current 6-digit TOTP), totp (base32 secret), notes. " +
 						"Prefer otp for 2FA fill-in. mode: once (default) or session (until ttl). " +
 						"Then poll secrets_status with grant_id until approved/denied/expired.",
@@ -101,6 +102,17 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 					if err != nil {
 						return "", err
 					}
+					// Per-user setting: skip panel approval when require_approval is off
+					// and the grant already resolved an item.
+					cfg, _ := LoadConfig(ctx, st, userID)
+					autoApproved := false
+					if !cfg.RequireApproval && g.ItemID != "" && g.Status == "pending" {
+						ag, aerr := st.DecideVaultGrantAs(ctx, userID, g.ID, true, "", "auto")
+						if aerr == nil {
+							g = ag
+							autoApproved = true
+						}
+					}
 					out := map[string]any{
 						"grant_id":    g.ID,
 						"status":      g.Status,
@@ -109,7 +121,12 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 						"item_id":     g.ItemID,
 						"purpose":     g.Purpose,
 						"ttl_seconds": g.TTLSeconds,
-						"hint":        "User must approve in Takan panel → Vault (Pending grants). Poll secrets_status.",
+					}
+					if autoApproved {
+						out["auto_approved"] = true
+						out["hint"] = "User has vault require_approval off — grant auto-approved. Poll secrets_status for secrets."
+					} else {
+						out["hint"] = "User must approve in Takan panel → Vault (Pending grants). Poll secrets_status."
 					}
 					if g.ItemID != "" {
 						if it, err := st.GetVaultItem(ctx, userID, g.ItemID); err == nil {

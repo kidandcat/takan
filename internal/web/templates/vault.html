@@ -4,12 +4,17 @@
     <div>
       <h1>Vault</h1>
       <p class="muted" style="margin-top:.4rem;max-width:48ch">
-        Encrypted logins for you and agents. Agents request secrets; you approve grants here.
+        Encrypted logins for you and agents. Agents request secrets; you approve grants here — unless you turn approval off below.
       </p>
     </div>
     <div class="toolbar">
       {{if gt .VaultPendingCount 0}}
       <span class="pill on"><span class="live"></span>{{.VaultPendingCount}} pending</span>
+      {{end}}
+      {{if .VaultRequireApproval}}
+      <span class="pill on">approval on</span>
+      {{else}}
+      <span class="pill off">auto-approve</span>
       {{end}}
       <span class="pill neutral">{{.VaultItemCount}} logins</span>
       <button type="button" class="secondary" onclick="openImportModal()">Import CSV</button>
@@ -21,6 +26,29 @@
 {{if .Flash}}
   <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
 {{end}}
+
+<section class="section">
+  <div class="card">
+    <form method="post" action="/dashboard/vault/settings" class="form-stack" style="margin:0">
+      <div class="machine-row ai-enable">
+        <div>
+          <div class="name">Require approval for agent secrets</div>
+          <div class="faint">On → <code>secrets_request</code> waits for you in this panel. Off → matched items are auto-approved (agent gets secrets immediately via <code>secrets_status</code>).</div>
+        </div>
+        <label class="switch" title="Require approval">
+          <input type="checkbox" name="require_approval" value="1" {{if .VaultRequireApproval}}checked{{end}}
+            onchange="this.form.submit()"/>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <noscript>
+        <div class="row">
+          <button type="submit">Save approval setting</button>
+        </div>
+      </noscript>
+    </form>
+  </div>
+</section>
 
 {{if .VaultGrants}}
 <section class="section">

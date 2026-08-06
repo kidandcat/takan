@@ -22,6 +22,7 @@ import (
 	"github.com/kidandcat/takan/modules"
 	emailmod "github.com/kidandcat/takan/modules/email"
 	machinemod "github.com/kidandcat/takan/modules/machine"
+	"github.com/kidandcat/takan/modules/vault"
 	sipmod "github.com/kidandcat/takan/modules/sip"
 	telegrammod "github.com/kidandcat/takan/modules/telegram"
 )
@@ -129,6 +130,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/health/issues/{id}", s.updateHealthIssue)
 	mux.HandleFunc("POST /dashboard/health/issues/{id}/delete", s.deleteHealthIssue)
 	mux.HandleFunc("POST /dashboard/vault", s.createVaultItem)
+	mux.HandleFunc("POST /dashboard/vault/settings", s.saveVaultSettings)
 	mux.HandleFunc("POST /dashboard/vault/{id}", s.updateVaultItem)
 	mux.HandleFunc("POST /dashboard/vault/{id}/delete", s.deleteVaultItem)
 	mux.HandleFunc("POST /dashboard/vault/grants/{id}/approve", s.approveVaultGrant)
@@ -192,10 +194,11 @@ type pageData struct {
 	HealthLogCount    int
 	HealthIssueCount  int
 	// Vault module
-	VaultItems       []vaultItemView
-	VaultItemCount   int
-	VaultGrants      []vaultGrantView
-	VaultPendingCount int
+	VaultItems            []vaultItemView
+	VaultItemCount        int
+	VaultGrants           []vaultGrantView
+	VaultPendingCount     int
+	VaultRequireApproval  bool // true (default) = agents need panel approval for secrets
 	// Dashboard stats (precomputed for templates)
 	ModEnabledCount int
 	ModTotalCount   int
@@ -922,6 +925,10 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		}
 	}
 	// Vault module panel data
+	data.VaultRequireApproval = true
+	if vcfg, err := vault.LoadConfig(ctx, s.Store, u.ID); err == nil {
+		data.VaultRequireApproval = vcfg.RequireApproval
+	}
 	if n, err := s.Store.CountVaultItems(ctx, u.ID); err == nil {
 		data.VaultItemCount = n
 	}

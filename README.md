@@ -21,7 +21,7 @@ Integrations live under `modules/` as subpackages:
 | **Health** | `modules/health` | `health_status`, `health_log`, `health_issue` | Profile + daily diary + injuries |
 | **Telegram** | `modules/telegram` | `telegram_chats`, `telegram_send` | Bot token + allowed chats in panel |
 | **SIP** | `modules/sip` | `sip_status`, `sip_devices`, `sip_calls`, `sip_hangup` | xAI key + Android gateways in panel; phones → `wss://…/sip/ws` |
-| **Vault** | `modules/vault` | `secrets_search`, `secrets_request`, `secrets_status`, `secrets_store`, `secrets_generate`, `secrets_delete` | Password manager; agent reads require panel (or later mobile) approve |
+| **Vault** | `modules/vault` | `secrets_search`, `secrets_request`, `secrets_status`, `secrets_store`, `secrets_generate`, `secrets_delete` | Password manager; agent reads require panel approve by default (per-user toggle can auto-approve) |
 | **meta** | `modules` | `takan_status` | Always on — all modules + readiness |
 
 When the tool set changes, Takan pushes `notifications/tools/list_changed` on open SSE streams (best-effort). Clients that ignore it keep the old tool list until reconnect; calls to disabled tools simply fail.
@@ -52,7 +52,7 @@ JSON REST for the Flutter app (`takan-app`). Bearer access tokens (same store as
 | GET | `/api/v1/health` | snapshot |
 | GET/POST | `/api/v1/invites` | invite codes |
 
-Credential reads for agents still use vault grants (`secrets_request` → approve in app or panel).
+Credential reads for agents still use vault grants (`secrets_request` → approve in app or panel, unless the user turns off “Require approval” in Vault settings).
 
 ## Multi-user
 
