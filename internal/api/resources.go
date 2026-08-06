@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kidandcat/takan/internal/store"
+	"github.com/kidandcat/takan/modules/vault"
 )
 
 // --- vault ---
@@ -132,6 +133,54 @@ func (s *Server) vaultDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func vaultSettingsJSON(cfg vault.Config) map[string]any {
+	return map[string]any{
+		"require_approval": cfg.RequireApproval,
+	}
+}
+
+func (s *Server) vaultGetSettings(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.authUser(w, r)
+	if !ok {
+		return
+	}
+	cfg, err := vault.LoadConfig(r.Context(), s.Store, u.ID)
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, vaultSettingsJSON(cfg))
+}
+
+func (s *Server) vaultPatchSettings(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.authUser(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		RequireApproval *bool `json:"require_approval"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		s.writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.RequireApproval == nil {
+		s.writeErr(w, http.StatusBadRequest, "require_approval required")
+		return
+	}
+	cfg, err := vault.LoadConfig(r.Context(), s.Store, u.ID)
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	cfg.RequireApproval = *body.RequireApproval
+	if err := vault.SaveConfig(r.Context(), s.Store, u.ID, cfg); err != nil {
+		s.writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, vaultSettingsJSON(cfg))
 }
 
 func grantJSON(g store.VaultGrant) map[string]any {

@@ -47,6 +47,7 @@ JSON REST for the Flutter app (`takan-app`). Bearer access tokens (same store as
 | GET | `/api/v1/status` | module readiness |
 | GET/POST | `/api/v1/modules` · `…/{id}/toggle` | enable modules |
 | GET/POST/DELETE | `/api/v1/vault/…` | items + grants |
+| GET/PATCH | `/api/v1/vault/settings` | `{require_approval}` (default true) |
 | GET/POST | `/api/v1/approvals` | agent auth inbox (vault grants) |
 | GET/POST/DELETE | `/api/v1/people` | directory |
 | GET | `/api/v1/health` | snapshot |

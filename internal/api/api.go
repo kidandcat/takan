@@ -46,6 +46,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/vault/items", s.vaultList)
 	mux.HandleFunc("POST /api/v1/vault/items", s.vaultCreate)
 	mux.HandleFunc("DELETE /api/v1/vault/items/{id}", s.vaultDelete)
+	mux.HandleFunc("GET /api/v1/vault/settings", s.vaultGetSettings)
+	mux.HandleFunc("PATCH /api/v1/vault/settings", s.vaultPatchSettings)
+	mux.HandleFunc("PUT /api/v1/vault/settings", s.vaultPatchSettings) // alias for clients without PATCH
 	mux.HandleFunc("GET /api/v1/vault/grants", s.vaultGrants)
 	mux.HandleFunc("POST /api/v1/vault/grants/{id}/approve", s.vaultGrantApprove)
 	mux.HandleFunc("POST /api/v1/vault/grants/{id}/deny", s.vaultGrantDeny)
