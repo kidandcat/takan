@@ -15,6 +15,11 @@ import (
 // Protocol version we advertise (Streamable HTTP + listChanged).
 const protocolVersion = "2025-03-26"
 
+// sseMaxLifetime is the hard cap for a single GET /mcp SSE stream. Clients are
+// expected to reconnect; without this, half-dead streams (proxy cancel races,
+// zombie clients) accumulate and can burn CPU for hours.
+const sseMaxLifetime = 15 * time.Minute
+
 // UserResolver maps a bearer token to a user id.
 type UserResolver func(ctx context.Context, bearer string) (userID string, err error)
 
@@ -155,13 +160,20 @@ func (s *Server) handleGET(w http.ResponseWriter, r *http.Request) {
 	ch := sess.addStream()
 	defer sess.removeStream(ch)
 
-	ctx := r.Context()
+	// Bound stream lifetime so reconnecting clients cannot leave goroutines forever.
+	// No cap on concurrent streams — only max age of each one.
+	ctx, cancel := context.WithTimeout(r.Context(), sseMaxLifetime)
+	defer cancel()
+
 	// Keepalive comments so proxies don't kill idle streams.
 	tick := time.NewTicker(25 * time.Second)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				log.Printf("mcp: SSE max lifetime reached user=%s session=%s", userID, sess.ID)
+			}
 			return
 		case <-tick.C:
 			if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
