@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,18 +16,53 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// readWait must exceed hub ping interval (30s) and match hub's read deadline (120s).
-// Without resetting this on inbound protocol pings, idle agents disconnect every ~2 min.
-const (
-	readWait  = 120 * time.Second
-	pingEvery = 30 * time.Second
-)
+// connTiming: readWait must exceed hub ping interval (30s) and match hub's read
+// deadline (120s). Without resetting this on inbound protocol pings, idle agents
+// disconnect every ~2 min.
+//
+// Watchdog is inbound-only: a half-open TCP write can succeed locally, so outbound
+// pings must not count as liveness. The timer (not the socket deadline) is what
+// recovers a Mac after sleep when kqueue never delivers the 120s read timeout.
+type connTiming struct {
+	readWait      time.Duration
+	writeWait     time.Duration
+	pingEvery     time.Duration
+	watchdogTick  time.Duration
+	staleAfter    time.Duration
+	hangExitAfter time.Duration
+}
+
+func defaultConnTiming() connTiming {
+	return connTiming{
+		readWait:      120 * time.Second,
+		writeWait:     10 * time.Second,
+		pingEvery:     30 * time.Second,
+		watchdogTick:  15 * time.Second,
+		staleAfter:    90 * time.Second,
+		hangExitAfter: 3 * time.Minute,
+	}
+}
+
+var forceExit = os.Exit
+
+// livenessAction decides whether a silent connection should be closed or the process
+// should exit so launchd/systemd can restart it. Idle is time since last inbound.
+func livenessAction(idle, staleAfter, hangExitAfter time.Duration) (closeConn, exitProc bool) {
+	if idle > hangExitAfter {
+		return true, true
+	}
+	if idle > staleAfter {
+		return true, false
+	}
+	return false, false
+}
 
 type wireMsg struct {
 	Type       string    `json:"type"`
@@ -69,7 +105,7 @@ func main() {
 	defer cancel()
 
 	for ctx.Err() == nil {
-		err := runOnce(ctx, *baseURL, *token, jobs)
+		err := runOnce(ctx, *baseURL, *token, jobs, defaultConnTiming())
 		if ctx.Err() != nil {
 			return
 		}
@@ -82,7 +118,7 @@ func main() {
 	}
 }
 
-func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
+func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connTiming) error {
 	u, err := url.Parse(strings.TrimRight(base, "/"))
 	if err != nil {
 		return err
@@ -100,7 +136,10 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 
 	hdr := http.Header{}
 	hdr.Set("Authorization", "Bearer "+token)
-	d := websocket.Dialer{HandshakeTimeout: 15 * time.Second}
+	d := websocket.Dialer{
+		HandshakeTimeout: 15 * time.Second,
+		NetDialContext:   (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+	}
 	c, _, err := d.DialContext(ctx, u.String(), hdr)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
@@ -113,11 +152,16 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 		_ = c.Close()
 	}()
 
+	var lastIn atomic.Int64
+	touch := func() { lastIn.Store(time.Now().UnixNano()) }
+	touch()
+
 	// Serialize writes: protocol pongs, app pings, and task results share the conn.
 	var writeMu sync.Mutex
 	writeJSON := func(v any) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
+		_ = c.SetWriteDeadline(time.Now().Add(tm.writeWait))
 		return c.WriteJSON(v)
 	}
 
@@ -126,8 +170,9 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 	// expires after 120s of pure control traffic → i/o timeout + flapping offline.
 	// Reset the deadline on every inbound ping (and reply with pong).
 	c.SetPingHandler(func(appData string) error {
+		touch()
 		writeMu.Lock()
-		err := c.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(5*time.Second))
+		err := c.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(tm.writeWait))
 		writeMu.Unlock()
 		if err == websocket.ErrCloseSent {
 			return nil
@@ -135,7 +180,7 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 		if err != nil {
 			return err
 		}
-		return c.SetReadDeadline(time.Now().Add(readWait))
+		return c.SetReadDeadline(time.Now().Add(tm.readWait))
 	})
 
 	if err := writeJSON(wireMsg{Type: "hello"}); err != nil {
@@ -147,7 +192,7 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 	pingStop := make(chan struct{})
 	defer close(pingStop)
 	go func() {
-		t := time.NewTicker(pingEvery)
+		t := time.NewTicker(tm.pingEvery)
 		defer t.Stop()
 		for {
 			select {
@@ -163,12 +208,37 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 			}
 		}
 	}()
+	go func() {
+		t := time.NewTicker(tm.watchdogTick)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingStop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				idle := time.Since(time.Unix(0, lastIn.Load()))
+				closeConn, exitProc := livenessAction(idle, tm.staleAfter, tm.hangExitAfter)
+				if !closeConn {
+					continue
+				}
+				log.Printf("watchdog: no inbound for %s, closing socket", idle)
+				_ = c.Close()
+				if exitProc {
+					log.Printf("watchdog: still hung after %s, exiting", idle)
+					forceExit(2)
+					return
+				}
+			}
+		}
+	}()
 
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		_ = c.SetReadDeadline(time.Now().Add(readWait))
+		_ = c.SetReadDeadline(time.Now().Add(tm.readWait))
 		_, raw, err := c.ReadMessage()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -176,8 +246,8 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager) error {
 			}
 			return err
 		}
-		// Data frames also prove liveness.
-		_ = c.SetReadDeadline(time.Now().Add(readWait))
+		touch()
+		_ = c.SetReadDeadline(time.Now().Add(tm.readWait))
 		var msg wireMsg
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			continue
