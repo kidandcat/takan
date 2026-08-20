@@ -85,26 +85,27 @@ type AIStartResult struct {
 }
 
 type wireMsg struct {
-	Type      string  `json:"type"`
-	TaskID    string  `json:"task_id,omitempty"`
-	Command   string  `json:"command,omitempty"`
-	ExitCode  int     `json:"exit_code,omitempty"`
-	Stdout    string  `json:"stdout,omitempty"`
-	Stderr    string  `json:"stderr,omitempty"`
-	Error     string  `json:"error,omitempty"`
-	Name      string  `json:"name,omitempty"`
-	Agent     string  `json:"agent,omitempty"`
-	Runner    string  `json:"runner,omitempty"`
-	Prompt    string  `json:"prompt,omitempty"`
-	Cwd       string  `json:"cwd,omitempty"`
-	JobID     string  `json:"job_id,omitempty"`
-	Status    string  `json:"status,omitempty"`
-	PID       int     `json:"pid,omitempty"`
-	Output    string  `json:"output,omitempty"`
-	StartedAt string  `json:"started_at,omitempty"`
-	FinishedAt string `json:"finished_at,omitempty"`
-	TailBytes int     `json:"tail_bytes,omitempty"`
-	Jobs      []AIJob `json:"jobs,omitempty"`
+	Type       string  `json:"type"`
+	TaskID     string  `json:"task_id,omitempty"`
+	Command    string  `json:"command,omitempty"`
+	ExitCode   int     `json:"exit_code,omitempty"`
+	Stdout     string  `json:"stdout,omitempty"`
+	Stderr     string  `json:"stderr,omitempty"`
+	Error      string  `json:"error,omitempty"`
+	Name       string  `json:"name,omitempty"`
+	Agent      string  `json:"agent,omitempty"`
+	Runner     string  `json:"runner,omitempty"`
+	Prompt     string  `json:"prompt,omitempty"`
+	Cwd        string  `json:"cwd,omitempty"`
+	JobID      string  `json:"job_id,omitempty"`
+	Status     string  `json:"status,omitempty"`
+	PID        int     `json:"pid,omitempty"`
+	Output     string  `json:"output,omitempty"`
+	StartedAt  string  `json:"started_at,omitempty"`
+	FinishedAt string  `json:"finished_at,omitempty"`
+	TailBytes  int     `json:"tail_bytes,omitempty"`
+	Jobs       []AIJob `json:"jobs,omitempty"`
+	Html       string  `json:"html,omitempty"`
 }
 
 func New(auth Authenticator, touch Touch) *Hub {
@@ -281,6 +282,23 @@ func (h *Hub) AIStatus(ctx context.Context, userID, machineName, jobID string, t
 	return job, nil, nil
 }
 
+const maxDisplayHTML = 1 << 20 // 1 MiB
+
+// ShowHTML pushes a static HTML document to a machine's local display server.
+func (h *Hub) ShowHTML(ctx context.Context, userID, machineName, html string) error {
+	if len(html) > maxDisplayHTML {
+		return fmt.Errorf("html too large (%d bytes, max %d)", len(html), maxDisplayHTML)
+	}
+	res, err := h.rpc(ctx, userID, machineName, wireMsg{Type: "display", Html: html}, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	if res.Error != "" {
+		return fmt.Errorf("%s", res.Error)
+	}
+	return nil
+}
+
 // HandleWS is the /agent/ws endpoint.
 func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	tok := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -299,6 +317,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	c.SetReadLimit(2 << 20)
 	ag := &agent{machineID: machineID, userID: userID, name: name, conn: c}
 
 	h.mu.Lock()
@@ -360,7 +379,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 				_ = ag.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"pong"}`))
 				ag.writeMu.Unlock()
 			}
-		case "bash_result", "ai_start_result", "ai_status_result":
+		case "bash_result", "ai_start_result", "ai_status_result", "display_result":
 			h.mu.Lock()
 			pt := h.pending[msg.TaskID]
 			// Only the agent that owns the task may complete it.

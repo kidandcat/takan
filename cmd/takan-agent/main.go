@@ -84,12 +84,14 @@ type wireMsg struct {
 	FinishedAt string    `json:"finished_at,omitempty"`
 	TailBytes  int       `json:"tail_bytes,omitempty"`
 	Jobs       []jobMeta `json:"jobs,omitempty"`
+	Html       string    `json:"html,omitempty"`
 }
 
 func main() {
 	baseURL := flag.String("url", env("TAKAN_URL", "https://takan.es"), "Takan hub base URL")
 	token := flag.String("token", env("TAKAN_AGENT_TOKEN", ""), "Agent token from panel")
 	name := flag.String("name", env("TAKAN_AGENT_NAME", ""), "Machine name (informational)")
+	displayAddr := flag.String("display-addr", env("TAKAN_DISPLAY_ADDR", "127.0.0.1:8787"), "Local HTTP addr for display HTML (empty to disable)")
 	flag.Parse()
 	if *token == "" {
 		log.Fatal("--token or TAKAN_AGENT_TOKEN required")
@@ -101,11 +103,20 @@ func main() {
 		log.Fatalf("jobs dir: %v", err)
 	}
 
+	var disp *displayServer
+	if strings.TrimSpace(*displayAddr) != "" {
+		disp = newDisplayServer(*displayAddr, defaultDisplayDir())
+		if err := disp.start(); err != nil {
+			log.Printf("display server: %v — display_show will fail on this host", err)
+			disp = nil
+		}
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	for ctx.Err() == nil {
-		err := runOnce(ctx, *baseURL, *token, jobs, defaultConnTiming())
+		err := runOnce(ctx, *baseURL, *token, jobs, defaultConnTiming(), disp)
 		if ctx.Err() != nil {
 			return
 		}
@@ -118,7 +129,7 @@ func main() {
 	}
 }
 
-func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connTiming) error {
+func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connTiming, disp *displayServer) error {
 	u, err := url.Parse(strings.TrimRight(base, "/"))
 	if err != nil {
 		return err
@@ -144,6 +155,7 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connT
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
+	c.SetReadLimit(2 << 20)
 	defer c.Close()
 	log.Printf("connected to %s", base)
 
@@ -271,6 +283,18 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connT
 			res := handleAIStatus(jobs, msg)
 			res.Type = "ai_status_result"
 			res.TaskID = msg.TaskID
+			if err := writeJSON(res); err != nil {
+				return err
+			}
+		case "display":
+			res := wireMsg{Type: "display_result", TaskID: msg.TaskID, Status: "ok"}
+			if disp == nil {
+				res.Status = "failed"
+				res.Error = "display server disabled on this agent"
+			} else if err := disp.setHTML(msg.Html); err != nil {
+				res.Status = "failed"
+				res.Error = err.Error()
+			}
 			if err := writeJSON(res); err != nil {
 				return err
 			}

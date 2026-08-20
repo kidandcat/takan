@@ -1,0 +1,113 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Display</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:56ch">
+      Remote kiosk screens. Each screen is a machine running <code>takan-agent</code>,
+      which serves the last HTML on <code>127.0.0.1:8787</code>. Point the kiosk browser there.
+    </p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Screens</h3>
+        <p class="muted">Name is what agents pass to <code>display_show</code>. The office kiosk is <code>oficina</code>.</p>
+      </div>
+      <span class="pill {{if gt .DisplayOnline 0}}on{{else}}neutral{{end}}">
+        {{if gt .DisplayOnline 0}}<span class="live"></span>{{end}}
+        {{.DisplayOnline}} online
+      </span>
+    </div>
+
+    {{if .Displays}}
+    <div class="machine-list">
+      {{range .Displays}}
+      <div class="machine-row">
+        <div>
+          <div class="row" style="gap:.45rem">
+            <span class="name">{{.Name}}</span>
+            {{if .IsDefault}}<span class="pill on">Default</span>{{end}}
+            {{if .Online}}
+              <span class="pill on"><span class="live"></span> Online</span>
+            {{else}}
+              <span class="pill off">Offline</span>
+            {{end}}
+          </div>
+          <p class="faint" style="margin-top:.2rem">
+            machine {{.MachineName}}
+            {{if .LastShown}} · last shown {{.LastShown}}{{end}}
+          </p>
+        </div>
+        <div class="row" style="gap:.4rem">
+          {{if not .IsDefault}}
+          <form method="post" action="/dashboard/display/{{.ID}}/default">
+            <button type="submit" class="secondary">Make default</button>
+          </form>
+          {{end}}
+          <form method="post" action="/dashboard/display/{{.ID}}/delete" onsubmit="return confirm('Remove screen {{.Name}}?')">
+            <button type="submit" class="secondary">Remove</button>
+          </form>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">No screens yet. Add a machine first, then register it here.</div>
+    {{end}}
+  </div>
+</section>
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Add screen</h3>
+        <p class="muted">Binds a name to an installed takan-agent. The agent must be the build that serves local HTML.</p>
+      </div>
+    </div>
+    {{if .Machines}}
+    <form method="post" action="/dashboard/display" class="form-stack" style="max-width:28rem">
+      <div>
+        <label for="name">Name</label>
+        <input id="name" name="name" type="text" required placeholder="oficina" autocomplete="off"/>
+      </div>
+      <div>
+        <label for="machine_id">Machine</label>
+        <select id="machine_id" name="machine_id" required>
+          {{range .Machines}}
+          <option value="{{.ID}}">{{.Name}}{{if .Online}} (online){{end}}</option>
+          {{end}}
+        </select>
+      </div>
+      <label class="row" style="gap:.5rem;align-items:center">
+        <input type="checkbox" name="is_default" value="1"/>
+        <span>Default for <code>display_show</code> when name is omitted</span>
+      </label>
+      <div class="row">
+        <button type="submit">Add screen</button>
+      </div>
+    </form>
+    {{else}}
+    <p class="muted">Create a machine in <a href="/dashboard/machines">Machines</a> and run the install command on the kiosk host first.</p>
+    {{end}}
+
+    <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <h3 style="margin-bottom:.35rem">MCP tools</h3>
+      <p class="muted">
+        When this module is enabled: <code>display_list</code>, <code>display_show</code>.
+        Readiness is included in <code>takan_status</code>.
+      </p>
+      <p class="faint" style="margin-top:.5rem">
+        Kiosk: <code>firefox --kiosk http://127.0.0.1:8787/</code> on the same host as the agent.
+      </p>
+    </div>
+  </div>
+</section>
+{{end}}

@@ -2,7 +2,7 @@
 
 ## What it is
 
-Personal **MCP hub**: one OAuth connection for AI agents (Grok, Claude, Cursor) plus a web panel to enable modules (vault, people, health, machines, email, …). Operates as Jairo’s life OS control surface, not a marketing site.
+Personal **MCP hub**: one OAuth connection for AI agents (Grok, Claude, Cursor) plus a web panel to enable modules (vault, people, health, machines, display, email, …). Operates as Jairo’s life OS control surface, not a marketing site.
 
 ## Users
 

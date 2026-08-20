@@ -22,6 +22,7 @@ import (
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/internal/web"
 	"github.com/kidandcat/takan/modules"
+	"github.com/kidandcat/takan/modules/display"
 	"github.com/kidandcat/takan/modules/email"
 	"github.com/kidandcat/takan/modules/health"
 	"github.com/kidandcat/takan/modules/machine"
@@ -152,6 +153,7 @@ func main() {
 		Telegram:  telegram.Factory(st, box),
 		SIP:       sip.Factory(st, sipHub),
 		Vault:     vault.Factory(st, box),
+		Display:   display.Factory(st, hub),
 		SIPHub:    sipHub,
 	}
 

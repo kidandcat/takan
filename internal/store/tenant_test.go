@@ -94,6 +94,22 @@ func TestCrossTenantIsolation(t *testing.T) {
 	}
 	_ = ma
 
+	da, err := st.CreateDisplay(ctx, a.ID, "oficina", ma.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DisplayByUserAndName(ctx, b.ID, "oficina"); err == nil {
+		t.Fatal("user B must not see display oficina")
+	}
+	dsB, _ := st.ListDisplays(ctx, b.ID)
+	if len(dsB) != 0 {
+		t.Fatalf("B displays: %d", len(dsB))
+	}
+	got, err := st.DefaultDisplay(ctx, a.ID)
+	if err != nil || got.ID != da.ID {
+		t.Fatalf("default display: %+v err=%v", got, err)
+	}
+
 	// Mercadona tables exist in main DB
 	if err := st.EnsureMercadonaSchema(ctx); err != nil {
 		t.Fatal(err)

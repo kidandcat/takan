@@ -22,9 +22,9 @@ import (
 	"github.com/kidandcat/takan/modules"
 	emailmod "github.com/kidandcat/takan/modules/email"
 	machinemod "github.com/kidandcat/takan/modules/machine"
-	"github.com/kidandcat/takan/modules/vault"
 	sipmod "github.com/kidandcat/takan/modules/sip"
 	telegrammod "github.com/kidandcat/takan/modules/telegram"
+	"github.com/kidandcat/takan/modules/vault"
 )
 
 //go:embed templates/*.html
@@ -79,6 +79,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard", s.dashOverview)
 	mux.HandleFunc("GET /dashboard/integrations", s.dashIntegrations)
 	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
+	mux.HandleFunc("GET /dashboard/display", s.dashDisplay)
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
 	mux.HandleFunc("GET /dashboard/telegram", s.dashTelegram)
@@ -106,6 +107,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/machines/bash", s.saveMachineBash)
 	mux.HandleFunc("POST /dashboard/machines/ai", s.saveMachineAI)
 	mux.HandleFunc("POST /dashboard/machines/ai/delete-runner", s.deleteMachineAIRunner)
+	mux.HandleFunc("POST /dashboard/display", s.createDisplay)
+	mux.HandleFunc("POST /dashboard/display/{id}/delete", s.deleteDisplay)
+	mux.HandleFunc("POST /dashboard/display/{id}/default", s.defaultDisplay)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
 	mux.HandleFunc("POST /dashboard/mercadona/clear", s.clearMercadona)
 	mux.HandleFunc("POST /dashboard/email", s.saveEmail)
@@ -139,27 +143,27 @@ func (s *Server) Routes(mux *http.ServeMux) {
 }
 
 type pageData struct {
-	Title               string
-	User                *store.User
-	Error               string
-	Flash               string
-	FlashIsError        bool
-	MCPURL              string
-	PublicURL           string
-	RepoURL             string // e.g. https://github.com/kidandcat/takan
-	OAuthClientID       string
-	OAuthAuthorize      string
-	OAuthToken          string
-	OAuthMetadata       string
-	Modules             []modView
-	Machines            []machView
-	InstallCmd          string
+	Title          string
+	User           *store.User
+	Error          string
+	Flash          string
+	FlashIsError   bool
+	MCPURL         string
+	PublicURL      string
+	RepoURL        string // e.g. https://github.com/kidandcat/takan
+	OAuthClientID  string
+	OAuthAuthorize string
+	OAuthToken     string
+	OAuthMetadata  string
+	Modules        []modView
+	Machines       []machView
+	InstallCmd     string
 	// Machine tool gates (panel)
 	BashEnabled    bool
 	AITasksEnabled bool
 	AIRunners      []machineAIRunnerView
 	// AITabActive selects the AI tasks tab on narrow screens (after AI save/error).
-	AITabActive bool
+	AITabActive         bool
 	MercadonaConfigured bool
 	MercadonaEmail      string
 	MercadonaPostal     string
@@ -186,24 +190,27 @@ type pageData struct {
 	SIPDeviceToken   string // flash: token shown once after create
 	SIPDeviceConnect string // flash: full wss connect URL
 	People           []personView
-	PeopleCount         int
+	PeopleCount      int
 	// Health module
-	HealthProfile     healthProfileView
-	HealthLog         []healthLogView
-	HealthIssues      []healthIssueView
-	HealthLogCount    int
-	HealthIssueCount  int
+	HealthProfile    healthProfileView
+	HealthLog        []healthLogView
+	HealthIssues     []healthIssueView
+	HealthLogCount   int
+	HealthIssueCount int
 	// Vault module
-	VaultItems            []vaultItemView
-	VaultItemCount        int
-	VaultGrants           []vaultGrantView
-	VaultPendingCount     int
-	VaultRequireApproval  bool // true (default) = agents need panel approval for secrets
+	VaultItems           []vaultItemView
+	VaultItemCount       int
+	VaultGrants          []vaultGrantView
+	VaultPendingCount    int
+	VaultRequireApproval bool // true (default) = agents need panel approval for secrets
 	// Dashboard stats (precomputed for templates)
 	ModEnabledCount int
 	ModTotalCount   int
 	MachOnlineCount int
 	MachTotalCount  int
+	Displays        []displayView
+	DisplayCount    int
+	DisplayOnline   int
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
 	// AllowRegister controls public signup CTAs and /register form.
@@ -212,11 +219,11 @@ type pageData struct {
 	InviteRequired bool
 	InviteCode     string
 	// Invites panel
-	InviteQuota     *store.InviteQuotaInfo
-	Invites         []inviteView
-	NewInviteCode   string // flash: show once after create
-	AdminUsers      []adminUserView
-	IsAdmin         bool
+	InviteQuota   *store.InviteQuotaInfo
+	Invites       []inviteView
+	NewInviteCode string // flash: show once after create
+	AdminUsers    []adminUserView
+	IsAdmin       bool
 }
 
 type inviteView struct {
@@ -225,10 +232,10 @@ type inviteView struct {
 }
 
 type adminUserView struct {
-	ID, Email       string
-	Quota           int
+	ID, Email        string
+	Quota            int
 	Unlimited, Admin bool
-	Created         int
+	Created          int
 }
 
 type emailDomainView struct {
@@ -291,6 +298,12 @@ type modFact struct {
 type machView struct {
 	ID, Name string
 	Online   bool
+}
+
+type displayView struct {
+	ID, Name, MachineID, MachineName string
+	Online, IsDefault                bool
+	LastShown                        string
 }
 
 type machineAIRunnerView struct {
@@ -554,6 +567,9 @@ func (s *Server) dashIntegrations(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashMachines(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "machine", "Machines", "machines.html")
 }
+func (s *Server) dashDisplay(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "display", "Display", "display.html")
+}
 func (s *Server) dashMercadona(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "mercadona", "Mercadona", "mercadona.html")
 }
@@ -629,6 +645,29 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.Summary = "No machines registered"
 			} else {
 				mv.Summary = fmt.Sprintf("%d online · %d total", onlineN, len(ms))
+			}
+			mv.Ready = m.Enabled && onlineN > 0
+		case "display":
+			mv.Path = "/dashboard/display"
+			ds, _ := s.Store.ListDisplays(ctx, u.ID)
+			onlineN := 0
+			for _, d := range ds {
+				on := s.Hub.Online(d.MachineID)
+				kind := "offline"
+				if on {
+					onlineN++
+					kind = "online"
+				}
+				label := d.Name
+				if d.MachineName != "" && d.MachineName != d.Name {
+					label += " · " + d.MachineName
+				}
+				mv.Facts = append(mv.Facts, modFact{Label: label, Kind: kind})
+			}
+			if len(ds) == 0 {
+				mv.Summary = "No screens registered"
+			} else {
+				mv.Summary = fmt.Sprintf("%d online · %d total", onlineN, len(ds))
 			}
 			mv.Ready = m.Enabled && onlineN > 0
 		case "mercadona":
@@ -787,6 +826,23 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		}
 	}
 	data.MachTotalCount = len(data.Machines)
+	if ds, err := s.Store.ListDisplays(ctx, u.ID); err == nil {
+		data.DisplayCount = len(ds)
+		for _, d := range ds {
+			on := s.Hub.Online(d.MachineID)
+			if on {
+				data.DisplayOnline++
+			}
+			ls := ""
+			if d.LastShown != nil {
+				ls = d.LastShown.UTC().Format("2006-01-02 15:04")
+			}
+			data.Displays = append(data.Displays, displayView{
+				ID: d.ID, Name: d.Name, MachineID: d.MachineID, MachineName: d.MachineName,
+				Online: on, IsDefault: d.IsDefault, LastShown: ls,
+			})
+		}
+	}
 	email, _, postal, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
 	data.MercadonaConfigured = ok
 	data.MercadonaEmail = email
@@ -1839,15 +1895,15 @@ func (s *Server) createHealthIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	iss := store.HealthIssue{
-		UserID:     u.ID,
-		Title:      r.FormValue("title"),
-		Status:     r.FormValue("status"),
-		StartedOn:  r.FormValue("started_on"),
-		EndedOn:    r.FormValue("ended_on"),
-		BodyPart:   r.FormValue("body_part"),
-		Diagnosis:  r.FormValue("diagnosis"),
-		Treatment:  r.FormValue("treatment"),
-		Notes:      r.FormValue("notes"),
+		UserID:    u.ID,
+		Title:     r.FormValue("title"),
+		Status:    r.FormValue("status"),
+		StartedOn: r.FormValue("started_on"),
+		EndedOn:   r.FormValue("ended_on"),
+		BodyPart:  r.FormValue("body_part"),
+		Diagnosis: r.FormValue("diagnosis"),
+		Treatment: r.FormValue("treatment"),
+		Notes:     r.FormValue("notes"),
 	}
 	if _, err := s.Store.CreateHealthIssue(r.Context(), iss); err != nil {
 		http.Redirect(w, r, "/dashboard/health?flash="+urlQuery(err.Error()), http.StatusFound)

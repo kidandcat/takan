@@ -22,6 +22,7 @@ type Info struct {
 // All known modules (static catalog). Keep IDs in sync with store.defaultModuleIDs.
 var Catalog = []Info{
 	{ID: "machine", Name: "Machine", Description: "Remote shell + configurable AI task runners (Claude, Grok, free commands) via takan-agent."},
+	{ID: "display", Name: "Display", Description: "Remote kiosk screens: push static HTML to a takan-agent that serves it locally."},
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
@@ -47,6 +48,7 @@ type Provider struct {
 	Telegram  ToolFactory
 	SIP       ToolFactory
 	Vault     ToolFactory
+	Display   ToolFactory
 
 	// SIPHub optional: online device / call counts for takan_status.
 	SIPHub interface {
@@ -102,6 +104,10 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.Vault != nil {
 				out = append(out, p.Vault(ctx, userID)...)
 			}
+		case "display":
+			if p.Display != nil {
+				out = append(out, p.Display(ctx, userID)...)
+			}
 		}
 	}
 	return out
@@ -112,7 +118,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, Mercadona linked, email domains, people, health, telegram, SIP, vault). " +
+				"(machines online, displays, Mercadona linked, email domains, people, health, telegram, SIP, vault). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -203,6 +209,28 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			detail += " (" + strings.Join(names, ", ") + ")"
 		}
 		detail += "; " + bash + "; " + ai
+		return online > 0, detail
+	case "display":
+		ds, err := p.Store.ListDisplays(ctx, userID)
+		if err != nil {
+			return false, "error listing displays"
+		}
+		if len(ds) == 0 {
+			return false, "no screens registered"
+		}
+		online := 0
+		var names []string
+		for _, d := range ds {
+			on := p.Hub != nil && p.Hub.Online(d.MachineID)
+			if on {
+				online++
+				names = append(names, d.Name)
+			}
+		}
+		detail = fmt.Sprintf("%d/%d online", online, len(ds))
+		if len(names) > 0 && len(names) <= 4 {
+			detail += " (" + strings.Join(names, ", ") + ")"
+		}
 		return online > 0, detail
 	case "mercadona":
 		email, _, postal, ok, err := p.Store.GetMercadonaCreds(ctx, userID)

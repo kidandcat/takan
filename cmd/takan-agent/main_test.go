@@ -49,7 +49,7 @@ func TestRunOnceWatchdogClosesSilentConn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	start := time.Now()
-	err := runOnce(ctx, srv.URL, "tok", jobs, tm)
+	err := runOnce(ctx, srv.URL, "tok", jobs, tm, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected watchdog to close the socket")
@@ -77,7 +77,7 @@ func TestRunOnceWatchdogIgnoresOutboundPings(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	start := time.Now()
-	err := runOnce(ctx, srv.URL, "tok", jobs, tm)
+	err := runOnce(ctx, srv.URL, "tok", jobs, tm, nil)
 	if err == nil {
 		t.Fatal("expected watchdog despite outbound pings")
 	}
@@ -126,7 +126,7 @@ func TestRunOnceStaysUpWhenHubPings(t *testing.T) {
 	jobs := testJobs(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
-	err := runOnce(ctx, srv.URL, "tok", jobs, tm)
+	err := runOnce(ctx, srv.URL, "tok", jobs, tm, nil)
 	if err == nil {
 		t.Fatal("expected cancel")
 	}
