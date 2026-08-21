@@ -9,34 +9,27 @@ import (
 
 func (s *Server) renderLogin(w http.ResponseWriter, q url.Values, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	footer := `<p class="muted">No account? <a href="/register">Register with an invite</a> first, then come back.</p>`
-	if s.AllowRegister {
-		footer = `<p class="muted">No account? <a href="/register">Create one</a> first, then come back.</p>`
-	}
-	fmt.Fprint(w, pageShell("Sign in to Takan", `
-  <h1>Sign in to connect Takan</h1>
-  <p class="muted">Authorize your AI client (Grok, Claude, …) to use your Takan modules.</p>
+	fmt.Fprint(w, pageShell("Unlock Takan", `
+  <h1>Unlock Takan</h1>
+  <p class="muted">Authorize your AI client (Grok, Claude, …) with this instance password.</p>
   `+errBlock(errMsg)+`
   <form method="post" action="/oauth/authorize">
     `+hiddenOAuthFields(q)+`
     <input type="hidden" name="action" value="login"/>
-    <label>Email</label>
-    <input type="email" name="email" required autocomplete="username"/>
-    <label>Password</label>
-    <input type="password" name="password" required autocomplete="current-password"/>
-    <button type="submit">Sign in &amp; authorize</button>
+    <label>Instance password</label>
+    <input type="password" name="password" required autocomplete="current-password" minlength="8"/>
+    <button type="submit">Unlock &amp; authorize</button>
   </form>
-  `+footer+`
 `))
 }
 
-func (s *Server) renderConsent(w http.ResponseWriter, q url.Values, email, errMsg string) {
+func (s *Server) renderConsent(w http.ResponseWriter, q url.Values, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, pageShell("Authorize Takan", `
   <h1>Authorize Takan</h1>
-  <p class="muted">Signed in as <strong>`+htmlEscape(email)+`</strong></p>
+  <p class="muted">This instance will share MCP tools the operator enabled in the panel.</p>
   `+errBlock(errMsg)+`
-  <p>Allow this application to call your Takan MCP tools (modules you enable in the panel).</p>
+  <p>Allow this application to call your Takan MCP tools.</p>
   <form method="post" action="/oauth/authorize" style="display:inline">
     `+hiddenOAuthFields(q)+`
     <input type="hidden" name="action" value="allow"/>

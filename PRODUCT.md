@@ -6,8 +6,7 @@ Personal **MCP hub**: one OAuth connection for AI agents (Grok, Claude, Cursor) 
 
 ## Users
 
-- Primary: Jairo (solo operator), signed-in on desktop and phone browser.
-- Secondary: invited personal users on the same multi-tenant host.
+- One operator per instance (Jairo on takan.es; anyone who self-hosts). Panel unlock is the instance password. No household accounts or invites.
 
 ## Jobs to be done
 
