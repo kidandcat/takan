@@ -2,8 +2,7 @@ package oauth
 
 import "testing"
 
-func TestRedirectAllowlist(t *testing.T) {
-	c := NewRedirectChecker(nil)
+func TestValidateRedirectURI(t *testing.T) {
 	ok := []string{
 		"https://grok.com/api/plugins/oauth/callback",
 		"https://x.ai/callback",
@@ -15,34 +14,33 @@ func TestRedirectAllowlist(t *testing.T) {
 		"cursor://anysphere.cursor-mcp/oauth/callback",
 		"cursor://anysphere.cursor-mcp/oauth/takan/callback",
 		"cursor://preview.cursor-mcp/oauth/callback",
-	}
-	for _, u := range ok {
-		if err := c.ValidateRedirectURI(u); err != nil {
-			t.Errorf("%s: %v", u, err)
-		}
-	}
-	bad := []string{
-		"https://evil.example/steal",
-		"http://evil.com/x",
+		// previously rejected: any scheme / any host
 		"ftp://localhost/x",
 		"cursor://evil.example/cb",
 		"cursor://evil/cb",
 		"cursor://cursor.com/oauth/callback",
 		"cursor://localhost/callback",
 		"http://anysphere.cursor-mcp/callback",
-		"",
+		"http://evil.com/x",
+		"https://evil.example/steal",
+		// RFC 8252 private-use URI (no host)
+		"com.example.app:/oauth/callback",
 	}
-	for _, u := range bad {
-		if err := c.ValidateRedirectURI(u); err == nil {
-			t.Errorf("%s: expected error", u)
+	for _, u := range ok {
+		if err := ValidateRedirectURI(u); err != nil {
+			t.Errorf("%s: %v", u, err)
 		}
 	}
-	if err := c.ValidateRedirectURI("ftp://localhost/x"); err == nil || err.Error() != "redirect_uri scheme must be http or https" {
-		t.Errorf("ftp://: want scheme error, got %v", err)
+	bad := []string{
+		"",
+		"   ",
+		"not-a-uri",
+		"/relative/path",
+		"garbage%%%",
 	}
-	// Extra host from env
-	c2 := NewRedirectChecker([]string{"myapp.dev"})
-	if err := c2.ValidateRedirectURI("https://app.myapp.dev/cb"); err != nil {
-		t.Fatal(err)
+	for _, u := range bad {
+		if err := ValidateRedirectURI(u); err == nil {
+			t.Errorf("%q: expected error", u)
+		}
 	}
 }

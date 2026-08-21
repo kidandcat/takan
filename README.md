@@ -37,7 +37,7 @@ Only the URL is needed. Clients discover OAuth (PKCE), open a browser login, and
 https://<your-host>/mcp
 ```
 
-OAuth `redirect_uri` is allowlisted. Built-in https hosts cover Grok, Claude, and Cursor (`cursor.com` / `cursor.sh`); http is loopback-only (`localhost`, `127.0.0.1`, including desktop `http://localhost:8787/callback`). Cursor / Grok Bot MCP uses the custom scheme `cursor://anysphere.cursor-mcp/…` (also `/oauth/<app>/callback`) — that host and other `*.cursor-mcp` subdomains are allowlisted; other custom schemes and `cursor://evil` are rejected. Extra https hosts: `TAKAN_OAUTH_REDIRECT_ALLOW`.
+OAuth `redirect_uri` accepts any non-empty parseable absolute URI — any scheme (`https`, `cursor://`, RFC 8252 private-use URIs with no host) and any host. Empty or unparseable values are rejected. This hub is personal/single-tenant; there is no redirect host or scheme allowlist.
 
 ## Mobile API
 
@@ -65,7 +65,7 @@ Credential reads for agents still use vault grants (`secrets_request` → approv
 - Isolation by `user_id` (modules, machines, secrets, people, health, Mercadona, email).
 - **Invites:** registration closed by default. Users create invite codes (`TAKAN_DEFAULT_INVITE_QUOTA`, default 5). Admins can grant unlimited invites in **Panel → Invites**.
 - First registered user becomes **admin + unlimited invites**.
-- OAuth: PKCE + redirect allowlist (https hosts, loopback http, `cursor://anysphere.cursor-mcp/…`); access tokens 24h; refresh rotates (30d).
+- OAuth: PKCE; any parseable `redirect_uri`; access tokens 24h; refresh rotates (30d).
 
 ## Unofficial Mercadona integration
 
@@ -117,7 +117,7 @@ Create a machine in the panel to get the install one-liner / token.
    - `TAKAN_SESSION_KEY=` long random (`openssl rand -hex 32`) — **never** the dev default
    - `TAKAN_DATA_DIR=` writable path for Colmena/SQLite
    - `TAKAN_LISTEN=127.0.0.1:8090` (prefer reverse-proxy TLS)
-   - Optional: `TAKAN_ALLOW_REGISTER`, invite quota, OAuth extra redirects, rate limits, S3 backup keys
+   - Optional: `TAKAN_ALLOW_REGISTER`, invite quota, rate limits, S3 backup keys
 
 3. **systemd** — see [`deploy/takan.service`](deploy/takan.service) (`EnvironmentFile=…`, `ExecStart=…/takan`).
 
