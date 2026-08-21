@@ -183,6 +183,21 @@ func main() {
 		},
 		ToolsFor: prov.ToolsFor,
 	}
+	hub.OnJobEvent = func(userID, machineName string, job agenthub.AIJob) {
+		runner := job.Runner
+		if runner == "" {
+			runner = job.Agent
+		}
+		mcpSrv.NotifyUser(userID, "notifications/takan/machine_ai_job", map[string]any{
+			"machine":       machineName,
+			"job_id":        job.JobID,
+			"status":        job.Status,
+			"exit_code":     job.ExitCode,
+			"runner":        runner,
+			"parent_job_id": job.ParentJobID,
+			"finished_at":   job.FinishedAt,
+		})
+	}
 	webSrv.OnToolsChanged = mcpSrv.NotifyToolsChanged
 
 	apiSrv := &api.Server{

@@ -20,17 +20,18 @@ const maxTrackedJobs = 50
 const promptPlaceholder = "{{prompt}}"
 
 type jobMeta struct {
-	JobID      string `json:"job_id"`
-	Agent      string `json:"agent"` // runner id
-	Command    string `json:"command,omitempty"`
-	Prompt     string `json:"prompt"`
-	Cwd        string `json:"cwd,omitempty"`
-	Status     string `json:"status"` // running | done | failed
-	PID        int    `json:"pid,omitempty"`
-	ExitCode   int    `json:"exit_code,omitempty"`
-	Error      string `json:"error,omitempty"`
-	StartedAt  string `json:"started_at"`
-	FinishedAt string `json:"finished_at,omitempty"`
+	JobID       string `json:"job_id"`
+	Agent       string `json:"agent"` // runner id
+	Command     string `json:"command,omitempty"`
+	Prompt      string `json:"prompt"`
+	Cwd         string `json:"cwd,omitempty"`
+	ParentJobID string `json:"parent_job_id,omitempty"`
+	Status      string `json:"status"` // running | done | failed | cancelled
+	PID         int    `json:"pid,omitempty"`
+	ExitCode    int    `json:"exit_code,omitempty"`
+	Error       string `json:"error,omitempty"`
+	StartedAt   string `json:"started_at"`
+	FinishedAt  string `json:"finished_at,omitempty"`
 }
 
 type jobManager struct {
@@ -38,6 +39,8 @@ type jobManager struct {
 	root string
 	// live PIDs for jobs started by this process
 	cmds map[string]*exec.Cmd
+	// notify is invoked (without holding mu) when a job reaches a terminal status.
+	notify func(jobMeta)
 }
 
 func newJobManager() (*jobManager, error) {
@@ -56,9 +59,44 @@ func (m *jobManager) jobDir(id string) string {
 	return filepath.Join(m.root, id)
 }
 
+func (m *jobManager) setNotify(fn func(jobMeta)) {
+	m.mu.Lock()
+	m.notify = fn
+	m.mu.Unlock()
+}
+
+func (m *jobManager) emit(meta jobMeta) {
+	m.mu.Lock()
+	fn := m.notify
+	m.mu.Unlock()
+	if fn != nil {
+		fn(meta)
+	}
+}
+
+func validJobID(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("job_id required")
+	}
+	if strings.Contains(id, "/") || strings.Contains(id, "..") || strings.Contains(id, "\\") {
+		return fmt.Errorf("invalid job_id")
+	}
+	return nil
+}
+
+func jobTerminal(status string) bool {
+	switch status {
+	case "done", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
 // start launches a shell command template with the prompt injected.
 // commandTmpl may include {{prompt}}; otherwise the quoted prompt is appended.
-func (m *jobManager) start(runnerID, commandTmpl, prompt, cwd string) (jobMeta, error) {
+func (m *jobManager) start(runnerID, commandTmpl, prompt, cwd, parentJobID string) (jobMeta, error) {
 	runnerID = strings.TrimSpace(runnerID)
 	if runnerID == "" {
 		runnerID = "custom"
@@ -103,13 +141,14 @@ func (m *jobManager) start(runnerID, commandTmpl, prompt, cwd string) (jobMeta, 
 
 	started := time.Now().UTC().Format(time.RFC3339)
 	meta := jobMeta{
-		JobID:     id,
-		Agent:     runnerID,
-		Command:   commandTmpl,
-		Prompt:    prompt,
-		Cwd:       cwd,
-		Status:    "running",
-		StartedAt: started,
+		JobID:       id,
+		Agent:       runnerID,
+		Command:     commandTmpl,
+		Prompt:      prompt,
+		Cwd:         cwd,
+		ParentJobID: strings.TrimSpace(parentJobID),
+		Status:      "running",
+		StartedAt:   started,
 	}
 	if err := writeMeta(dir, meta); err != nil {
 		_ = logFile.Close()
@@ -146,19 +185,23 @@ func (m *jobManager) start(runnerID, commandTmpl, prompt, cwd string) (jobMeta, 
 				errMsg = err.Error()
 			}
 		}
+		m.mu.Lock()
 		meta2, _ := readMeta(dir)
 		if meta2.JobID == "" {
 			meta2 = meta
 		}
-		meta2.Status = status
+		if meta2.Status != "cancelled" {
+			meta2.Status = status
+			meta2.Error = errMsg
+		}
 		meta2.ExitCode = exitCode
-		meta2.Error = errMsg
-		meta2.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+		if meta2.FinishedAt == "" {
+			meta2.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+		}
 		_ = writeMeta(dir, meta2)
-
-		m.mu.Lock()
 		delete(m.cmds, id)
 		m.mu.Unlock()
+		m.emit(meta2)
 		m.pruneOld()
 	}()
 
@@ -179,33 +222,125 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func (m *jobManager) status(jobID string, tailBytes int) (jobMeta, string, error) {
+func (m *jobManager) loadMeta(jobID string) (jobMeta, error) {
 	jobID = strings.TrimSpace(jobID)
-	if jobID == "" {
-		return jobMeta{}, "", fmt.Errorf("job_id required")
+	if err := validJobID(jobID); err != nil {
+		return jobMeta{}, err
 	}
-	if strings.Contains(jobID, "/") || strings.Contains(jobID, "..") || strings.Contains(jobID, "\\") {
-		return jobMeta{}, "", fmt.Errorf("invalid job_id")
-	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reapLocked(jobID)
+}
+
+// reapLocked refreshes a dead "running" job. Caller must hold m.mu.
+func (m *jobManager) reapLocked(jobID string) (jobMeta, error) {
 	dir := m.jobDir(jobID)
 	meta, err := readMeta(dir)
 	if err != nil {
-		return jobMeta{}, "", fmt.Errorf("unknown job %q", jobID)
+		return jobMeta{}, fmt.Errorf("unknown job %q", jobID)
 	}
-	if meta.Status == "running" && meta.PID > 0 {
-		if !pidAlive(meta.PID) {
-			meta.Status = "done"
-			if meta.FinishedAt == "" {
-				meta.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-			}
-			_ = writeMeta(dir, meta)
+	if meta.Status == "running" && meta.PID > 0 && !pidAlive(meta.PID) {
+		meta.Status = "done"
+		if meta.FinishedAt == "" {
+			meta.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 		}
+		_ = writeMeta(dir, meta)
+	}
+	return meta, nil
+}
+
+func (m *jobManager) status(jobID string, tailBytes int) (jobMeta, string, error) {
+	meta, err := m.loadMeta(jobID)
+	if err != nil {
+		return jobMeta{}, "", err
 	}
 	if tailBytes <= 0 {
 		tailBytes = 12_000
 	}
-	out := tailFile(filepath.Join(dir, "output.log"), tailBytes)
+	out := tailFile(filepath.Join(m.jobDir(meta.JobID), "output.log"), tailBytes)
 	return meta, out, nil
+}
+
+const maxLogBytes = 1_048_576
+
+// readLog returns the transcript from the start of output.log (not a tail).
+func (m *jobManager) readLog(jobID string, maxBytes int) (jobMeta, string, int, bool, error) {
+	meta, err := m.loadMeta(jobID)
+	if err != nil {
+		return jobMeta{}, "", 0, false, err
+	}
+	if maxBytes <= 0 {
+		maxBytes = 500_000
+	}
+	if maxBytes > maxLogBytes {
+		maxBytes = maxLogBytes
+	}
+	b, err := os.ReadFile(filepath.Join(m.jobDir(meta.JobID), "output.log"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return meta, "", 0, false, nil
+		}
+		return meta, "", 0, false, err
+	}
+	total := len(b)
+	truncated := false
+	if total > maxBytes {
+		b = b[:maxBytes]
+		truncated = true
+	}
+	return meta, string(b), total, truncated, nil
+}
+
+// cancel persists status cancelled first, then kills the process group so
+// Wait() cannot overwrite the terminal state with failed.
+func (m *jobManager) cancel(jobID string) (jobMeta, error) {
+	jobID = strings.TrimSpace(jobID)
+	if err := validJobID(jobID); err != nil {
+		return jobMeta{}, err
+	}
+
+	m.mu.Lock()
+	meta, err := m.reapLocked(jobID)
+	if err != nil {
+		m.mu.Unlock()
+		return jobMeta{}, err
+	}
+	if jobTerminal(meta.Status) {
+		m.mu.Unlock()
+		return meta, nil
+	}
+	pid := meta.PID
+	if cmd := m.cmds[meta.JobID]; cmd != nil && cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	meta.Status = "cancelled"
+	meta.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := writeMeta(m.jobDir(meta.JobID), meta); err != nil {
+		m.mu.Unlock()
+		return meta, err
+	}
+	m.mu.Unlock()
+
+	if pid > 0 {
+		killProcessGroup(pid)
+	}
+	return meta, nil
+}
+
+func killProcessGroup(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !pidAlive(pid) {
+			return
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
 }
 
 func (m *jobManager) list() []jobMeta {
@@ -218,16 +353,11 @@ func (m *jobManager) list() []jobMeta {
 		if !e.IsDir() {
 			continue
 		}
-		meta, err := readMeta(m.jobDir(e.Name()))
+		m.mu.Lock()
+		meta, err := m.reapLocked(e.Name())
+		m.mu.Unlock()
 		if err != nil {
 			continue
-		}
-		if meta.Status == "running" && meta.PID > 0 && !pidAlive(meta.PID) {
-			meta.Status = "done"
-			if meta.FinishedAt == "" {
-				meta.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-			}
-			_ = writeMeta(m.jobDir(e.Name()), meta)
 		}
 		if len(meta.Prompt) > 200 {
 			meta.Prompt = meta.Prompt[:200] + "…"

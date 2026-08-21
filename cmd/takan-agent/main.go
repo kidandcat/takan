@@ -65,26 +65,30 @@ func livenessAction(idle, staleAfter, hangExitAfter time.Duration) (closeConn, e
 }
 
 type wireMsg struct {
-	Type       string    `json:"type"`
-	TaskID     string    `json:"task_id,omitempty"`
-	Command    string    `json:"command,omitempty"`
-	ExitCode   int       `json:"exit_code,omitempty"`
-	Stdout     string    `json:"stdout,omitempty"`
-	Stderr     string    `json:"stderr,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	Agent      string    `json:"agent,omitempty"`
-	Runner     string    `json:"runner,omitempty"`
-	Prompt     string    `json:"prompt,omitempty"`
-	Cwd        string    `json:"cwd,omitempty"`
-	JobID      string    `json:"job_id,omitempty"`
-	Status     string    `json:"status,omitempty"`
-	PID        int       `json:"pid,omitempty"`
-	Output     string    `json:"output,omitempty"`
-	StartedAt  string    `json:"started_at,omitempty"`
-	FinishedAt string    `json:"finished_at,omitempty"`
-	TailBytes  int       `json:"tail_bytes,omitempty"`
-	Jobs       []jobMeta `json:"jobs,omitempty"`
-	Html       string    `json:"html,omitempty"`
+	Type        string    `json:"type"`
+	TaskID      string    `json:"task_id,omitempty"`
+	Command     string    `json:"command,omitempty"`
+	ExitCode    int       `json:"exit_code,omitempty"`
+	Stdout      string    `json:"stdout,omitempty"`
+	Stderr      string    `json:"stderr,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	Agent       string    `json:"agent,omitempty"`
+	Runner      string    `json:"runner,omitempty"`
+	Prompt      string    `json:"prompt,omitempty"`
+	Cwd         string    `json:"cwd,omitempty"`
+	ParentJobID string    `json:"parent_job_id,omitempty"`
+	JobID       string    `json:"job_id,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	PID         int       `json:"pid,omitempty"`
+	Output      string    `json:"output,omitempty"`
+	StartedAt   string    `json:"started_at,omitempty"`
+	FinishedAt  string    `json:"finished_at,omitempty"`
+	TailBytes   int       `json:"tail_bytes,omitempty"`
+	MaxBytes    int       `json:"max_bytes,omitempty"`
+	Truncated   bool      `json:"truncated,omitempty"`
+	TotalBytes  int       `json:"total_bytes,omitempty"`
+	Jobs        []jobMeta `json:"jobs,omitempty"`
+	Html        string    `json:"html,omitempty"`
 }
 
 func main() {
@@ -195,6 +199,11 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connT
 		return c.SetReadDeadline(time.Now().Add(tm.readWait))
 	})
 
+	jobs.setNotify(func(meta jobMeta) {
+		_ = writeJSON(jobWire("ai_done", meta, "", 0, false))
+	})
+	defer jobs.setNotify(nil)
+
 	if err := writeJSON(wireMsg{Type: "hello"}); err != nil {
 		return err
 	}
@@ -286,6 +295,20 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connT
 			if err := writeJSON(res); err != nil {
 				return err
 			}
+		case "ai_cancel":
+			res := handleAICancel(jobs, msg)
+			res.Type = "ai_cancel_result"
+			res.TaskID = msg.TaskID
+			if err := writeJSON(res); err != nil {
+				return err
+			}
+		case "ai_log":
+			res := handleAILog(jobs, msg)
+			res.Type = "ai_log_result"
+			res.TaskID = msg.TaskID
+			if err := writeJSON(res); err != nil {
+				return err
+			}
 		case "display":
 			res := wireMsg{Type: "display_result", TaskID: msg.TaskID, Status: "ok"}
 			if disp == nil {
@@ -318,29 +341,17 @@ func handleAIStart(jobs *jobManager, msg wireMsg) wireMsg {
 			cmdTmpl = "grok --always-approve -p " + promptPlaceholder
 		}
 	}
-	meta, err := jobs.start(runner, cmdTmpl, msg.Prompt, msg.Cwd)
+	meta, err := jobs.start(runner, cmdTmpl, msg.Prompt, msg.Cwd, msg.ParentJobID)
 	if err != nil && meta.JobID == "" {
 		return wireMsg{Error: err.Error(), Status: "failed"}
 	}
 	if err != nil {
-		return wireMsg{
-			JobID:  meta.JobID,
-			Agent:  meta.Agent,
-			Runner: meta.Agent,
-			Status: meta.Status,
-			PID:    meta.PID,
-			Error:  err.Error(),
-		}
+		out := jobWire("", meta, "", 0, false)
+		out.Error = err.Error()
+		return out
 	}
-	log.Printf("ai job started id=%s runner=%s pid=%d", meta.JobID, meta.Agent, meta.PID)
-	return wireMsg{
-		JobID:     meta.JobID,
-		Agent:     meta.Agent,
-		Runner:    meta.Agent,
-		Status:    meta.Status,
-		PID:       meta.PID,
-		StartedAt: meta.StartedAt,
-	}
+	log.Printf("ai job started id=%s runner=%s pid=%d parent=%s", meta.JobID, meta.Agent, meta.PID, meta.ParentJobID)
+	return jobWire("", meta, "", 0, false)
 }
 
 func handleAIStatus(jobs *jobManager, msg wireMsg) wireMsg {
@@ -352,20 +363,45 @@ func handleAIStatus(jobs *jobManager, msg wireMsg) wireMsg {
 	if err != nil {
 		return wireMsg{Error: err.Error(), JobID: jobID, Status: "unknown"}
 	}
+	return jobWire("", meta, out, 0, false)
+}
+
+func handleAICancel(jobs *jobManager, msg wireMsg) wireMsg {
+	meta, err := jobs.cancel(strings.TrimSpace(msg.JobID))
+	if err != nil {
+		return wireMsg{Error: err.Error(), JobID: strings.TrimSpace(msg.JobID), Status: "unknown"}
+	}
+	log.Printf("ai job cancel id=%s status=%s", meta.JobID, meta.Status)
+	return jobWire("", meta, "", 0, false)
+}
+
+func handleAILog(jobs *jobManager, msg wireMsg) wireMsg {
+	meta, out, total, truncated, err := jobs.readLog(strings.TrimSpace(msg.JobID), msg.MaxBytes)
+	if err != nil {
+		return wireMsg{Error: err.Error(), JobID: strings.TrimSpace(msg.JobID), Status: "unknown"}
+	}
+	res := jobWire("", meta, out, total, truncated)
+	return res
+}
+
+func jobWire(_ string, meta jobMeta, output string, total int, truncated bool) wireMsg {
 	return wireMsg{
-		JobID:      meta.JobID,
-		Agent:      meta.Agent,
-		Runner:     meta.Agent,
-		Status:     meta.Status,
-		ExitCode:   meta.ExitCode,
-		PID:        meta.PID,
-		Cwd:        meta.Cwd,
-		Prompt:     meta.Prompt,
-		Command:    meta.Command,
-		Output:     out,
-		Error:      meta.Error,
-		StartedAt:  meta.StartedAt,
-		FinishedAt: meta.FinishedAt,
+		JobID:       meta.JobID,
+		Agent:       meta.Agent,
+		Runner:      meta.Agent,
+		Status:      meta.Status,
+		ExitCode:    meta.ExitCode,
+		PID:         meta.PID,
+		Cwd:         meta.Cwd,
+		Prompt:      meta.Prompt,
+		Command:     meta.Command,
+		ParentJobID: meta.ParentJobID,
+		Output:      output,
+		Error:       meta.Error,
+		StartedAt:   meta.StartedAt,
+		FinishedAt:  meta.FinishedAt,
+		TotalBytes:  total,
+		Truncated:   truncated,
 	}
 }
 

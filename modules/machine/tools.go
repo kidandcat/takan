@@ -184,8 +184,12 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 			mcp.RegisteredTool{
 				Tool: mcp.Tool{
 					Name: "machine_ai_run",
-					Description: "Launch an autonomous AI agent on a machine. Returns immediately with job_id — " +
-						"do not wait for completion or poll/monitor the job; fire and forget. " +
+					Description: "Launch an autonomous AI agent on a machine. Returns immediately with job_id " +
+						"(does not wait for the agent to finish). After launch, follow the job: " +
+						"machine_ai_watch waits until it finishes; machine_ai_status is a quick status + log tail; " +
+						"machine_ai_log fetches the full transcript; machine_ai_cancel kills a running job; " +
+						"machine_ai_reply continues as a new job (runners are one-shot and cannot be interrupted in-process). " +
+						"Clients with an MCP SSE stream may also receive notifications/takan/machine_ai_job when the job ends. " +
 						"State a clear high-level goal only; agents are capable and do not need step-by-step instructions. " +
 						"Pick a runner id configured in the Takan panel (not free-form agent names). " +
 						"Enabled runners: " + runnersBlurb + ". " +
@@ -212,40 +216,19 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					name, runnerID, prompt, cwd, err := parseRunArgs(ctx, st, userID, args)
+					if err != nil {
+						return "", err
+					}
 					cfg, err := LoadConfig(ctx, st, userID)
 					if err != nil {
 						return "", err
 					}
-					if !cfg.AITasksEnabled {
-						return "", fmt.Errorf("AI tasks are disabled — enable them in Takan panel → Machines")
+					r, err := enabledRunner(cfg, runnerID)
+					if err != nil {
+						return "", err
 					}
-					name, _ := args["machine"].(string)
-					runnerID, _ := args["runner"].(string)
-					// accept legacy "agent" for a release
-					if runnerID == "" {
-						runnerID, _ = args["agent"].(string)
-					}
-					prompt, _ := args["prompt"].(string)
-					cwd, _ := args["cwd"].(string)
-					name = strings.TrimSpace(name)
-					runnerID = strings.TrimSpace(runnerID)
-					prompt = strings.TrimSpace(prompt)
-					cwd = strings.TrimSpace(cwd)
-					if name == "" || runnerID == "" || prompt == "" {
-						return "", fmt.Errorf("machine, runner and prompt required")
-					}
-					r, ok := cfg.RunnerByID(runnerID)
-					if !ok || !r.Enabled {
-						var ids []string
-						for _, e := range cfg.EnabledRunners() {
-							ids = append(ids, e.ID)
-						}
-						return "", fmt.Errorf("unknown or disabled runner %q — enabled: %s", runnerID, strings.Join(ids, ", "))
-					}
-					if _, err := st.MachineByUserAndName(ctx, userID, name); err != nil {
-						return "", fmt.Errorf("unknown machine %q", name)
-					}
-					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd)
+					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, "")
 					if err != nil {
 						return "", err
 					}
@@ -257,7 +240,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"command": r.Command,
 						"status":  res.Status,
 						"pid":     res.PID,
-						"hint":    "Job runs autonomously; no need to wait or poll. Optional: machine_ai_status if you later need status/logs.",
+						"hint":    followHint(),
 					}
 					if res.Error != "" {
 						out["error"] = res.Error
@@ -269,8 +252,9 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 			mcp.RegisteredTool{
 				Tool: mcp.Tool{
 					Name: "machine_ai_status",
-					Description: "Check status of a long-running AI job started with machine_ai_run. " +
-						"Pass job_id for one job (includes log tail). Omit job_id to list recent jobs on the machine.",
+					Description: "Quick status of an AI job started with machine_ai_run (or a list of recent jobs). " +
+						"Pass job_id for one job including a short log tail. Omit job_id to list recent jobs. " +
+						"To wait until the job finishes use machine_ai_watch. For the full transcript use machine_ai_log.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -288,6 +272,183 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					if err := requireAI(ctx, st, userID); err != nil {
+						return "", err
+					}
+					name, err := requireMachine(ctx, st, userID, strArg(args, "machine"))
+					if err != nil {
+						return "", err
+					}
+					jobID := strArg(args, "job_id")
+					tail := intArg(args, "tail_bytes", 12_000, 100_000)
+					job, list, err := hub.AIStatus(ctx, userID, name, jobID, tail)
+					if err != nil {
+						return "", err
+					}
+					if jobID == "" {
+						return formatJobList(name, list), nil
+					}
+					return formatJob(name, job, nil), nil
+				},
+			},
+			mcp.RegisteredTool{
+				Tool: mcp.Tool{
+					Name: "machine_ai_watch",
+					Description: "Wait until an AI job finishes (done, failed, or cancelled) and return status plus a log tail. " +
+						"Blocks this tool call; the hub is notified by the agent when the process exits, and polls status as a fallback — " +
+						"you do not need to babysit machine_ai_status. If the wait times out and the job is still running, call again with the same job_id. " +
+						"Default wait 90s, max 300s. machine_ai_run stays non-blocking; use this (or the SSE notification) to follow.",
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"machine": map[string]any{"type": "string", "description": "Machine name"},
+							"job_id":  map[string]any{"type": "string", "description": "Job id from machine_ai_run"},
+							"timeout_seconds": map[string]any{
+								"type":        "integer",
+								"description": "How long to wait (default 90, max 300)",
+							},
+							"tail_bytes": map[string]any{
+								"type":        "integer",
+								"description": "Max bytes of log tail (default 12000, max 100000)",
+							},
+						},
+						"required": []string{"machine", "job_id"},
+					},
+				},
+				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					if err := requireAI(ctx, st, userID); err != nil {
+						return "", err
+					}
+					name, err := requireMachine(ctx, st, userID, strArg(args, "machine"))
+					if err != nil {
+						return "", err
+					}
+					jobID := strArg(args, "job_id")
+					if jobID == "" {
+						return "", fmt.Errorf("job_id required")
+					}
+					wait := time.Duration(intArg(args, "timeout_seconds", 90, 300)) * time.Second
+					tail := intArg(args, "tail_bytes", 12_000, 100_000)
+					job, timedOut, err := hub.WatchAI(ctx, userID, name, jobID, wait, tail)
+					if err != nil {
+						return "", err
+					}
+					extra := map[string]any{"timed_out": timedOut}
+					if timedOut && !agenthub.JobTerminal(job.Status) {
+						extra["hint"] = "still running — call machine_ai_watch again with the same job_id"
+					}
+					return formatJob(name, job, extra), nil
+				},
+			},
+			mcp.RegisteredTool{
+				Tool: mcp.Tool{
+					Name: "machine_ai_log",
+					Description: "Fetch the full transcript (output.log) for an AI job, from the start — not just the status tail. " +
+						"May be truncated if the log is very large; check truncated and total_bytes. " +
+						"Use machine_ai_status for a short recent tail.",
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"machine": map[string]any{"type": "string", "description": "Machine name"},
+							"job_id":  map[string]any{"type": "string", "description": "Job id from machine_ai_run"},
+							"max_bytes": map[string]any{
+								"type":        "integer",
+								"description": "Max transcript bytes to return (default 500000, max 1048576)",
+							},
+						},
+						"required": []string{"machine", "job_id"},
+					},
+				},
+				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					if err := requireAI(ctx, st, userID); err != nil {
+						return "", err
+					}
+					name, err := requireMachine(ctx, st, userID, strArg(args, "machine"))
+					if err != nil {
+						return "", err
+					}
+					jobID := strArg(args, "job_id")
+					if jobID == "" {
+						return "", fmt.Errorf("job_id required")
+					}
+					maxBytes := intArg(args, "max_bytes", 500_000, 1_048_576)
+					job, err := hub.AILog(ctx, userID, name, jobID, maxBytes)
+					if err != nil {
+						return "", err
+					}
+					extra := map[string]any{
+						"truncated":   job.Truncated,
+						"total_bytes": job.TotalBytes,
+						"output":      job.Output,
+					}
+					return formatJob(name, job, extra), nil
+				},
+			},
+			mcp.RegisteredTool{
+				Tool: mcp.Tool{
+					Name: "machine_ai_cancel",
+					Description: "Cancel a running AI job. The agent kills the process group and records status cancelled. " +
+						"If the job already finished, returns its current status (not rewritten to cancelled).",
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"machine": map[string]any{"type": "string", "description": "Machine name"},
+							"job_id":  map[string]any{"type": "string", "description": "Job id from machine_ai_run"},
+						},
+						"required": []string{"machine", "job_id"},
+					},
+				},
+				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					if err := requireAI(ctx, st, userID); err != nil {
+						return "", err
+					}
+					name, err := requireMachine(ctx, st, userID, strArg(args, "machine"))
+					if err != nil {
+						return "", err
+					}
+					jobID := strArg(args, "job_id")
+					if jobID == "" {
+						return "", fmt.Errorf("job_id required")
+					}
+					job, err := hub.CancelAI(ctx, userID, name, jobID)
+					if err != nil {
+						return "", err
+					}
+					return formatJob(name, job, nil), nil
+				},
+			},
+			mcp.RegisteredTool{
+				Tool: mcp.Tool{
+					Name: "machine_ai_reply",
+					Description: "Continue an existing AI job by starting a NEW job on the same machine. " +
+						"The new prompt includes the parent prompt, a slice of the parent log, and your follow-up; " +
+						"the new job stores parent_job_id. " +
+						"Limitation: typical runners (e.g. grok --always-approve -p, claude -p) are one-shot with no live stdin session — " +
+						"this cannot attach to or interrupt a running process. To stop the parent first, call machine_ai_cancel. " +
+						"Defaults to the parent job's runner and cwd.",
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"machine": map[string]any{"type": "string", "description": "Machine name"},
+							"job_id":  map[string]any{"type": "string", "description": "Parent job id to continue"},
+							"message": map[string]any{
+								"type":        "string",
+								"description": "Follow-up instruction for the new job",
+							},
+							"runner": map[string]any{
+								"type":        "string",
+								"enum":        runnerIDs,
+								"description": "Override runner (default: parent job's runner)",
+							},
+							"cwd": map[string]any{
+								"type":        "string",
+								"description": "Override working directory (default: parent job's cwd)",
+							},
+						},
+						"required": []string{"machine", "job_id", "message"},
+					},
+				},
+				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
 					cfg, err := LoadConfig(ctx, st, userID)
 					if err != nil {
 						return "", err
@@ -295,75 +456,55 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if !cfg.AITasksEnabled {
 						return "", fmt.Errorf("AI tasks are disabled — enable them in Takan panel → Machines")
 					}
-					name, _ := args["machine"].(string)
-					jobID, _ := args["job_id"].(string)
-					name = strings.TrimSpace(name)
-					jobID = strings.TrimSpace(jobID)
-					if name == "" {
-						return "", fmt.Errorf("machine required")
-					}
-					if _, err := st.MachineByUserAndName(ctx, userID, name); err != nil {
-						return "", fmt.Errorf("unknown machine %q", name)
-					}
-					tail := 12_000
-					if v, ok := args["tail_bytes"].(float64); ok && v > 0 {
-						tail = int(v)
-					}
-					job, list, err := hub.AIStatus(ctx, userID, name, jobID, tail)
+					name, err := requireMachine(ctx, st, userID, strArg(args, "machine"))
 					if err != nil {
 						return "", err
 					}
-					if jobID == "" {
-						type row struct {
-							JobID      string `json:"job_id"`
-							Runner     string `json:"runner"`
-							Status     string `json:"status"`
-							ExitCode   int    `json:"exit_code,omitempty"`
-							PID        int    `json:"pid,omitempty"`
-							Cwd        string `json:"cwd,omitempty"`
-							Prompt     string `json:"prompt,omitempty"`
-							StartedAt  string `json:"started_at,omitempty"`
-							FinishedAt string `json:"finished_at,omitempty"`
-						}
-						rows := make([]row, 0, len(list))
-						for _, j := range list {
-							runner := j.Runner
-							if runner == "" {
-								runner = j.Agent
-							}
-							rows = append(rows, row{
-								JobID: j.JobID, Runner: runner, Status: j.Status,
-								ExitCode: j.ExitCode, PID: j.PID, Cwd: j.Cwd, Prompt: j.Prompt,
-								StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
-							})
-						}
-						if len(rows) == 0 {
-							return "No AI jobs on this machine yet.", nil
-						}
-						b, _ := json.MarshalIndent(map[string]any{"machine": name, "jobs": rows}, "", "  ")
-						return string(b), nil
+					parentID := strArg(args, "job_id")
+					message := strArg(args, "message")
+					if parentID == "" || message == "" {
+						return "", fmt.Errorf("job_id and message required")
 					}
-					runner := job.Runner
-					if runner == "" {
-						runner = job.Agent
+					parent, _, err := hub.AIStatus(ctx, userID, name, parentID, replyLogContext)
+					if err != nil {
+						return "", err
+					}
+					if parent.JobID == "" {
+						return "", fmt.Errorf("unknown job %q", parentID)
+					}
+					runnerID := strArg(args, "runner")
+					if runnerID == "" {
+						runnerID = parent.Runner
+						if runnerID == "" {
+							runnerID = parent.Agent
+						}
+					}
+					r, err := enabledRunner(cfg, runnerID)
+					if err != nil {
+						return "", err
+					}
+					cwd := strArg(args, "cwd")
+					if cwd == "" {
+						cwd = strings.TrimSpace(parent.Cwd)
+					}
+					prompt := BuildContinuePrompt(parent.Prompt, parent.Output, message)
+					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, parent.JobID)
+					if err != nil {
+						return "", err
 					}
 					out := map[string]any{
-						"machine":     name,
-						"job_id":      job.JobID,
-						"runner":      runner,
-						"status":      job.Status,
-						"exit_code":   job.ExitCode,
-						"pid":         job.PID,
-						"cwd":         job.Cwd,
-						"prompt":      job.Prompt,
-						"started_at":  job.StartedAt,
-						"finished_at": job.FinishedAt,
+						"machine":       name,
+						"job_id":        res.JobID,
+						"parent_job_id": parent.JobID,
+						"runner":        r.ID,
+						"name":          r.Name,
+						"command":       r.Command,
+						"status":        res.Status,
+						"pid":           res.PID,
+						"hint":          followHint() + " This is a new job; the parent was not interrupted.",
 					}
-					if job.Error != "" {
-						out["error"] = job.Error
-					}
-					if job.Output != "" {
-						out["output_tail"] = job.Output
+					if res.Error != "" {
+						out["error"] = res.Error
 					}
 					b, _ := json.MarshalIndent(out, "", "  ")
 					return string(b), nil
@@ -372,4 +513,183 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 		)
 		return tools
 	}
+}
+
+func requireAI(ctx context.Context, st *store.Store, userID string) error {
+	cfg, err := LoadConfig(ctx, st, userID)
+	if err != nil {
+		return err
+	}
+	if !cfg.AITasksEnabled {
+		return fmt.Errorf("AI tasks are disabled — enable them in Takan panel → Machines")
+	}
+	return nil
+}
+
+func requireMachine(ctx context.Context, st *store.Store, userID, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("machine required")
+	}
+	if _, err := st.MachineByUserAndName(ctx, userID, name); err != nil {
+		return "", fmt.Errorf("unknown machine %q", name)
+	}
+	return name, nil
+}
+
+func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[string]any) (name, runnerID, prompt, cwd string, err error) {
+	if err = requireAI(ctx, st, userID); err != nil {
+		return "", "", "", "", err
+	}
+	name = strArg(args, "machine")
+	runnerID = strArg(args, "runner")
+	if runnerID == "" {
+		runnerID = strArg(args, "agent") // legacy
+	}
+	prompt = strArg(args, "prompt")
+	cwd = strArg(args, "cwd")
+	if name == "" || runnerID == "" || prompt == "" {
+		return "", "", "", "", fmt.Errorf("machine, runner and prompt required")
+	}
+	name, err = requireMachine(ctx, st, userID, name)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	return name, runnerID, prompt, cwd, nil
+}
+
+func enabledRunner(cfg Config, runnerID string) (Runner, error) {
+	r, ok := cfg.RunnerByID(runnerID)
+	if !ok || !r.Enabled {
+		var ids []string
+		for _, e := range cfg.EnabledRunners() {
+			ids = append(ids, e.ID)
+		}
+		return Runner{}, fmt.Errorf("unknown or disabled runner %q — enabled: %s", runnerID, strings.Join(ids, ", "))
+	}
+	return r, nil
+}
+
+func strArg(args map[string]any, key string) string {
+	s, _ := args[key].(string)
+	return strings.TrimSpace(s)
+}
+
+func intArg(args map[string]any, key string, def, max int) int {
+	v := def
+	if n, ok := args[key].(float64); ok && n > 0 {
+		v = int(n)
+	}
+	if max > 0 && v > max {
+		v = max
+	}
+	return v
+}
+
+func followHint() string {
+	return "Job launched. Follow with machine_ai_watch (waits for completion), machine_ai_status (tail), or machine_ai_log (full transcript). Cancel: machine_ai_cancel. Continue later: machine_ai_reply (starts a new job)."
+}
+
+func runnerOf(j agenthub.AIJob) string {
+	if j.Runner != "" {
+		return j.Runner
+	}
+	return j.Agent
+}
+
+func formatJobList(machine string, list []agenthub.AIJob) string {
+	type row struct {
+		JobID       string `json:"job_id"`
+		Runner      string `json:"runner"`
+		Status      string `json:"status"`
+		ExitCode    int    `json:"exit_code,omitempty"`
+		PID         int    `json:"pid,omitempty"`
+		Cwd         string `json:"cwd,omitempty"`
+		Prompt      string `json:"prompt,omitempty"`
+		ParentJobID string `json:"parent_job_id,omitempty"`
+		StartedAt   string `json:"started_at,omitempty"`
+		FinishedAt  string `json:"finished_at,omitempty"`
+	}
+	rows := make([]row, 0, len(list))
+	for _, j := range list {
+		rows = append(rows, row{
+			JobID: j.JobID, Runner: runnerOf(j), Status: j.Status,
+			ExitCode: j.ExitCode, PID: j.PID, Cwd: j.Cwd, Prompt: j.Prompt,
+			ParentJobID: j.ParentJobID,
+			StartedAt:   j.StartedAt, FinishedAt: j.FinishedAt,
+		})
+	}
+	if len(rows) == 0 {
+		return "No AI jobs on this machine yet."
+	}
+	b, _ := json.MarshalIndent(map[string]any{"machine": machine, "jobs": rows}, "", "  ")
+	return string(b)
+}
+
+func formatJob(machine string, job *agenthub.AIJob, extra map[string]any) string {
+	if job == nil {
+		return `{"error":"no job"}`
+	}
+	out := map[string]any{
+		"machine":     machine,
+		"job_id":      job.JobID,
+		"runner":      runnerOf(*job),
+		"status":      job.Status,
+		"exit_code":   job.ExitCode,
+		"pid":         job.PID,
+		"cwd":         job.Cwd,
+		"prompt":      job.Prompt,
+		"started_at":  job.StartedAt,
+		"finished_at": job.FinishedAt,
+	}
+	if job.ParentJobID != "" {
+		out["parent_job_id"] = job.ParentJobID
+	}
+	if job.Error != "" {
+		out["error"] = job.Error
+	}
+	if job.Output != "" {
+		if _, hasFull := extra["output"]; !hasFull {
+			out["output_tail"] = job.Output
+		}
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	b, _ := json.MarshalIndent(out, "", "  ")
+	return string(b)
+}
+
+const replyLogContext = 32_000
+
+// BuildContinuePrompt assembles a follow-up prompt from parent context.
+// parentLog is typically a tail of the previous transcript.
+func BuildContinuePrompt(parentPrompt, parentLog, followUp string) string {
+	parentPrompt = strings.TrimSpace(parentPrompt)
+	parentLog = strings.TrimSpace(parentLog)
+	followUp = strings.TrimSpace(followUp)
+	if len(parentLog) > replyLogContext {
+		parentLog = parentLog[len(parentLog)-replyLogContext:]
+	}
+	var b strings.Builder
+	b.WriteString("You are continuing a previous task on this machine.\n\n")
+	b.WriteString("## Previous prompt\n")
+	if parentPrompt == "" {
+		b.WriteString("(none)\n")
+	} else {
+		b.WriteString(parentPrompt)
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n## Previous output\n")
+	if parentLog == "" {
+		b.WriteString("(no output captured)\n")
+	} else {
+		b.WriteString(parentLog)
+		if !strings.HasSuffix(parentLog, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString("\n## Follow-up\n")
+	b.WriteString(followUp)
+	return b.String()
 }
