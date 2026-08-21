@@ -6,8 +6,9 @@ import (
 	"strings"
 )
 
-// DefaultRedirectAllowlists are host suffixes / exact hosts accepted for OAuth redirects.
+// DefaultRedirectAllowlists are host suffixes / exact hosts accepted for http(s) OAuth redirects.
 // Clients (Grok, Claude, Cursor, local dev) must match one of these.
+// Cursor / Grok Bot MCP also uses the custom scheme cursor:// — see isCursorMCPHost.
 var DefaultRedirectAllowlists = []string{
 	"grok.com",
 	"x.ai",
@@ -19,6 +20,11 @@ var DefaultRedirectAllowlists = []string{
 	"localhost",
 	"[::1]",
 }
+
+// cursorMCPHost is the custom-scheme OAuth callback host used by Cursor / Grok Bot
+// MCP: cursor://anysphere.cursor-mcp/oauth/callback (also /oauth/<app>/callback).
+// Exact host cursor-mcp and any subdomain (e.g. anysphere.cursor-mcp) are allowed.
+const cursorMCPHost = "cursor-mcp"
 
 // RedirectChecker validates redirect_uri against an allowlist.
 type RedirectChecker struct {
@@ -55,7 +61,10 @@ func NewRedirectChecker(extra []string) *RedirectChecker {
 	return &RedirectChecker{Hosts: hosts}
 }
 
-// ValidateRedirectURI returns nil if uri is an allowed http(s) redirect.
+// ValidateRedirectURI returns nil if uri is an allowed redirect.
+// http(s) must match the host allowlist (http only on loopback).
+// The cursor:// scheme is accepted only for cursor-mcp (and subdomains),
+// used by Cursor / Grok Bot MCP — not arbitrary custom schemes or cursor://evil.
 func (c *RedirectChecker) ValidateRedirectURI(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -66,10 +75,16 @@ func (c *RedirectChecker) ValidateRedirectURI(raw string) error {
 		return fmt.Errorf("invalid redirect_uri")
 	}
 	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	if scheme == "cursor" {
+		if isCursorMCPHost(host) {
+			return nil
+		}
+		return fmt.Errorf("redirect_uri host %q not allowed", host)
+	}
 	if scheme != "https" && scheme != "http" {
 		return fmt.Errorf("redirect_uri scheme must be http or https")
 	}
-	host := strings.ToLower(u.Hostname())
 	// http only for loopback
 	if scheme == "http" && !isLoopbackHost(host) {
 		return fmt.Errorf("http redirect_uri only allowed for localhost")
@@ -83,6 +98,10 @@ func (c *RedirectChecker) ValidateRedirectURI(raw string) error {
 		}
 	}
 	return fmt.Errorf("redirect_uri host %q not allowed", host)
+}
+
+func isCursorMCPHost(host string) bool {
+	return host == cursorMCPHost || strings.HasSuffix(host, "."+cursorMCPHost)
 }
 
 func isLoopbackHost(host string) bool {

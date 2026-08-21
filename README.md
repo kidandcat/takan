@@ -37,6 +37,8 @@ Only the URL is needed. Clients discover OAuth (PKCE), open a browser login, and
 https://<your-host>/mcp
 ```
 
+OAuth `redirect_uri` is allowlisted. Built-in https hosts cover Grok, Claude, and Cursor (`cursor.com` / `cursor.sh`); http is loopback-only (`localhost`, `127.0.0.1`, including desktop `http://localhost:8787/callback`). Cursor / Grok Bot MCP uses the custom scheme `cursor://anysphere.cursor-mcp/…` (also `/oauth/<app>/callback`) — that host and other `*.cursor-mcp` subdomains are allowlisted; other custom schemes and `cursor://evil` are rejected. Extra https hosts: `TAKAN_OAUTH_REDIRECT_ALLOW`.
+
 ## Mobile API
 
 JSON REST for the Flutter app (`takan-app`). Bearer access tokens (same store as OAuth).
@@ -63,7 +65,7 @@ Credential reads for agents still use vault grants (`secrets_request` → approv
 - Isolation by `user_id` (modules, machines, secrets, people, health, Mercadona, email).
 - **Invites:** registration closed by default. Users create invite codes (`TAKAN_DEFAULT_INVITE_QUOTA`, default 5). Admins can grant unlimited invites in **Panel → Invites**.
 - First registered user becomes **admin + unlimited invites**.
-- OAuth: PKCE + redirect allowlist; access tokens 24h; refresh rotates (30d).
+- OAuth: PKCE + redirect allowlist (https hosts, loopback http, `cursor://anysphere.cursor-mcp/…`); access tokens 24h; refresh rotates (30d).
 
 ## Unofficial Mercadona integration
 
