@@ -227,6 +227,13 @@ func (m *jobManager) loadMeta(jobID string) (jobMeta, error) {
 	if err := validJobID(jobID); err != nil {
 		return jobMeta{}, err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reapLocked(jobID)
+}
+
+// reapLocked refreshes a dead "running" job. Caller must hold m.mu.
+func (m *jobManager) reapLocked(jobID string) (jobMeta, error) {
 	dir := m.jobDir(jobID)
 	meta, err := readMeta(dir)
 	if err != nil {
@@ -284,43 +291,40 @@ func (m *jobManager) readLog(jobID string, maxBytes int) (jobMeta, string, int, 
 	return meta, string(b), total, truncated, nil
 }
 
-// cancel kills the job process group and persists status cancelled.
+// cancel persists status cancelled first, then kills the process group so
+// Wait() cannot overwrite the terminal state with failed.
 func (m *jobManager) cancel(jobID string) (jobMeta, error) {
-	meta, err := m.loadMeta(jobID)
-	if err != nil {
+	jobID = strings.TrimSpace(jobID)
+	if err := validJobID(jobID); err != nil {
 		return jobMeta{}, err
-	}
-	if jobTerminal(meta.Status) {
-		return meta, nil
 	}
 
 	m.mu.Lock()
-	if cmd := m.cmds[meta.JobID]; cmd != nil && cmd.Process != nil {
-		meta.PID = cmd.Process.Pid
+	meta, err := m.reapLocked(jobID)
+	if err != nil {
+		m.mu.Unlock()
+		return jobMeta{}, err
+	}
+	if jobTerminal(meta.Status) {
+		m.mu.Unlock()
+		return meta, nil
 	}
 	pid := meta.PID
+	if cmd := m.cmds[meta.JobID]; cmd != nil && cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	meta.Status = "cancelled"
+	meta.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := writeMeta(m.jobDir(meta.JobID), meta); err != nil {
+		m.mu.Unlock()
+		return meta, err
+	}
 	m.mu.Unlock()
 
 	if pid > 0 {
 		killProcessGroup(pid)
 	}
-
-	m.mu.Lock()
-	cur, err := readMeta(m.jobDir(meta.JobID))
-	if err != nil {
-		m.mu.Unlock()
-		return meta, err
-	}
-	if !jobTerminal(cur.Status) {
-		cur.Status = "cancelled"
-		cur.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-		if err := writeMeta(m.jobDir(meta.JobID), cur); err != nil {
-			m.mu.Unlock()
-			return cur, err
-		}
-	}
-	m.mu.Unlock()
-	return cur, nil
+	return meta, nil
 }
 
 func killProcessGroup(pid int) {
@@ -349,16 +353,11 @@ func (m *jobManager) list() []jobMeta {
 		if !e.IsDir() {
 			continue
 		}
-		meta, err := readMeta(m.jobDir(e.Name()))
+		m.mu.Lock()
+		meta, err := m.reapLocked(e.Name())
+		m.mu.Unlock()
 		if err != nil {
 			continue
-		}
-		if meta.Status == "running" && meta.PID > 0 && !pidAlive(meta.PID) {
-			meta.Status = "done"
-			if meta.FinishedAt == "" {
-				meta.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-			}
-			_ = writeMeta(m.jobDir(e.Name()), meta)
 		}
 		if len(meta.Prompt) > 200 {
 			meta.Prompt = meta.Prompt[:200] + "…"
