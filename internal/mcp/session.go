@@ -81,10 +81,27 @@ func (h *SessionHub) DropUserSessions(userID string) int {
 // streams belonging to sessions of userID (MCP Streamable HTTP).
 // Returns the number of SSE streams that received the notification.
 func (h *SessionHub) NotifyToolsChanged(userID string) int {
-	payload, _ := json.Marshal(map[string]any{
+	n := h.Notify(userID, "notifications/tools/list_changed", nil)
+	if n > 0 {
+		log.Printf("mcp: tools/list_changed user=%s streams=%d", userID, n)
+	}
+	return n
+}
+
+// Notify sends a JSON-RPC notification on every open SSE stream for userID.
+// Best-effort; slow consumers are dropped. params may be nil.
+func (h *SessionHub) Notify(userID, method string, params any) int {
+	msg := map[string]any{
 		"jsonrpc": "2.0",
-		"method":  "notifications/tools/list_changed",
-	})
+		"method":  method,
+	}
+	if params != nil {
+		msg["params"] = params
+	}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return 0
+	}
 	h.mu.RLock()
 	var targets []*Session
 	for _, s := range h.sessions {
@@ -95,11 +112,7 @@ func (h *SessionHub) NotifyToolsChanged(userID string) int {
 	h.mu.RUnlock()
 	total := 0
 	for _, s := range targets {
-		n := s.broadcast(payload)
-		total += n
-		if n > 0 {
-			log.Printf("mcp: tools/list_changed user=%s session=%s streams=%d", userID, s.ID, n)
-		}
+		total += s.broadcast(payload)
 	}
 	return total
 }

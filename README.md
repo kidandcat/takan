@@ -14,7 +14,7 @@ Integrations live under `modules/` as subpackages:
 
 | Module | Path | Tools | Setup |
 |--------|------|--------|--------|
-| **Machine** | `modules/machine` | `machine_list`, `machine_bash` (optional), `machine_ai_*` | Install `takan-agent`; toggle bash / AI runners in panel |
+| **Machine** | `modules/machine` | `machine_list`, `machine_bash` (optional), `machine_ai_runners`, `machine_ai_run`, `machine_ai_status`, `machine_ai_watch`, `machine_ai_log`, `machine_ai_cancel`, `machine_ai_reply` | Install `takan-agent`; toggle bash / AI runners in panel |
 | **Display** | `modules/display` | `display_list`, `display_show` | Name a kiosk screen on a machine; agent serves HTML at `127.0.0.1:8787` |
 | **Mercadona** | `modules/mercadona` | `mercadona_search`, `mercadona_add`, `mercadona_cart` | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get` | Resend API key; enable domains |
@@ -26,6 +26,8 @@ Integrations live under `modules/` as subpackages:
 | **meta** | `modules` | `takan_status` | Always on — all modules + readiness |
 
 When the tool set changes, Takan pushes `notifications/tools/list_changed` on open SSE streams (best-effort). Clients that ignore it keep the old tool list until reconnect; calls to disabled tools simply fail.
+
+`machine_ai_run` returns immediately with a `job_id`. Follow the job with `machine_ai_watch` (blocks until done/failed/cancelled or timeout), `machine_ai_status` (tail), `machine_ai_log` (full transcript), `machine_ai_cancel`, or `machine_ai_reply` (new job with parent context — runners are one-shot and cannot be interrupted in-process). Open SSE streams may also get `notifications/takan/machine_ai_job` when a job ends.
 
 ## MCP
 

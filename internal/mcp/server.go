@@ -67,6 +67,18 @@ func (s *Server) NotifyToolsChanged(userID string) {
 	log.Printf("mcp: tools changed user=%s list_changed_streams=%d (no force reauth)", userID, n)
 }
 
+// NotifyUser pushes a JSON-RPC notification on the user's open MCP SSE streams.
+func (s *Server) NotifyUser(userID, method string, params any) int {
+	if userID == "" || method == "" {
+		return 0
+	}
+	n := s.hub().Notify(userID, method, params)
+	if n > 0 {
+		log.Printf("mcp: notify user=%s method=%s streams=%d", userID, method, n)
+	}
+	return n
+}
+
 func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodOptions:
