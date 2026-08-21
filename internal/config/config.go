@@ -16,8 +16,6 @@ type Config struct {
 	AllowRegister bool
 	// DefaultInviteQuota is how many invites a new user may create (unless unlimited).
 	DefaultInviteQuota int
-	// OAuthRedirectExtra hosts added to the default OAuth redirect allowlist (comma-separated).
-	OAuthRedirectExtra []string
 	// MachineBashPerMin rate-limits machine_bash per user (0 = unlimited).
 	MachineBashPerMin int
 	// AuthPerMin rate-limits login/register/token per IP.
@@ -39,7 +37,6 @@ func Load() Config {
 		SessionKey:         env("TAKAN_SESSION_KEY", ""),
 		AllowRegister:      envBool("TAKAN_ALLOW_REGISTER", false),
 		DefaultInviteQuota: EnvInt("TAKAN_DEFAULT_INVITE_QUOTA", 5),
-		OAuthRedirectExtra: splitCSV(os.Getenv("TAKAN_OAUTH_REDIRECT_ALLOW")),
 		MachineBashPerMin:  EnvInt("TAKAN_MACHINE_BASH_PER_MIN", 30),
 		AuthPerMin:         EnvInt("TAKAN_AUTH_PER_MIN", 20),
 		BackupEndpoint:     os.Getenv("TAKAN_BACKUP_ENDPOINT"),
@@ -56,22 +53,6 @@ func Load() Config {
 		c.DefaultInviteQuota = 0
 	}
 	return c
-}
-
-func splitCSV(s string) []string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	var out []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func env(k, def string) string {

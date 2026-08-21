@@ -33,8 +33,6 @@ type Server struct {
 	PublicURL string // https://takan.es
 	// AllowRegister shows the signup link on the OAuth login page.
 	AllowRegister bool
-	// Redirects validates redirect_uri (required for multi-tenant safety).
-	Redirects *RedirectChecker
 	// RateLimit optional: return false to reject (login / token).
 	RateLimit func(key string) bool
 	// UserFromSession returns the logged-in panel user for a request, if any.
@@ -46,13 +44,6 @@ type Server struct {
 	// OnAccessTokenIssued is called after a successful access-token grant
 	// (authorization_code or refresh_token). Used to clear MCP force-reauth.
 	OnAccessTokenIssued func(userID string)
-}
-
-func (s *Server) redirects() *RedirectChecker {
-	if s.Redirects == nil {
-		s.Redirects = NewRedirectChecker(nil)
-	}
-	return s.Redirects
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
@@ -218,7 +209,7 @@ func (s *Server) validateAuthorizeQuery(q url.Values) error {
 	if q.Get("client_id") == "" {
 		return fmt.Errorf("client_id required")
 	}
-	if err := s.redirects().ValidateRedirectURI(q.Get("redirect_uri")); err != nil {
+	if err := ValidateRedirectURI(q.Get("redirect_uri")); err != nil {
 		return err
 	}
 	if q.Get("code_challenge") == "" {

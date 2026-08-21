@@ -211,7 +211,6 @@ func main() {
 		Store:            st,
 		PublicURL:        cfg.PublicURL,
 		AllowRegister:    cfg.AllowRegister,
-		Redirects:        oauth.NewRedirectChecker(cfg.OAuthRedirectExtra),
 		RateLimit:        authLimit,
 		UserFromSession:  webSrv.CurrentUser,
 		CreateSession:    webSrv.CreateWebSession,
