@@ -30,7 +30,7 @@ const (
 // Server is the OAuth AS + resource metadata, co-hosted with the MCP resource.
 type Server struct {
 	Store     *store.Store
-	PublicURL string // https://takan.es
+	PublicURL string // https://takan.example.com
 	// RateLimit optional: return false to reject (login / token).
 	RateLimit func(key string) bool
 	// UserFromSession returns the logged-in panel user for a request, if any.

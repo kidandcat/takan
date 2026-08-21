@@ -1,3 +1,11 @@
+# Example systemd unit for a self-hosted hub.
+#   sudo useradd --system --home /opt/takan --shell /usr/sbin/nologin takan
+#   sudo mkdir -p /opt/takan /opt/takan/data /opt/takan/agents /etc/takan
+#   sudo chown -R takan:takan /opt/takan
+#   sudo chmod 700 /etc/takan /opt/takan/data
+# Copy this file to /etc/systemd/system/takan.service and
+# deploy/takan.env.example to /etc/takan/takan.env (set TAKAN_SESSION_KEY).
+
 [Unit]
 Description=Takan hub (MCP + panel + agents)
 After=network-online.target
@@ -5,8 +13,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=debian
-Group=debian
+User=takan
+Group=takan
 WorkingDirectory=/opt/takan
 ExecStart=/opt/takan/takan
 EnvironmentFile=/etc/takan/takan.env

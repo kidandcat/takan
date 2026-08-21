@@ -13,6 +13,8 @@ go test ./...
 go run ./cmd/takan
 ```
 
+Self-host via Docker: `docker compose up --build` (see README). Do not point `takan-agent --url` at someone else's hub.
+
 Panel: open `TAKAN_PUBLIC_URL`. First visit sets the instance password.
 
 ## Pull requests

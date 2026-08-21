@@ -9,7 +9,7 @@ import (
 // Config is runtime configuration from environment.
 type Config struct {
 	Listen     string
-	PublicURL  string // https://takan.es
+	PublicURL  string // https://takan.example.com
 	DataDir    string
 	SessionKey string // cookie signing (and at-rest encryption key material)
 	// MachineBashPerMin rate-limits machine_bash per user (0 = unlimited).

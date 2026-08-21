@@ -92,11 +92,15 @@ type wireMsg struct {
 }
 
 func main() {
-	baseURL := flag.String("url", env("TAKAN_URL", "https://takan.es"), "Takan hub base URL")
+	baseURL := flag.String("url", env("TAKAN_URL", ""), "Takan hub base URL")
 	token := flag.String("token", env("TAKAN_AGENT_TOKEN", ""), "Agent token from panel")
 	name := flag.String("name", env("TAKAN_AGENT_NAME", ""), "Machine name (informational)")
 	displayAddr := flag.String("display-addr", env("TAKAN_DISPLAY_ADDR", "127.0.0.1:8787"), "Local HTTP addr for display HTML (empty to disable)")
 	flag.Parse()
+	hubURL, err := resolveHubURL(*baseURL)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if *token == "" {
 		log.Fatal("--token or TAKAN_AGENT_TOKEN required")
 	}
@@ -120,7 +124,7 @@ func main() {
 	defer cancel()
 
 	for ctx.Err() == nil {
-		err := runOnce(ctx, *baseURL, *token, jobs, defaultConnTiming(), disp)
+		err := runOnce(ctx, hubURL, *token, jobs, defaultConnTiming(), disp)
 		if ctx.Err() != nil {
 			return
 		}
@@ -430,4 +434,14 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// resolveHubURL trims the hub base URL. Empty is fatal so a missing --url does
+// not silently connect to some other operator's hosted instance.
+func resolveHubURL(raw string) (string, error) {
+	u := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if u == "" {
+		return "", fmt.Errorf("--url or TAKAN_URL required (your hub, e.g. http://127.0.0.1:8090)")
+	}
+	return u, nil
 }

@@ -3,5 +3,7 @@
 /takan-agent
 /takan-agent-*
 /data/
+/dist/
 *.env
 /vendor/
+docker-compose.override.yml

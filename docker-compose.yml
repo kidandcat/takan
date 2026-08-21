@@ -1,0 +1,34 @@
+# One-command self-host:
+#   docker compose up --build
+# Then open http://localhost:8090 and set the instance password.
+#
+# On a LAN or behind TLS, set TAKAN_PUBLIC_URL to the URL browsers and MCP clients use:
+#   TAKAN_PUBLIC_URL=https://takan.example.com docker compose up --build
+#
+# Optional: pin the session key (otherwise it is generated into the data volume):
+#   TAKAN_SESSION_KEY=$(openssl rand -hex 32) docker compose up --build
+
+services:
+  takan:
+    build: .
+    image: takan:local
+    ports:
+      - "8090:8090"
+    environment:
+      TAKAN_LISTEN: "0.0.0.0:8090"
+      TAKAN_PUBLIC_URL: "${TAKAN_PUBLIC_URL:-http://localhost:8090}"
+      TAKAN_DATA_DIR: /data
+      TAKAN_AGENT_BIN_DIR: /opt/takan/agents
+      TAKAN_SESSION_KEY: "${TAKAN_SESSION_KEY:-}"
+    volumes:
+      - takan-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  takan-data:

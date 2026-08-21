@@ -1,0 +1,10 @@
+.git
+.github
+data
+dist
+**/default.db*
+**/*.db-wal
+**/*.db-shm
+*.bak
+docker-compose.override.yml
+TAKAN_OSS_SELFHOST.md

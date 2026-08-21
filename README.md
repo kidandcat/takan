@@ -5,6 +5,7 @@
 Connect Grok, Claude, or Cursor once to Takan. From the web panel, enable modules (Machine, Mercadona, Email, …) — tools appear and disappear without reconfiguring the AI client.
 
 - **Stack:** Go · [Colmena](https://github.com/mentasystems/colmena) (SQLite + continuous backup) · HTMX  
+- **Self-host:** this repo — one process, your machine. See [Docker Compose](#self-hosting) below.  
 - **Hosted example:** [takan.es](https://takan.es) (Hairok’s personal instance — same model as any self-host)  
 - **License:** [MIT](LICENSE)
 
@@ -101,32 +102,58 @@ go build -o takan-agent ./cmd/takan-agent
 
 Create a machine in the panel to get the install one-liner / token.
 
-## Self-hosting (production sketch)
+## Self-hosting
+
+Takan is a **single-operator personal hub**: you run it, you set the instance password. It is not a multi-tenant SaaS. There is no signup or invites (`TAKAN_ALLOW_REGISTER` is ignored). See [TAKAN_SINGLE_OPERATOR.md](TAKAN_SINGLE_OPERATOR.md).
+
+### Docker Compose (recommended)
+
+```bash
+git clone https://github.com/kidandcat/takan.git
+cd takan
+docker compose up --build
+```
+
+Open http://localhost:8090 and set the instance password. Create a machine in the panel, then on each PC:
+
+```bash
+curl -fsSL http://localhost:8090/install.sh | bash -s -- <agent-token>
+```
+
+MCP URL for Grok / Claude / Cursor: `http://localhost:8090/mcp`.
+
+- Data (SQLite + generated `TAKAN_SESSION_KEY`) lives in the `takan-data` volume — keep it. Losing it loses vault ciphertext.
+- Other devices on the LAN: `TAKAN_PUBLIC_URL=http://192.168.x.x:8090 docker compose up --build` (must be the URL those clients actually open).
+- Behind TLS: set `TAKAN_PUBLIC_URL=https://takan.example.com` and reverse-proxy port 8090 (see [`deploy/Caddyfile.snippet`](deploy/Caddyfile.snippet)).
+
+### systemd (bare metal)
 
 1. **Build**
 
    ```bash
    CGO_ENABLED=0 go build -o takan ./cmd/takan
    CGO_ENABLED=0 go build -o takan-agent ./cmd/takan-agent
-   # optional multi-arch agents for /download/:
+   # multi-arch agents for /download/ and /install.sh:
    # GOOS=linux GOARCH=amd64 go build -o takan-agent-linux-amd64 ./cmd/takan-agent
    ```
 
-2. **Config** — copy [`deploy/takan.env.example`](deploy/takan.env.example) to e.g. `/etc/takan/takan.env`:
+2. **Config** — copy [`deploy/takan.env.example`](deploy/takan.env.example) to `/etc/takan/takan.env`:
 
-   - `TAKAN_PUBLIC_URL=https://your.domain` (must match what clients use)
+   - `TAKAN_PUBLIC_URL=https://takan.example.com` (must match what clients use)
    - `TAKAN_SESSION_KEY=` long random (`openssl rand -hex 32`) — **never** the dev default
    - `TAKAN_DATA_DIR=` writable path for Colmena/SQLite
    - `TAKAN_LISTEN=127.0.0.1:8090` (prefer reverse-proxy TLS)
-   - Optional: rate limits, S3 backup keys (`TAKAN_ALLOW_REGISTER` is ignored)
+   - Optional: rate limits, S3-compatible backup keys (`TAKAN_ALLOW_REGISTER` is ignored)
 
-3. **systemd** — see [`deploy/takan.service`](deploy/takan.service) (`EnvironmentFile=…`, `ExecStart=…/takan`).
+3. **systemd** — [`deploy/takan.service`](deploy/takan.service) (dedicated `takan` user, `EnvironmentFile=…`).
 
-4. **TLS** — terminate with Caddy/nginx; snippet: [`deploy/Caddyfile.snippet`](deploy/Caddyfile.snippet).
+4. **TLS** — Caddy/nginx; snippet: [`deploy/Caddyfile.snippet`](deploy/Caddyfile.snippet).
 
-5. **Agent binaries** (optional) — serve under `TAKAN_AGENT_BIN_DIR` (default `/opt/takan/agents`) so `/install.sh` and `/download/takan-agent-<os>-<arch>` work.
+5. **Agent binaries** — put `takan-agent-<os>-<arch>` in `TAKAN_AGENT_BIN_DIR` (default `/opt/takan/agents`) so `/install.sh` works. The Docker image already includes linux/darwin amd64+arm64.
 
 6. **Set the instance password** on the panel, create machines, enable modules, paste the MCP URL into your AI client.
+
+OSS packaging notes (what is in / out of a hosted SaaS): [TAKAN_OSS_SELFHOST.md](TAKAN_OSS_SELFHOST.md).
 
 ## Security
 

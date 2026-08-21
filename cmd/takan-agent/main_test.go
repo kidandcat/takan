@@ -10,6 +10,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestResolveHubURL(t *testing.T) {
+	if _, err := resolveHubURL(""); err == nil {
+		t.Fatal("empty url should fail")
+	}
+	if _, err := resolveHubURL("   "); err == nil {
+		t.Fatal("whitespace url should fail")
+	}
+	got, err := resolveHubURL(" https://hub.example/ ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://hub.example" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestLivenessAction(t *testing.T) {
 	stale := 90 * time.Second
 	hang := 3 * time.Minute
