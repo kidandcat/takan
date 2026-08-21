@@ -184,3 +184,9 @@ Agent cmdline on this VPS includes the raw token (`ps` shows `--token …`). Tha
 ## 7. What this PR does **not** remove (on purpose)
 
 Open self-signup **code** stays behind the env flag. Invites stay. OAuth DCR stays. Admin user list stays. Calling those “SaaS” would break the household product and, if shipped to takan.es, the four existing accounts.
+
+---
+
+## 8. MCP events / Grok Bot wakeup (see TAKAN_EVENTS.md)
+
+Takan already pushes two JSON-RPC notifications on GET `/mcp` SSE: `notifications/takan/machine_ai_job` (agent `ai_done`) and `notifications/tools/list_changed` (module/tool config). Email, Mercadona, Telegram, display, SIP, vault grants are **poll tools**, not pushes. Grok Bot **holds** that SSE stream on `takan.es` but **does not start a new turn** on the custom job notification (Grok Build only handles `tools/list_changed` / `resources/list_changed` as UI status). Idle Minerva will not notice a finished machine grok unless the same turn called `machine_ai_watch`, or we add an out-of-band wake (Grok Automations webhook / Telegram). Full inventory: [TAKAN_EVENTS.md](TAKAN_EVENTS.md).
