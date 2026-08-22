@@ -143,19 +143,7 @@ func (s *Server) handleGET(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid := r.Header.Get("MCP-Session-Id")
-	var sess *Session
-	if sid != "" {
-		sess = s.hub().Get(sid)
-		if sess == nil || sess.UserID != userID {
-			http.Error(w, "unknown session", http.StatusNotFound)
-			return
-		}
-	} else {
-		// Allow GET without session for clients that only want a listen channel;
-		// bind a new session.
-		sess = s.hub().Create(userID)
-		w.Header().Set("MCP-Session-Id", sess.ID)
-	}
+	sess := s.bindSession(w, userID, sid, true)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -229,23 +217,49 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Session binding
+	// Session binding. initialize always mints a new session. Any other
+	// authenticated method with an unknown or cross-user MCP-Session-Id
+	// also mints one: Cursor/Grok Bot keep the old id after a hub restart
+	// and do not re-initialize, so a 404 "unknown session" permanently
+	// breaks tools/list and tools/call for that client.
 	sid := r.Header.Get("MCP-Session-Id")
-	var sess *Session
 	if req.Method == "initialize" {
-		sess = s.hub().Create(userID)
+		sess := s.hub().Create(userID)
 		w.Header().Set("MCP-Session-Id", sess.ID)
-	} else if sid != "" {
-		sess = s.hub().Get(sid)
-		if sess == nil || sess.UserID != userID {
-			// Stale session — client should re-initialize
-			http.Error(w, "unknown session", http.StatusNotFound)
-			return
-		}
-		w.Header().Set("MCP-Session-Id", sess.ID)
+	} else {
+		s.bindSession(w, userID, sid, false)
 	}
 
 	writeJSON(w, s.handle(r.Context(), userID, req))
+}
+
+// bindSession returns the MCP session for this authenticated user.
+//
+// A present MCP-Session-Id that is unknown (in-memory hub lost it, e.g. after
+// restart) or owned by another user is replaced with a newly created session.
+// The replacement id is always written to the MCP-Session-Id response header.
+// We never 404 on a stale id.
+//
+// If sid is empty and create is false, no session is created (POST without a
+// session header, other than initialize). If create is true (GET SSE), an
+// empty id still binds a listen-only session.
+func (s *Server) bindSession(w http.ResponseWriter, userID, sid string, create bool) *Session {
+	if sid != "" {
+		if sess := s.hub().Get(sid); sess != nil && sess.UserID == userID {
+			w.Header().Set("MCP-Session-Id", sess.ID)
+			return sess
+		}
+		sess := s.hub().Create(userID)
+		w.Header().Set("MCP-Session-Id", sess.ID)
+		log.Printf("mcp: replaced stale session user=%s", userID)
+		return sess
+	}
+	if !create {
+		return nil
+	}
+	sess := s.hub().Create(userID)
+	w.Header().Set("MCP-Session-Id", sess.ID)
+	return sess
 }
 
 func (s *Server) handle(ctx context.Context, userID string, req Request) Response {
