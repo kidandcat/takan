@@ -323,6 +323,7 @@ type User struct {
 }
 
 // CreateUserOpts controls registration side-effects.
+// HTTP no longer registers accounts; this remains for tests and BootstrapOwner.
 type CreateUserOpts struct {
 	// InviteCode when set is validated and consumed for the new user.
 	InviteCode string
@@ -403,23 +404,13 @@ VALUES (?,?,?,?,?,?,?)`,
 }
 
 func (s *Store) Authenticate(ctx context.Context, email, password string) (*User, error) {
-	email = normalizeEmail(email)
-	u, err := s.userByEmail(ctx, email)
-	if err != nil {
-		return nil, fmt.Errorf("invalid credentials")
-	}
-	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
-		return nil, fmt.Errorf("invalid credentials")
-	}
-	return u, nil
+	// Single-operator: email is ignored. Only the instance password unlocks.
+	_ = email
+	return s.AuthenticatePassword(ctx, password)
 }
 
 func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {
 	return s.scanUser(s.db.QueryRowContext(ctx, userSelect+` WHERE id = ?`, id))
-}
-
-func (s *Store) userByEmail(ctx context.Context, email string) (*User, error) {
-	return s.scanUser(s.db.QueryRowContext(ctx, userSelect+` WHERE email = ?`, email))
 }
 
 const userSelect = `SELECT id, email, password_hash, created_at,

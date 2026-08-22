@@ -5,7 +5,7 @@
 Connect Grok, Claude, or Cursor once to Takan. From the web panel, enable modules (Machine, Mercadona, Email, …) — tools appear and disappear without reconfiguring the AI client.
 
 - **Stack:** Go · [Colmena](https://github.com/mentasystems/colmena) (SQLite + continuous backup) · HTMX  
-- **Hosted example:** [takan.es](https://takan.es)  
+- **Hosted example:** [takan.es](https://takan.es) (Hairok’s personal instance — same model as any self-host)  
 - **License:** [MIT](LICENSE)
 
 ## Modules
@@ -45,7 +45,7 @@ JSON REST for the Flutter app (`takan-app`). Bearer access tokens (same store as
 
 | Method | Path | Notes |
 |--------|------|--------|
-| POST | `/api/v1/auth/login` | `{email,password}` → access + refresh |
+| POST | `/api/v1/auth/login` | `{password}` (email ignored) → access + refresh |
 | POST | `/api/v1/auth/refresh` | rotate refresh |
 | POST | `/api/v1/auth/logout` | revoke access |
 | GET | `/api/v1/me` | current user |
@@ -56,15 +56,16 @@ JSON REST for the Flutter app (`takan-app`). Bearer access tokens (same store as
 | GET/POST | `/api/v1/approvals` | agent auth inbox (vault grants) |
 | GET/POST/DELETE | `/api/v1/people` | directory |
 | GET | `/api/v1/health` | snapshot |
-| GET/POST | `/api/v1/invites` | invite codes |
 
-Credential reads for agents still use vault grants (`secrets_request` → approve in app or panel, unless the user turns off “Require approval” in Vault settings).
+Credential reads for agents still use vault grants (`secrets_request` → approve in app or panel, unless the operator turns off “Require approval” in Vault settings).
 
-## Multi-user
+## Single operator
 
-- Isolation by `user_id` (modules, machines, secrets, people, health, Mercadona, email).
-- **Invites:** registration closed by default. Users create invite codes (`TAKAN_DEFAULT_INVITE_QUOTA`, default 5). Admins can grant unlimited invites in **Panel → Invites**.
-- First registered user becomes **admin + unlimited invites**.
+One process = one operator. There is no signup, invite, or admin/user split. See [TAKAN_SINGLE_OPERATOR.md](TAKAN_SINGLE_OPERATOR.md).
+
+- **Panel:** first visit sets the instance password; afterwards `POST /login` is password-only unlock (httpOnly session cookie, rate-limited).
+- **MCP / Grok:** OAuth 2.1 + PKCE + DCR. The browser asks for the same instance password. Tokens still store an internal `user_id` (the owner row) so existing connectors keep working.
+- Module tables remain keyed by that owner id. `TAKAN_ALLOW_REGISTER` is ignored.
 - OAuth: PKCE; any parseable `redirect_uri`; access tokens 24h; refresh rotates (30d).
 
 ## Unofficial Mercadona integration
@@ -89,7 +90,7 @@ go test ./...
 go run ./cmd/takan
 ```
 
-Open the public URL. First user to register is admin.
+Open the public URL. First visit sets the instance password (bind to localhost until then).
 
 ### Agent (local)
 
@@ -117,7 +118,7 @@ Create a machine in the panel to get the install one-liner / token.
    - `TAKAN_SESSION_KEY=` long random (`openssl rand -hex 32`) — **never** the dev default
    - `TAKAN_DATA_DIR=` writable path for Colmena/SQLite
    - `TAKAN_LISTEN=127.0.0.1:8090` (prefer reverse-proxy TLS)
-   - Optional: `TAKAN_ALLOW_REGISTER`, invite quota, rate limits, S3 backup keys
+   - Optional: rate limits, S3 backup keys (`TAKAN_ALLOW_REGISTER` is ignored)
 
 3. **systemd** — see [`deploy/takan.service`](deploy/takan.service) (`EnvironmentFile=…`, `ExecStart=…/takan`).
 
@@ -125,7 +126,7 @@ Create a machine in the panel to get the install one-liner / token.
 
 5. **Agent binaries** (optional) — serve under `TAKAN_AGENT_BIN_DIR` (default `/opt/takan/agents`) so `/install.sh` and `/download/takan-agent-<os>-<arch>` work.
 
-6. **Register** the first user on the panel, create machines, enable modules, paste the MCP URL into your AI client.
+6. **Set the instance password** on the panel, create machines, enable modules, paste the MCP URL into your AI client.
 
 ## Security
 

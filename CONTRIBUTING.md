@@ -13,7 +13,7 @@ go test ./...
 go run ./cmd/takan
 ```
 
-Panel: open `TAKAN_PUBLIC_URL`. First registered user becomes admin.
+Panel: open `TAKAN_PUBLIC_URL`. First visit sets the instance password.
 
 ## Pull requests
 
@@ -21,7 +21,7 @@ Panel: open `TAKAN_PUBLIC_URL`. First registered user becomes admin.
 - Prefer small, focused PRs (one module or one concern).
 - Run `go test ./...` before opening the PR.
 - Do not commit `data/`, secrets, or real credentials.
-- Match existing style: multi-tenant by `user_id`, no trust of client-supplied user IDs in tools.
+- Match existing style: module rows keyed by owner `user_id`, no trust of client-supplied user IDs in tools. One operator per instance (see `TAKAN_SINGLE_OPERATOR.md`).
 
 ## Modules
 

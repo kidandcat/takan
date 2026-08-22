@@ -76,7 +76,7 @@ func main() {
 		},
 	)
 
-	// Mercadona shares the main Takan/Colmena DB (multi-tenant by user id).
+	// Mercadona shares the main Takan/Colmena DB (rows keyed by owner user id).
 	mbox, err := mercadona.NewBox(cfg.SessionKey)
 	if err != nil {
 		log.Fatalf("mercadona crypto: %v", err)
@@ -157,7 +157,7 @@ func main() {
 		SIPHub:    sipHub,
 	}
 
-	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir, cfg.AllowRegister, cfg.DefaultInviteQuota)
+	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}
@@ -210,7 +210,6 @@ func main() {
 	oauthSrv := &oauth.Server{
 		Store:            st,
 		PublicURL:        cfg.PublicURL,
-		AllowRegister:    cfg.AllowRegister,
 		RateLimit:        authLimit,
 		UserFromSession:  webSrv.CurrentUser,
 		CreateSession:    webSrv.CreateWebSession,
@@ -262,8 +261,7 @@ func main() {
 		_ = httpSrv.Shutdown(ctx)
 	}()
 
-	log.Printf("takan listening on %s public=%s allow_register=%v invite_quota=%d",
-		cfg.Listen, cfg.PublicURL, cfg.AllowRegister, cfg.DefaultInviteQuota)
+	log.Printf("takan listening on %s public=%s (single operator)", cfg.Listen, cfg.PublicURL)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

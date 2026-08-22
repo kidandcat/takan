@@ -64,8 +64,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/people/{id}", s.peopleDelete)
 
 	mux.HandleFunc("GET /api/v1/health", s.healthSnapshot)
-	mux.HandleFunc("GET /api/v1/invites", s.invitesList)
-	mux.HandleFunc("POST /api/v1/invites", s.invitesCreate)
 }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
@@ -122,11 +120,9 @@ func decodeJSON(r *http.Request, dst any) error {
 
 func userJSON(u *store.User) map[string]any {
 	return map[string]any{
-		"id":               u.ID,
-		"email":            u.Email,
-		"is_admin":         u.IsAdmin,
-		"invite_quota":     u.InviteQuota,
-		"invite_unlimited": u.InviteUnlimited,
+		"id":       u.ID,
+		"email":    u.Email,
+		"operator": true,
 	}
 }
 
@@ -138,14 +134,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Email    string `json:"email"`
+		Email    string `json:"email"` // ignored; kept so existing mobile clients keep working
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	u, err := s.Store.Authenticate(r.Context(), body.Email, body.Password)
+	if body.Password == "" {
+		s.writeErr(w, http.StatusBadRequest, "password required")
+		return
+	}
+	u, err := s.Store.AuthenticatePassword(r.Context(), body.Password)
 	if err != nil {
 		s.writeErr(w, http.StatusUnauthorized, "invalid credentials")
 		return

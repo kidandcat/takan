@@ -1,0 +1,30 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Instance</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:52ch">
+      One operator. The password unlocks this panel and OAuth for Grok / Claude / Cursor.
+      Changing it signs the panel out; MCP tokens stay valid.
+    </p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="section-title"><span class="dot"></span><h2>Password</h2></div>
+  <div class="card" style="max-width:28rem">
+    <form method="post" action="/dashboard/instance/password">
+      <label for="current">Current password</label>
+      <input id="current" type="password" name="current" required autocomplete="current-password"/>
+      <label for="new">New password (min 8)</label>
+      <input id="new" type="password" name="new" required minlength="8" autocomplete="new-password"/>
+      <label for="confirm">Confirm new password</label>
+      <input id="confirm" type="password" name="confirm" required minlength="8" autocomplete="new-password"/>
+      <button type="submit" style="margin-top:1rem">Change password</button>
+    </form>
+  </div>
+</section>
+{{end}}

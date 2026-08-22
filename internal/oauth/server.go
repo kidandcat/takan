@@ -31,8 +31,6 @@ const (
 type Server struct {
 	Store     *store.Store
 	PublicURL string // https://takan.es
-	// AllowRegister shows the signup link on the OAuth login page.
-	AllowRegister bool
 	// RateLimit optional: return false to reject (login / token).
 	RateLimit func(key string) bool
 	// UserFromSession returns the logged-in panel user for a request, if any.
@@ -114,12 +112,15 @@ func (s *Server) authorizeGET(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	user := s.UserFromSession(r)
+	var user *store.User
+	if s.UserFromSession != nil {
+		user = s.UserFromSession(r)
+	}
 	if user == nil {
 		s.renderLogin(w, q, "")
 		return
 	}
-	s.renderConsent(w, q, user.Email, "")
+	s.renderConsent(w, q, "")
 }
 
 func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
@@ -136,24 +137,35 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	action := r.FormValue("action")
-	user := s.UserFromSession(r)
+	var user *store.User
+	if s.UserFromSession != nil {
+		user = s.UserFromSession(r)
+	}
 
 	if action == "login" || user == nil {
 		if s.RateLimit != nil && !s.RateLimit("oauth-login:"+clientIP(r)) {
 			s.renderLogin(w, q, "Too many attempts — try again later")
 			return
 		}
-		u, err := s.Store.Authenticate(r.Context(), r.FormValue("email"), r.FormValue("password"))
-		if err != nil {
-			s.renderLogin(w, q, "Invalid email or password")
+		if n, err := s.Store.UserCount(r.Context()); err != nil || n == 0 {
+			s.renderLogin(w, q, "Set the instance password in the panel first")
 			return
 		}
-		tok, err := s.CreateSession(r.Context(), u.ID)
+		u, err := s.Store.AuthenticatePassword(r.Context(), r.FormValue("password"))
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			s.renderLogin(w, q, "Invalid password")
 			return
 		}
-		s.SetSessionCookie(w, tok)
+		if s.CreateSession != nil {
+			tok, err := s.CreateSession(r.Context(), u.ID)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if s.SetSessionCookie != nil {
+				s.SetSessionCookie(w, tok)
+			}
+		}
 		user = u
 		action = "allow"
 	}
