@@ -77,6 +77,7 @@ type wireMsg struct {
 	Prompt      string    `json:"prompt,omitempty"`
 	Cwd         string    `json:"cwd,omitempty"`
 	ParentJobID string    `json:"parent_job_id,omitempty"`
+	Owner       string    `json:"owner,omitempty"`
 	JobID       string    `json:"job_id,omitempty"`
 	Status      string    `json:"status,omitempty"`
 	PID         int       `json:"pid,omitempty"`
@@ -345,7 +346,7 @@ func handleAIStart(jobs *jobManager, msg wireMsg) wireMsg {
 			cmdTmpl = "grok --always-approve -p " + promptPlaceholder
 		}
 	}
-	meta, err := jobs.start(runner, cmdTmpl, msg.Prompt, msg.Cwd, msg.ParentJobID)
+	meta, err := jobs.start(runner, cmdTmpl, msg.Prompt, msg.Cwd, msg.ParentJobID, msg.Owner)
 	if err != nil && meta.JobID == "" {
 		return wireMsg{Error: err.Error(), Status: "failed"}
 	}
@@ -354,7 +355,7 @@ func handleAIStart(jobs *jobManager, msg wireMsg) wireMsg {
 		out.Error = err.Error()
 		return out
 	}
-	log.Printf("ai job started id=%s runner=%s pid=%d parent=%s", meta.JobID, meta.Agent, meta.PID, meta.ParentJobID)
+	log.Printf("ai job started id=%s runner=%s pid=%d parent=%s owner=%s", meta.JobID, meta.Agent, meta.PID, meta.ParentJobID, meta.Owner)
 	return jobWire("", meta, "", 0, false)
 }
 
@@ -400,6 +401,7 @@ func jobWire(_ string, meta jobMeta, output string, total int, truncated bool) w
 		Prompt:      meta.Prompt,
 		Command:     meta.Command,
 		ParentJobID: meta.ParentJobID,
+		Owner:       meta.Owner,
 		Output:      output,
 		Error:       meta.Error,
 		StartedAt:   meta.StartedAt,

@@ -32,11 +32,11 @@ func TestJobManagerStartAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Use /bin/echo via a template so we don't depend on claude/grok.
-	meta, err := jm.start("echo", "echo started; sleep 0.2; echo done # {{prompt}}", "hello", "", "")
+	meta, err := jm.start("echo", "echo started; sleep 0.2; echo done # {{prompt}}", "hello", "", "", "Minerva")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.JobID == "" || meta.Status != "running" {
+	if meta.JobID == "" || meta.Status != "running" || meta.Owner != "Minerva" {
 		t.Fatalf("meta: %+v", meta)
 	}
 
@@ -56,11 +56,29 @@ func TestJobManagerStartAndStatus(t *testing.T) {
 	if status != "done" {
 		t.Fatalf("status=%s out=%q", status, out)
 	}
+	done, _, err := jm.status(meta.JobID, 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.Owner != "Minerva" {
+		t.Fatalf("owner not persisted: %+v", done)
+	}
 	if !strings.Contains(out, "done") && !strings.Contains(out, "started") {
 		t.Fatalf("output: %q", out)
 	}
-	if len(jm.list()) == 0 {
+	listed := jm.list()
+	if len(listed) == 0 {
 		t.Fatal("expected jobs in list")
+	}
+	found := false
+	for _, j := range listed {
+		if j.JobID == meta.JobID && j.Owner == "Minerva" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("list missing owner: %+v", listed)
 	}
 	// ensure job dir under temp home
 	if _, err := os.Stat(filepath.Join(tmp, ".takan", "jobs", meta.JobID, "meta.json")); err != nil {
@@ -70,7 +88,7 @@ func TestJobManagerStartAndStatus(t *testing.T) {
 
 func TestJobManagerCancelAndStatus(t *testing.T) {
 	jm := testJobs(t)
-	meta, err := jm.start("sleep", "sleep 30 # {{prompt}}", "hold", "", "")
+	meta, err := jm.start("sleep", "sleep 30 # {{prompt}}", "hold", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +135,7 @@ func TestJobManagerCancelAndStatus(t *testing.T) {
 
 func TestJobManagerCancelAlreadyDone(t *testing.T) {
 	jm := testJobs(t)
-	meta, err := jm.start("echo", "echo already-done # {{prompt}}", "x", "", "")
+	meta, err := jm.start("echo", "echo already-done # {{prompt}}", "x", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,12 +162,12 @@ func TestJobManagerCancelUnknown(t *testing.T) {
 func TestJobManagerReadLogAndParent(t *testing.T) {
 	jm := testJobs(t)
 	line := strings.Repeat("LINE", 80)
-	meta, err := jm.start("echo", "echo "+line+" # {{prompt}}", "prompt-text", "", "parent-abc")
+	meta, err := jm.start("echo", "echo "+line+" # {{prompt}}", "prompt-text", "", "parent-abc", "Menta")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ParentJobID != "parent-abc" {
-		t.Fatalf("parent: %+v", meta)
+	if meta.ParentJobID != "parent-abc" || meta.Owner != "Menta" {
+		t.Fatalf("parent/owner: %+v", meta)
 	}
 	waitStatus(t, jm, meta.JobID, "done", 3*time.Second)
 
@@ -157,8 +175,8 @@ func TestJobManagerReadLogAndParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.ParentJobID != "parent-abc" {
-		t.Fatalf("parent on read: %+v", m)
+	if m.ParentJobID != "parent-abc" || m.Owner != "Menta" {
+		t.Fatalf("parent/owner on read: %+v", m)
 	}
 	if total <= 40 {
 		t.Fatalf("expected a larger log, total=%d out=%q", total, out)
@@ -205,12 +223,16 @@ func TestHandleAICancelStatusLog(t *testing.T) {
 	}
 
 	echo := handleAIStart(jm, wireMsg{
-		Runner: "echo", Command: "echo transcript-ok # {{prompt}}", Prompt: "p", ParentJobID: "from-parent",
+		Runner: "echo", Command: "echo transcript-ok # {{prompt}}", Prompt: "p", ParentJobID: "from-parent", Owner: "Games",
 	})
 	waitStatus(t, jm, echo.JobID, "done", 3*time.Second)
 	lg := handleAILog(jm, wireMsg{JobID: echo.JobID, MaxBytes: 2000})
-	if lg.ParentJobID != "from-parent" || !strings.Contains(lg.Output, "transcript-ok") {
+	if lg.ParentJobID != "from-parent" || lg.Owner != "Games" || !strings.Contains(lg.Output, "transcript-ok") {
 		t.Fatalf("log: %+v", lg)
+	}
+	stEcho := handleAIStatus(jm, wireMsg{JobID: echo.JobID, TailBytes: 100})
+	if stEcho.Owner != "Games" {
+		t.Fatalf("status owner: %+v", stEcho)
 	}
 	listed := handleAIStatus(jm, wireMsg{})
 	if len(listed.Jobs) == 0 {

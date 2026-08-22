@@ -60,7 +60,7 @@ func TestFactoryAIToolWiring(t *testing.T) {
 		t.Fatal("reply must label the one-shot / no-interrupt limitation")
 	}
 
-	mustContain(t, required["machine_ai_run"], "machine", "runner", "prompt")
+	mustContain(t, required["machine_ai_run"], "machine", "runner", "prompt", "owner")
 	mustContain(t, required["machine_ai_watch"], "machine", "job_id")
 	mustContain(t, required["machine_ai_log"], "machine", "job_id")
 	mustContain(t, required["machine_ai_cancel"], "machine", "job_id")
@@ -113,11 +113,46 @@ func TestFactoryHandlersValidateMachineAndJob(t *testing.T) {
 	if _, err := handlers["machine_ai_reply"](ctx, userID, map[string]any{"machine": "mac", "job_id": "j"}); err == nil || !strings.Contains(err.Error(), "message") {
 		t.Fatalf("reply missing message: %v", err)
 	}
-	// Online check happens after local validation — offline machine is an agent-hub error.
 	if _, err := handlers["machine_ai_run"](ctx, userID, map[string]any{
 		"machine": "mac", "runner": "grok", "prompt": "hi",
+	}); err == nil || !strings.Contains(err.Error(), "owner") {
+		t.Fatalf("run missing owner: %v", err)
+	}
+	// Online check happens after local validation — offline machine is an agent-hub error.
+	if _, err := handlers["machine_ai_run"](ctx, userID, map[string]any{
+		"machine": "mac", "runner": "grok", "prompt": "hi", "owner": "Minerva",
 	}); err == nil || !strings.Contains(err.Error(), "offline") {
 		t.Fatalf("run offline: %v", err)
+	}
+}
+
+func TestResolveOwner(t *testing.T) {
+	got, err := resolveOwner("Minerva", "Menta")
+	if err != nil || got != "Minerva" {
+		t.Fatalf("explicit: %q %v", got, err)
+	}
+	got, err = resolveOwner("", "Menta")
+	if err != nil || got != "Menta" {
+		t.Fatalf("inherit: %q %v", got, err)
+	}
+	got, err = resolveOwner("  ", "  Games  ")
+	if err != nil || got != "Games" {
+		t.Fatalf("trim inherit: %q %v", got, err)
+	}
+	if _, err := resolveOwner("", ""); err == nil || !strings.Contains(err.Error(), "owner required") {
+		t.Fatalf("empty: %v", err)
+	}
+}
+
+func TestFormatJobIncludesOwner(t *testing.T) {
+	job := &agenthub.AIJob{JobID: "j1", Runner: "grok", Owner: "TPVLINE", Status: "done"}
+	got := formatJob("mac", job, nil)
+	if !strings.Contains(got, `"owner": "TPVLINE"`) {
+		t.Fatalf("formatJob: %s", got)
+	}
+	list := formatJobList("mac", []agenthub.AIJob{*job})
+	if !strings.Contains(list, `"owner": "TPVLINE"`) {
+		t.Fatalf("formatJobList: %s", list)
 	}
 }
 

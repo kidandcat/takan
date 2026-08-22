@@ -16,6 +16,7 @@ import (
 	"github.com/kidandcat/takan/internal/api"
 	"github.com/kidandcat/takan/internal/config"
 	"github.com/kidandcat/takan/internal/cryptox"
+	"github.com/kidandcat/takan/internal/jobwebhook"
 	"github.com/kidandcat/takan/internal/mcp"
 	"github.com/kidandcat/takan/internal/oauth"
 	"github.com/kidandcat/takan/internal/ratelimit"
@@ -186,20 +187,16 @@ func main() {
 		},
 		ToolsFor: prov.ToolsFor,
 	}
+	grokBotHook := jobwebhook.Client{
+		URL:    cfg.GrokBotWebhookURL,
+		Secret: cfg.GrokBotWebhookSecret,
+	}
 	hub.OnJobEvent = func(userID, machineName string, job agenthub.AIJob) {
-		runner := job.Runner
-		if runner == "" {
-			runner = job.Agent
+		p := jobwebhook.PayloadFromJob(machineName, job)
+		mcpSrv.NotifyUser(userID, "notifications/takan/machine_ai_job", p)
+		if grokBotHook.URL != "" {
+			go grokBotHook.Notify(p) // best-effort; do not block the agent WS or fail the job
 		}
-		mcpSrv.NotifyUser(userID, "notifications/takan/machine_ai_job", map[string]any{
-			"machine":       machineName,
-			"job_id":        job.JobID,
-			"status":        job.Status,
-			"exit_code":     job.ExitCode,
-			"runner":        runner,
-			"parent_job_id": job.ParentJobID,
-			"finished_at":   job.FinishedAt,
-		})
 	}
 	webSrv.OnToolsChanged = mcpSrv.NotifyToolsChanged
 

@@ -26,7 +26,8 @@ type jobMeta struct {
 	Prompt      string `json:"prompt"`
 	Cwd         string `json:"cwd,omitempty"`
 	ParentJobID string `json:"parent_job_id,omitempty"`
-	Status      string `json:"status"` // running | done | failed | cancelled
+	Owner       string `json:"owner,omitempty"` // Grok Bot that launched the job
+	Status      string `json:"status"`          // running | done | failed | cancelled
 	PID         int    `json:"pid,omitempty"`
 	ExitCode    int    `json:"exit_code,omitempty"`
 	Error       string `json:"error,omitempty"`
@@ -96,7 +97,7 @@ func jobTerminal(status string) bool {
 
 // start launches a shell command template with the prompt injected.
 // commandTmpl may include {{prompt}}; otherwise the quoted prompt is appended.
-func (m *jobManager) start(runnerID, commandTmpl, prompt, cwd, parentJobID string) (jobMeta, error) {
+func (m *jobManager) start(runnerID, commandTmpl, prompt, cwd, parentJobID, owner string) (jobMeta, error) {
 	runnerID = strings.TrimSpace(runnerID)
 	if runnerID == "" {
 		runnerID = "custom"
@@ -147,6 +148,7 @@ func (m *jobManager) start(runnerID, commandTmpl, prompt, cwd, parentJobID strin
 		Prompt:      prompt,
 		Cwd:         cwd,
 		ParentJobID: strings.TrimSpace(parentJobID),
+		Owner:       strings.TrimSpace(owner),
 		Status:      "running",
 		StartedAt:   started,
 	}

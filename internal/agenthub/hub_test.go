@@ -65,6 +65,7 @@ func TestHubAIFollowProtocol(t *testing.T) {
 					Prompt:      req.Prompt,
 					Cwd:         req.Cwd,
 					ParentJobID: req.ParentJobID,
+					Owner:       req.Owner,
 					StartedAt:   "2026-08-21T00:00:00Z",
 				}
 				mu.Lock()
@@ -130,16 +131,16 @@ func TestHubAIFollowProtocol(t *testing.T) {
 	waitOnline(t, h, "mid-1")
 	ctx := context.Background()
 
-	started, err := h.StartAI(ctx, "user-1", "mac", "grok", "grok --always-approve -p {{prompt}}", "do work", "/tmp", "parent-9")
+	started, err := h.StartAI(ctx, "user-1", "mac", "grok", "grok --always-approve -p {{prompt}}", "do work", "/tmp", "parent-9", "Minerva")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if started.JobID != "job-follow-1" || started.ParentJobID != "parent-9" || started.Status != "running" {
+	if started.JobID != "job-follow-1" || started.ParentJobID != "parent-9" || started.Status != "running" || started.Owner != "Minerva" {
 		t.Fatalf("start: %+v", started)
 	}
 
 	job, list, err := h.AIStatus(ctx, "user-1", "mac", started.JobID, 1000)
-	if err != nil || job.Output != "tail-log" || job.ParentJobID != "parent-9" {
+	if err != nil || job.Output != "tail-log" || job.ParentJobID != "parent-9" || job.Owner != "Minerva" {
 		t.Fatalf("status: %+v list=%v err=%v", job, list, err)
 	}
 
@@ -170,7 +171,7 @@ func TestHubAIFollowProtocol(t *testing.T) {
 	mu.Unlock()
 	writeJSON(wireMsg{
 		Type: "ai_done", JobID: started.JobID, Agent: "grok", Runner: "grok",
-		Status: "done", ParentJobID: "parent-9", FinishedAt: "2026-08-21T00:00:02Z",
+		Status: "done", ParentJobID: "parent-9", Owner: "Minerva", FinishedAt: "2026-08-21T00:00:02Z",
 	})
 
 	select {
@@ -189,9 +190,16 @@ func TestHubAIFollowProtocol(t *testing.T) {
 
 	evMu.Lock()
 	n := len(events)
+	eventOwner := ""
+	if n > 0 {
+		eventOwner = events[0].Owner
+	}
 	evMu.Unlock()
 	if n == 0 {
 		t.Fatal("expected OnJobEvent from ai_done")
+	}
+	if eventOwner != "Minerva" {
+		t.Fatalf("OnJobEvent owner=%q", eventOwner)
 	}
 }
 
@@ -233,11 +241,86 @@ func TestHubWatchTimeoutStillRunning(t *testing.T) {
 	}
 }
 
+func TestHubFillsOwnerWhenAgentOmitsIt(t *testing.T) {
+	h := New(func(ctx context.Context, token string) (string, string, string, error) {
+		return "mid-own", "user-o", "mac", nil
+	}, nil)
+	var got AIJob
+	var evMu sync.Mutex
+	h.OnJobEvent = func(_ string, _ string, job AIJob) {
+		evMu.Lock()
+		got = job
+		evMu.Unlock()
+	}
+	srv := httptest.NewServer(http.HandlerFunc(h.HandleWS))
+	t.Cleanup(srv.Close)
+	c := dialAgent(t, srv.URL)
+	defer c.Close()
+
+	go func() {
+		for {
+			_, raw, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			var req wireMsg
+			if json.Unmarshal(raw, &req) != nil {
+				continue
+			}
+			switch req.Type {
+			case "ai_start":
+				_ = c.WriteJSON(wireMsg{
+					Type: "ai_start_result", TaskID: req.TaskID,
+					JobID: "job-old-agent", Status: "running", Agent: req.Runner, Runner: req.Runner,
+					// older agents drop owner
+				})
+			case "ai_status":
+				_ = c.WriteJSON(wireMsg{
+					Type: "ai_status_result", TaskID: req.TaskID,
+					JobID: req.JobID, Status: "running", Agent: "grok", Runner: "grok",
+				})
+			}
+		}
+	}()
+	waitOnline(t, h, "mid-own")
+
+	started, err := h.StartAI(context.Background(), "user-o", "mac", "grok", "grok -p {{prompt}}", "do", "", "", "Hardware")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Owner != "Hardware" {
+		t.Fatalf("start owner: %+v", started)
+	}
+	job, _, err := h.AIStatus(context.Background(), "user-o", "mac", started.JobID, 100)
+	if err != nil || job.Owner != "Hardware" {
+		t.Fatalf("status owner: %+v err=%v", job, err)
+	}
+
+	if err := c.WriteJSON(wireMsg{Type: "ai_done", JobID: started.JobID, Agent: "grok", Runner: "grok", Status: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		evMu.Lock()
+		owner := got.Owner
+		evMu.Unlock()
+		if owner == "Hardware" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	evMu.Lock()
+	defer evMu.Unlock()
+	if got.Owner != "Hardware" {
+		t.Fatalf("ai_done owner=%q job=%+v", got.Owner, got)
+	}
+}
+
 func jobResult(typ, taskID string, j AIJob) wireMsg {
 	return wireMsg{
 		Type: typ, TaskID: taskID,
 		JobID: j.JobID, Agent: j.Agent, Runner: j.Runner, Status: j.Status,
-		PID: j.PID, Prompt: j.Prompt, Cwd: j.Cwd, ParentJobID: j.ParentJobID,
+		PID: j.PID, Prompt: j.Prompt, Cwd: j.Cwd, ParentJobID: j.ParentJobID, Owner: j.Owner,
 		Output: j.Output, StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
 		Error: j.Error, ExitCode: j.ExitCode,
 	}
