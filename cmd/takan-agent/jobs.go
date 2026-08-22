@@ -329,6 +329,14 @@ func (m *jobManager) cancel(jobID string) (jobMeta, error) {
 	return meta, nil
 }
 
+func killProcessGroupNow(pid int) {
+	if pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+}
+
 func killProcessGroup(pid int) {
 	if pid <= 0 {
 		return
@@ -341,8 +349,7 @@ func killProcessGroup(pid int) {
 		}
 		time.Sleep(40 * time.Millisecond)
 	}
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	_ = syscall.Kill(pid, syscall.SIGKILL)
+	killProcessGroupNow(pid)
 }
 
 func (m *jobManager) list() []jobMeta {
