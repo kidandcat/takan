@@ -28,7 +28,7 @@ Integrations live under `modules/` as subpackages:
 
 When the tool set changes, Takan pushes `notifications/tools/list_changed` on open SSE streams (best-effort). Clients that ignore it keep the old tool list until reconnect; calls to disabled tools simply fail.
 
-`machine_ai_run` returns immediately with a `job_id`. Follow the job with `machine_ai_watch` (blocks until done/failed/cancelled or timeout), `machine_ai_status` (tail), `machine_ai_log` (full transcript), `machine_ai_cancel`, or `machine_ai_reply` (new job with parent context — runners are one-shot and cannot be interrupted in-process). Open SSE streams may also get `notifications/takan/machine_ai_job` when a job ends.
+`machine_ai_run` returns immediately with a `job_id`. Follow the job with `machine_ai_watch` (blocks until done/failed/cancelled or timeout), `machine_ai_status` (tail), `machine_ai_log` (full transcript), `machine_ai_cancel`, or `machine_ai_reply` (new job with parent context — runners are one-shot and cannot be interrupted in-process). Open SSE streams may also get `notifications/takan/machine_ai_job` when a job ends. If `TAKAN_GROK_BOT_WEBHOOK_URL` is set, Takan also POSTs the same fields to that Grok Bot webhook routine (`TAKAN_GROK_BOT_WEBHOOK_SECRET` is the sender key).
 
 ## MCP
 
