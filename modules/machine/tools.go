@@ -185,7 +185,8 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 				Tool: mcp.Tool{
 					Name: "machine_ai_run",
 					Description: "Launch an autonomous AI agent on a machine. Returns immediately with job_id " +
-						"(does not wait for the agent to finish). After launch, follow the job: " +
+						"(does not wait for the agent to finish). owner is required: the Grok Bot launching the job " +
+						"(Minerva, Menta, TPVLINE, Gestor, Hardware, Games). After launch, follow the job: " +
 						"machine_ai_watch waits until it finishes; machine_ai_status is a quick status + log tail; " +
 						"machine_ai_log fetches the full transcript; machine_ai_cancel kills a running job; " +
 						"machine_ai_reply continues as a new job (runners are one-shot and cannot be interrupted in-process). " +
@@ -211,12 +212,16 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 								"type":        "string",
 								"description": "Working directory on the machine (optional)",
 							},
+							"owner": map[string]any{
+								"type":        "string",
+								"description": "Grok Bot that launched the job (Minerva, Menta, TPVLINE, Gestor, Hardware, Games)",
+							},
 						},
-						"required": []string{"machine", "runner", "prompt"},
+						"required": []string{"machine", "runner", "prompt", "owner"},
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-					name, runnerID, prompt, cwd, err := parseRunArgs(ctx, st, userID, args)
+					name, runnerID, prompt, cwd, owner, err := parseRunArgs(ctx, st, userID, args)
 					if err != nil {
 						return "", err
 					}
@@ -228,7 +233,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if err != nil {
 						return "", err
 					}
-					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, "")
+					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, "", owner)
 					if err != nil {
 						return "", err
 					}
@@ -236,6 +241,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"machine": name,
 						"job_id":  res.JobID,
 						"runner":  r.ID,
+						"owner":   owner,
 						"name":    r.Name,
 						"command": r.Command,
 						"status":  res.Status,
@@ -425,7 +431,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"the new job stores parent_job_id. " +
 						"Limitation: typical runners (e.g. grok --always-approve -p, claude -p) are one-shot with no live stdin session — " +
 						"this cannot attach to or interrupt a running process. To stop the parent first, call machine_ai_cancel. " +
-						"Defaults to the parent job's runner and cwd.",
+						"Defaults to the parent job's runner, cwd, and owner.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -443,6 +449,10 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 							"cwd": map[string]any{
 								"type":        "string",
 								"description": "Override working directory (default: parent job's cwd)",
+							},
+							"owner": map[string]any{
+								"type":        "string",
+								"description": "Override owner bot name (default: parent job's owner)",
 							},
 						},
 						"required": []string{"machine", "job_id", "message"},
@@ -487,8 +497,12 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if cwd == "" {
 						cwd = strings.TrimSpace(parent.Cwd)
 					}
+					owner, err := resolveOwner(strArg(args, "owner"), parent.Owner)
+					if err != nil {
+						return "", err
+					}
 					prompt := BuildContinuePrompt(parent.Prompt, parent.Output, message)
-					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, parent.JobID)
+					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, parent.JobID, owner)
 					if err != nil {
 						return "", err
 					}
@@ -497,6 +511,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"job_id":        res.JobID,
 						"parent_job_id": parent.JobID,
 						"runner":        r.ID,
+						"owner":         owner,
 						"name":          r.Name,
 						"command":       r.Command,
 						"status":        res.Status,
@@ -537,9 +552,9 @@ func requireMachine(ctx context.Context, st *store.Store, userID, name string) (
 	return name, nil
 }
 
-func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[string]any) (name, runnerID, prompt, cwd string, err error) {
+func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[string]any) (name, runnerID, prompt, cwd, owner string, err error) {
 	if err = requireAI(ctx, st, userID); err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", "", err
 	}
 	name = strArg(args, "machine")
 	runnerID = strArg(args, "runner")
@@ -548,14 +563,30 @@ func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[
 	}
 	prompt = strArg(args, "prompt")
 	cwd = strArg(args, "cwd")
+	owner, err = resolveOwner(strArg(args, "owner"), "")
+	if err != nil {
+		return "", "", "", "", "", err
+	}
 	if name == "" || runnerID == "" || prompt == "" {
-		return "", "", "", "", fmt.Errorf("machine, runner and prompt required")
+		return "", "", "", "", "", fmt.Errorf("machine, runner and prompt required")
 	}
 	name, err = requireMachine(ctx, st, userID, name)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", "", err
 	}
-	return name, runnerID, prompt, cwd, nil
+	return name, runnerID, prompt, cwd, owner, nil
+}
+
+// resolveOwner returns the explicit owner, or parentOwner if the arg is empty.
+func resolveOwner(arg, parentOwner string) (string, error) {
+	owner := strings.TrimSpace(arg)
+	if owner == "" {
+		owner = strings.TrimSpace(parentOwner)
+	}
+	if owner == "" {
+		return "", fmt.Errorf("owner required")
+	}
+	return owner, nil
 }
 
 func enabledRunner(cfg Config, runnerID string) (Runner, error) {
@@ -601,6 +632,7 @@ func formatJobList(machine string, list []agenthub.AIJob) string {
 	type row struct {
 		JobID       string `json:"job_id"`
 		Runner      string `json:"runner"`
+		Owner       string `json:"owner,omitempty"`
 		Status      string `json:"status"`
 		ExitCode    int    `json:"exit_code,omitempty"`
 		PID         int    `json:"pid,omitempty"`
@@ -613,7 +645,7 @@ func formatJobList(machine string, list []agenthub.AIJob) string {
 	rows := make([]row, 0, len(list))
 	for _, j := range list {
 		rows = append(rows, row{
-			JobID: j.JobID, Runner: runnerOf(j), Status: j.Status,
+			JobID: j.JobID, Runner: runnerOf(j), Owner: j.Owner, Status: j.Status,
 			ExitCode: j.ExitCode, PID: j.PID, Cwd: j.Cwd, Prompt: j.Prompt,
 			ParentJobID: j.ParentJobID,
 			StartedAt:   j.StartedAt, FinishedAt: j.FinishedAt,
@@ -634,6 +666,7 @@ func formatJob(machine string, job *agenthub.AIJob, extra map[string]any) string
 		"machine":     machine,
 		"job_id":      job.JobID,
 		"runner":      runnerOf(*job),
+		"owner":       job.Owner,
 		"status":      job.Status,
 		"exit_code":   job.ExitCode,
 		"pid":         job.PID,

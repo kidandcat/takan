@@ -112,6 +112,7 @@ func TestNotifyURLSetPostsOnceOnAIDone(t *testing.T) {
 		Runner:      "grok",
 		ParentJobID: "parent-9",
 		FinishedAt:  "2026-08-22T10:00:00Z",
+		Owner:       "Minerva",
 	}
 	if p != want {
 		t.Fatalf("body=%+v want=%+v", p, want)
@@ -174,6 +175,7 @@ func sendAIDone(t *testing.T, c *websocket.Conn) {
 		"exit_code":     0,
 		"parent_job_id": "parent-9",
 		"finished_at":   "2026-08-22T10:00:00Z",
+		"owner":         "Minerva",
 	})
 	if err != nil {
 		t.Fatal(err)

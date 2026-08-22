@@ -21,7 +21,7 @@ Push path is always `SessionHub.Notify` → SSE `data:` frames on **GET `/mcp`**
 | **Method** | `notifications/takan/machine_ai_job` |
 | **When** | Agent WebSocket message `ai_done` (job reached **terminal** status: `done` / `failed` / `cancelled`). Wired in `cmd/takan/main.go` via `hub.OnJobEvent`. |
 | **Who emits** | `takan-agent` `jobManager.emit` → WS `{type:"ai_done", ...}` → hub `HandleWS` case `"ai_done"` → `OnJobEvent`. |
-| **Params** | `machine`, `job_id`, `status`, `exit_code`, `runner`, `parent_job_id`, `finished_at`. **No log tail, no prompt.** |
+| **Params** | `machine`, `job_id`, `status`, `exit_code`, `runner`, `parent_job_id`, `finished_at`, `owner`. **No log tail, no prompt.** |
 | **Not fired** | Job *start*; mid-run progress; `machine_ai_status` polls; email/telegram/mercadona/display/sip/vault. |
 | **Lossy** | Best-effort. Missed if the agent is disconnected when the process exits (`JobEventHandler` comment). No queue, no replay. Slow SSE consumers are dropped (`broadcast` default branch). Hub log `mcp: notify user=… method=… streams=N` only when **N > 0**. |
 

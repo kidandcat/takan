@@ -27,6 +27,7 @@ type Payload struct {
 	Runner      string `json:"runner"`
 	ParentJobID string `json:"parent_job_id"`
 	FinishedAt  string `json:"finished_at"`
+	Owner       string `json:"owner"`
 }
 
 // Client POSTs job events to URL when it is non-empty.
@@ -52,6 +53,7 @@ func PayloadFromJob(machine string, job agenthub.AIJob) Payload {
 		Runner:      runner,
 		ParentJobID: job.ParentJobID,
 		FinishedAt:  job.FinishedAt,
+		Owner:       job.Owner,
 	}
 }
 

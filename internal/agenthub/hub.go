@@ -45,6 +45,11 @@ type Hub struct {
 
 	waitMu  sync.Mutex
 	waiters map[string][]chan AIJob // machineID\x00jobID -> waiters
+
+	// jobOwners remembers owner from StartAI so terminal events still carry it
+	// when an older agent omits the field. Agent meta.json is the durable store.
+	ownerMu   sync.Mutex
+	jobOwners map[string]string // jobID -> owner
 }
 
 type pendingTask struct {
@@ -74,7 +79,8 @@ type AIJob struct {
 	Agent       string `json:"agent"` // runner id (legacy field name)
 	Runner      string `json:"runner,omitempty"`
 	ParentJobID string `json:"parent_job_id,omitempty"`
-	Status      string `json:"status"` // running | done | failed | cancelled | unknown
+	Owner       string `json:"owner,omitempty"` // Grok Bot that launched the job
+	Status      string `json:"status"`          // running | done | failed | cancelled | unknown
 	ExitCode    int    `json:"exit_code,omitempty"`
 	PID         int    `json:"pid,omitempty"`
 	Cwd         string `json:"cwd,omitempty"`
@@ -93,6 +99,7 @@ type AIStartResult struct {
 	Agent       string `json:"agent"`
 	Runner      string `json:"runner,omitempty"`
 	ParentJobID string `json:"parent_job_id,omitempty"`
+	Owner       string `json:"owner,omitempty"`
 	Status      string `json:"status"`
 	PID         int    `json:"pid,omitempty"`
 	Error       string `json:"error,omitempty"`
@@ -112,6 +119,7 @@ type wireMsg struct {
 	Prompt      string  `json:"prompt,omitempty"`
 	Cwd         string  `json:"cwd,omitempty"`
 	ParentJobID string  `json:"parent_job_id,omitempty"`
+	Owner       string  `json:"owner,omitempty"`
 	JobID       string  `json:"job_id,omitempty"`
 	Status      string  `json:"status,omitempty"`
 	PID         int     `json:"pid,omitempty"`
@@ -137,11 +145,12 @@ func JobTerminal(status string) bool {
 
 func New(auth Authenticator, touch Touch) *Hub {
 	return &Hub{
-		Auth:    auth,
-		Touch:   touch,
-		agents:  make(map[string]*agent),
-		pending: make(map[string]*pendingTask),
-		waiters: make(map[string][]chan AIJob),
+		Auth:      auth,
+		Touch:     touch,
+		agents:    make(map[string]*agent),
+		pending:   make(map[string]*pendingTask),
+		waiters:   make(map[string][]chan AIJob),
+		jobOwners: make(map[string]string),
 	}
 }
 
@@ -235,10 +244,11 @@ func (h *Hub) RunBash(ctx context.Context, userID, machineName, command string, 
 // commandTmpl may contain {{prompt}}; the agent shell-quotes and injects the prompt.
 // runnerID is stored for status display (e.g. "claude", "grok", custom id).
 // Returns as soon as the process has been spawned (does not wait for completion).
-func (h *Hub) StartAI(ctx context.Context, userID, machineName, runnerID, commandTmpl, prompt, cwd, parentJobID string) (*AIStartResult, error) {
+func (h *Hub) StartAI(ctx context.Context, userID, machineName, runnerID, commandTmpl, prompt, cwd, parentJobID, owner string) (*AIStartResult, error) {
 	runnerID = strings.TrimSpace(runnerID)
 	commandTmpl = strings.TrimSpace(commandTmpl)
 	prompt = strings.TrimSpace(prompt)
+	owner = strings.TrimSpace(owner)
 	if commandTmpl == "" {
 		return nil, fmt.Errorf("command required")
 	}
@@ -248,6 +258,7 @@ func (h *Hub) StartAI(ctx context.Context, userID, machineName, runnerID, comman
 	if runnerID == "" {
 		runnerID = "custom"
 	}
+	parentJobID = strings.TrimSpace(parentJobID)
 	res, err := h.rpc(ctx, userID, machineName, wireMsg{
 		Type:        "ai_start",
 		Agent:       runnerID,
@@ -255,7 +266,8 @@ func (h *Hub) StartAI(ctx context.Context, userID, machineName, runnerID, comman
 		Command:     commandTmpl,
 		Prompt:      prompt,
 		Cwd:         strings.TrimSpace(cwd),
-		ParentJobID: strings.TrimSpace(parentJobID),
+		ParentJobID: parentJobID,
+		Owner:       owner,
 	}, 30*time.Second)
 	if err != nil {
 		return nil, err
@@ -263,11 +275,13 @@ func (h *Hub) StartAI(ctx context.Context, userID, machineName, runnerID, comman
 	if res.Error != "" && res.JobID == "" {
 		return nil, fmt.Errorf("%s", res.Error)
 	}
+	h.rememberJobOwner(res.JobID, owner)
 	return &AIStartResult{
 		JobID:       res.JobID,
 		Agent:       runnerID,
 		Runner:      runnerID,
-		ParentJobID: strings.TrimSpace(parentJobID),
+		ParentJobID: parentJobID,
+		Owner:       owner,
 		Status:      res.Status,
 		PID:         res.PID,
 		Error:       res.Error,
@@ -294,9 +308,10 @@ func (h *Hub) AIStatus(ctx context.Context, userID, machineName, jobID string, t
 		return nil, nil, fmt.Errorf("%s", res.Error)
 	}
 	if strings.TrimSpace(jobID) == "" {
+		h.fillJobOwners(res.Jobs)
 		return nil, res.Jobs, nil
 	}
-	return jobFromWire(res), nil, nil
+	return h.jobFromWire(res), nil, nil
 }
 
 func jobFromWire(res *wireMsg) *AIJob {
@@ -312,6 +327,7 @@ func jobFromWire(res *wireMsg) *AIJob {
 		Agent:       res.Agent,
 		Runner:      runner,
 		ParentJobID: res.ParentJobID,
+		Owner:       res.Owner,
 		Status:      res.Status,
 		ExitCode:    res.ExitCode,
 		PID:         res.PID,
@@ -323,6 +339,44 @@ func jobFromWire(res *wireMsg) *AIJob {
 		FinishedAt:  res.FinishedAt,
 		Truncated:   res.Truncated,
 		TotalBytes:  res.TotalBytes,
+	}
+}
+
+func (h *Hub) jobFromWire(res *wireMsg) *AIJob {
+	job := jobFromWire(res)
+	h.fillJobOwner(job)
+	return job
+}
+
+func (h *Hub) rememberJobOwner(jobID, owner string) {
+	jobID = strings.TrimSpace(jobID)
+	owner = strings.TrimSpace(owner)
+	if jobID == "" || owner == "" {
+		return
+	}
+	h.ownerMu.Lock()
+	defer h.ownerMu.Unlock()
+	if len(h.jobOwners) > 2000 {
+		h.jobOwners = make(map[string]string)
+	}
+	h.jobOwners[jobID] = owner
+}
+
+func (h *Hub) fillJobOwner(job *AIJob) {
+	if job == nil || strings.TrimSpace(job.Owner) != "" || job.JobID == "" {
+		return
+	}
+	h.ownerMu.Lock()
+	owner := h.jobOwners[job.JobID]
+	h.ownerMu.Unlock()
+	if owner != "" {
+		job.Owner = owner
+	}
+}
+
+func (h *Hub) fillJobOwners(jobs []AIJob) {
+	for i := range jobs {
+		h.fillJobOwner(&jobs[i])
 	}
 }
 
@@ -384,7 +438,7 @@ func (h *Hub) CancelAI(ctx context.Context, userID, machineName, jobID string) (
 	if res.Error != "" && res.Status == "unknown" {
 		return nil, fmt.Errorf("%s", res.Error)
 	}
-	return jobFromWire(res), nil
+	return h.jobFromWire(res), nil
 }
 
 // AILog returns the job transcript from the start of output.log (capped).
@@ -410,7 +464,7 @@ func (h *Hub) AILog(ctx context.Context, userID, machineName, jobID string, maxB
 	if res.Error != "" && (res.JobID == "" || res.Status == "unknown") {
 		return nil, fmt.Errorf("%s", res.Error)
 	}
-	return jobFromWire(res), nil
+	return h.jobFromWire(res), nil
 }
 
 const (
@@ -586,7 +640,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 				pt.ch <- msg
 			}
 		case "ai_done":
-			job := jobFromWire(&msg)
+			job := h.jobFromWire(&msg)
 			if job.JobID != "" {
 				h.signalJobWaiters(machineID, *job)
 			}
