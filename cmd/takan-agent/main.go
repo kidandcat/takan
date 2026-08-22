@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -12,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
@@ -168,6 +166,11 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connT
 	defer c.Close()
 	log.Printf("connected to %s", base)
 
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+	var bash bashSession
+	defer bash.stop()
+
 	go func() {
 		<-ctx.Done()
 		_ = c.Close()
@@ -280,12 +283,16 @@ func runOnce(ctx context.Context, base, token string, jobs *jobManager, tm connT
 		}
 		switch msg.Type {
 		case "bash":
-			res := runBash(ctx, msg.Command)
-			res.Type = "bash_result"
-			res.TaskID = msg.TaskID
-			if err := writeJSON(res); err != nil {
-				return err
-			}
+			// Off the read loop: a hung command must not stall ReadMessage
+			// (inbound pings / lastIn). A new bash cancels the previous one.
+			taskID := msg.TaskID
+			bash.start(connCtx, msg.Command, func(res wireMsg) {
+				res.Type = "bash_result"
+				res.TaskID = taskID
+				if err := writeJSON(res); err != nil {
+					_ = c.Close()
+				}
+			})
 		case "ai_start":
 			res := handleAIStart(jobs, msg)
 			res.Type = "ai_start_result"
@@ -410,26 +417,6 @@ func jobWire(typ string, meta jobMeta, output string, total int, truncated bool)
 		TotalBytes:  total,
 		Truncated:   truncated,
 	}
-}
-
-func runBash(parent context.Context, command string) wireMsg {
-	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	res := wireMsg{Stdout: stdout.String(), Stderr: stderr.String()}
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			res.ExitCode = ee.ExitCode()
-		} else {
-			res.Error = err.Error()
-			res.ExitCode = -1
-		}
-	}
-	return res
 }
 
 func env(k, def string) string {

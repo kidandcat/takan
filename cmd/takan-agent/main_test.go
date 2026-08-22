@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,6 +167,165 @@ func TestJobWireSetsType(t *testing.T) {
 	if empty.Type != "" || empty.JobID != "j2" {
 		t.Fatalf("empty type: %+v", empty)
 	}
+}
+
+func TestRunOnceBashDoesNotBlockReadLoop(t *testing.T) {
+	tm := connTiming{
+		readWait:      2 * time.Second,
+		writeWait:     time.Second,
+		pingEvery:     time.Hour,
+		watchdogTick:  40 * time.Millisecond,
+		staleAfter:    250 * time.Millisecond,
+		hangExitAfter: time.Hour,
+	}
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	got := make(chan wireMsg, 32)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		var wmu sync.Mutex
+		writeJSON := func(v any) {
+			wmu.Lock()
+			defer wmu.Unlock()
+			_ = c.WriteJSON(v)
+		}
+		sentBash := false
+		go func() {
+			tick := time.NewTicker(80 * time.Millisecond)
+			defer tick.Stop()
+			for range tick.C {
+				wmu.Lock()
+				err := c.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(time.Second))
+				wmu.Unlock()
+				if err != nil {
+					return
+				}
+			}
+		}()
+		for {
+			_, raw, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			var msg wireMsg
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				continue
+			}
+			got <- msg
+			if msg.Type == "hello" && !sentBash {
+				sentBash = true
+				writeJSON(wireMsg{Type: "bash", TaskID: "t-sleep", Command: "sleep 2; echo BASH_DONE"})
+				go func() {
+					time.Sleep(120 * time.Millisecond)
+					writeJSON(wireMsg{Type: "ai_status", TaskID: "t-probe"})
+				}()
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	jobs := testJobs(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- runOnce(ctx, srv.URL, "tok", jobs, tm, nil) }()
+
+	deadline := time.After(5 * time.Second)
+	var probeAt, bashAt time.Time
+	start := time.Now()
+	for probeAt.IsZero() || bashAt.IsZero() {
+		select {
+		case <-deadline:
+			t.Fatalf("probeAt=%s bashAt=%s err=%v", probeAt, bashAt, ctx.Err())
+		case err := <-errCh:
+			t.Fatalf("runOnce returned early (watchdog?): %v probe=%s bash=%s", err, probeAt, bashAt)
+		case msg := <-got:
+			switch msg.Type {
+			case "ai_status_result":
+				if msg.TaskID != "t-probe" {
+					t.Fatalf("probe task: %+v", msg)
+				}
+				probeAt = time.Now()
+				if !bashAt.IsZero() {
+					t.Fatal("ai_status_result arrived after bash_result; read loop was blocked")
+				}
+				if d := probeAt.Sub(start); d > time.Second {
+					t.Fatalf("probe too slow (%s); bash likely blocked the read loop", d)
+				}
+			case "bash_result":
+				if msg.TaskID != "t-sleep" {
+					t.Fatalf("bash task: %+v", msg)
+				}
+				if msg.ExitCode != 0 || !strings.Contains(msg.Stdout, "BASH_DONE") {
+					t.Fatalf("bash_result: %+v", msg)
+				}
+				bashAt = time.Now()
+				if d := bashAt.Sub(start); d < 1500*time.Millisecond {
+					t.Fatalf("bash returned too fast (%s)", d)
+				}
+			}
+		}
+	}
+	cancel()
+}
+
+func TestRunOnceDisconnectKillsBash(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	closeCh := make(chan struct{})
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		for {
+			_, raw, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			var msg wireMsg
+			if json.Unmarshal(raw, &msg) != nil {
+				continue
+			}
+			if msg.Type == "hello" {
+				_ = c.WriteJSON(wireMsg{Type: "bash", TaskID: "t-kill", Command: sleepGroupCommand(pidFile)})
+				<-closeCh
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	// Unblock the handler before httptest.Server.Close waits for it (LIFO).
+	t.Cleanup(func() {
+		select {
+		case <-closeCh:
+		default:
+			close(closeCh)
+		}
+	})
+
+	jobs := testJobs(t)
+	tm := connTiming{
+		readWait:      time.Hour,
+		writeWait:     time.Second,
+		pingEvery:     time.Hour,
+		watchdogTick:  time.Hour,
+		staleAfter:    time.Hour,
+		hangExitAfter: time.Hour,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	go func() { _ = runOnce(ctx, srv.URL, "tok", jobs, tm, nil) }()
+
+	pid := waitPIDFile(t, pidFile, 3*time.Second)
+	close(closeCh)
+	waitDead(t, pid, 3*time.Second)
 }
 
 func TestRunOnceEmitsAIDoneOnJobFinish(t *testing.T) {
