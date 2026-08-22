@@ -1,0 +1,26 @@
+# Example system unit for takan-agent (Linux).
+# Prefer `curl -fsSL <hub>/install.sh | bash -s -- <token>` — it writes this file.
+#
+#   sudo mkdir -p /etc/takan
+#   sudo chmod 700 /etc/takan
+#   # /etc/takan/agent.env:
+#   #   TAKAN_URL=https://takan.example.com
+#   #   TAKAN_AGENT_TOKEN=...
+#   #   TAKAN_AGENT_NAME=my-machine
+
+[Unit]
+Description=Takan machine agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/takan/agent.env
+ExecStart=/usr/local/bin/takan-agent --url ${TAKAN_URL} --token ${TAKAN_AGENT_TOKEN} --name ${TAKAN_AGENT_NAME}
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

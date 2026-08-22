@@ -35,6 +35,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if cfg.SessionKey == "dev-insecure-change-me" {
+		log.Printf("WARNING: TAKAN_SESSION_KEY is the insecure default — set a random key before storing secrets")
+	}
 	var backup *store.BackupOpts
 	if cfg.BackupBucket != "" {
 		backup = &store.BackupOpts{
