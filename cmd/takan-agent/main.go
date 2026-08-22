@@ -389,8 +389,9 @@ func handleAILog(jobs *jobManager, msg wireMsg) wireMsg {
 	return res
 }
 
-func jobWire(_ string, meta jobMeta, output string, total int, truncated bool) wireMsg {
+func jobWire(typ string, meta jobMeta, output string, total int, truncated bool) wireMsg {
 	return wireMsg{
+		Type:        typ,
 		JobID:       meta.JobID,
 		Agent:       meta.Agent,
 		Runner:      meta.Agent,
