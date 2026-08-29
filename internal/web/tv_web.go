@@ -28,6 +28,9 @@ func (s *Server) saveTV(w http.ResponseWriter, r *http.Request) {
 	if v := r.FormValue("client_name"); v != "" {
 		cfg.ClientName = v
 	}
+	if v := r.FormValue("wifi_mac"); v != "" {
+		cfg.WifiMAC = v
+	}
 	if raw := r.FormValue("apps"); raw != "" {
 		apps, err := tvmod.ParseAppsText(raw)
 		if err != nil {

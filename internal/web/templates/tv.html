@@ -62,6 +62,15 @@
           placeholder="Gamma" autocomplete="off"/>
       </div>
       <div>
+        <label for="tv-wifi-mac">Wi‑Fi MAC (Wake-on-LAN)</label>
+        <input id="tv-wifi-mac" name="wifi_mac" type="text" value="{{.TVWifiMAC}}"
+          placeholder="04:B9:E3:86:CD:C0" autocomplete="off"/>
+        <p class="muted" style="margin-top:.35rem;font-size:.8rem">
+          Used to wake the TV when REST is down. Prefer the MAC from <code>/api/v2/</code>
+          <code>device.wifiMac</code> when the set is on.
+        </p>
+      </div>
+      <div>
         <label for="tv-apps">App aliases</label>
         <textarea id="tv-apps" name="apps" rows="5"
           placeholder="Netflix|3201907018807">{{.TVAppsText}}</textarea>
@@ -78,7 +87,8 @@
       <h3 style="margin-bottom:.35rem">MCP tools</h3>
       <p class="muted" style="margin-bottom:.5rem">
         When this module is enabled: <code>tv_status</code>, <code>tv_app</code>,
-        <code>tv_key</code>, <code>tv_text</code>.
+        <code>tv_key</code>, <code>tv_text</code>, <code>tv_volume</code>,
+        <code>tv_mute</code>, <code>tv_power</code>, <code>tv_now</code>.
         Each call is a short command on the agent (<code>curl -m 8</code> or a tiny
         <code>samsungtvws</code> snippet). Readiness is included in <code>takan_status</code>.
       </p>

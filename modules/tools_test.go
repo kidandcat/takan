@@ -40,7 +40,7 @@ func TestToolsForTV(t *testing.T) {
 		t.Fatal(err)
 	}
 	on := namesOf(p.ToolsFor(ctx, u.ID))
-	for _, need := range []string{"takan_status", "tv_status", "tv_app", "tv_key", "tv_text"} {
+	for _, need := range []string{"takan_status", "tv_status", "tv_app", "tv_key", "tv_text", "tv_volume", "tv_mute", "tv_power", "tv_now"} {
 		found := false
 		for _, n := range on {
 			if n == need {

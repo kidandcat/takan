@@ -14,7 +14,7 @@ func TestFactoryToolWiring(t *testing.T) {
 	st, userID := testUser(t)
 	tools := Factory(st, agenthub.New(nil, nil))(context.Background(), userID)
 	got := toolNames(tools)
-	want := []string{"tv_status", "tv_app", "tv_key", "tv_text"}
+	want := []string{"tv_status", "tv_app", "tv_key", "tv_text", "tv_volume", "tv_mute", "tv_power", "tv_now"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("tools: %v want %v", got, want)
 	}
@@ -35,6 +35,9 @@ func TestFactoryToolWiring(t *testing.T) {
 	mustContain(t, required["tv_app"], "action", "app")
 	mustContain(t, required["tv_key"], "key")
 	mustContain(t, required["tv_text"], "text")
+	if strings.Contains(strings.ToLower(byName["tv_now"]), "app_list") {
+		t.Fatal("tv_now must not mention app_list")
+	}
 }
 
 func TestHandlersValidateBeforeAgent(t *testing.T) {
@@ -67,6 +70,21 @@ func TestHandlersValidateBeforeAgent(t *testing.T) {
 	// Registered machine but agent offline — hub.RunBash, not a hub-side TV socket.
 	if _, err := handlers["tv_status"](ctx, userID, map[string]any{}); err == nil || !strings.Contains(err.Error(), "offline") {
 		t.Fatalf("offline mac: %v", err)
+	}
+	if _, err := handlers["tv_volume"](ctx, userID, map[string]any{"level": float64(200)}); err == nil || !strings.Contains(err.Error(), "0") {
+		t.Fatalf("bad volume: %v", err)
+	}
+	if _, err := handlers["tv_mute"](ctx, userID, map[string]any{"mute": "maybe"}); err == nil || !strings.Contains(err.Error(), "mute") {
+		t.Fatalf("bad mute: %v", err)
+	}
+	if _, err := handlers["tv_power"](ctx, userID, map[string]any{"action": "reboot"}); err == nil || !strings.Contains(err.Error(), "on or off") {
+		t.Fatalf("bad power: %v", err)
+	}
+	if _, err := handlers["tv_volume"](ctx, userID, map[string]any{}); err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("volume offline: %v", err)
+	}
+	if _, err := handlers["tv_now"](ctx, userID, map[string]any{}); err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("now offline: %v", err)
 	}
 }
 

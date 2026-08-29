@@ -24,7 +24,7 @@ type Info struct {
 var Catalog = []Info{
 	{ID: "machine", Name: "Machine", Description: "Remote shell + configurable AI task runners (Claude, Grok, free commands) via takan-agent."},
 	{ID: "display", Name: "Display", Description: "Remote kiosk screens: push static HTML to a takan-agent that serves it locally."},
-	{ID: "tv", Name: "TV", Description: "Samsung Tizen TV on the home LAN: status, apps, remote keys, text — via a takan-agent on the same WiFi."},
+	{ID: "tv", Name: "TV", Description: "Samsung Tizen TV on the home LAN: status, apps, keys, volume, mute, power, now playing — via a takan-agent on the same WiFi."},
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
