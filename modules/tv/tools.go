@@ -450,7 +450,7 @@ func handlePower(ctx context.Context, st *store.Store, hub *agenthub.Hub, userID
 		out["wifi_mac"] = mac
 	}
 	if action == "" {
-		return mustIndent(out)
+		return mustIndent(out), nil
 	}
 	out["action"] = action
 	if action == "off" {
@@ -467,10 +467,10 @@ func handlePower(ctx context.Context, st *store.Store, hub *agenthub.Hub, userID
 			}
 		}
 		out["power"] = power
-		return mustIndent(out)
+		return mustIndent(out), nil
 	}
 	if powerOn(power) {
-		return mustIndent(out)
+		return mustIndent(out), nil
 	}
 	if mac == "" {
 		return "", fmt.Errorf("no wifi MAC for Wake-on-LAN — set wifi_mac in Takan panel → TV")
@@ -490,7 +490,7 @@ func handlePower(ctx context.Context, st *store.Store, hub *agenthub.Hub, userID
 		out["wifi_mac"] = mac2
 	}
 	if powerOn(power) {
-		return mustIndent(out)
+		return mustIndent(out), nil
 	}
 	keyOK, keyErr := runStep(ctx, st, hub, userID, args, func(c Config) (string, error) {
 		return pyKey(c.Host, c.TokenPath, c.ClientName, "KEY_POWER")
@@ -502,7 +502,7 @@ func handlePower(ctx context.Context, st *store.Store, hub *agenthub.Hub, userID
 	if p, _, stErr := readPower(ctx, st, hub, userID, args); stErr == "" && p != "" {
 		out["power"] = p
 	}
-	return mustIndent(out)
+	return mustIndent(out), nil
 }
 
 func runStep(ctx context.Context, st *store.Store, hub *agenthub.Hub, userID string, args map[string]any, build func(Config) (string, error)) (ok bool, errText string) {
@@ -545,7 +545,7 @@ func handleNow(ctx context.Context, st *store.Store, hub *agenthub.Hub, userID s
 	if !powerOn(power) {
 		out["apps"] = []any{}
 		out["now"] = nil
-		return mustIndent(out)
+		return mustIndent(out), nil
 	}
 	var apps []map[string]any
 	var nowName string
@@ -582,7 +582,7 @@ func handleNow(ctx context.Context, st *store.Store, hub *agenthub.Hub, userID s
 	} else {
 		out["now"] = nil
 	}
-	return mustIndent(out)
+	return mustIndent(out), nil
 }
 
 func baseOut(cfg Config, res *agenthub.Result) map[string]any {
