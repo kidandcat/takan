@@ -23,6 +23,7 @@ var (
 	clientNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$`)
 	keyRe        = regexp.MustCompile(`^KEY_[A-Z0-9_]+$`)
 	hostNameRe   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$`)
+	macRe        = regexp.MustCompile(`(?i)^([0-9a-f]{2}:){5}[0-9a-f]{2}$`)
 )
 
 // Known remote keys (Samsung Tizen). Aliases map to KEY_*.
@@ -84,6 +85,14 @@ func validAppID(id string) error {
 	id = strings.TrimSpace(id)
 	if !appIDRe.MatchString(id) {
 		return fmt.Errorf("invalid app id %q", id)
+	}
+	return nil
+}
+
+func validMAC(mac string) error {
+	mac = strings.TrimSpace(mac)
+	if !macRe.MatchString(mac) {
+		return fmt.Errorf("invalid MAC %q (use AA:BB:CC:DD:EE:FF)", mac)
 	}
 	return nil
 }

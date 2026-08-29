@@ -20,13 +20,19 @@ func TestParseConfigDefaults(t *testing.T) {
 		if c.Apps["netflix"] != "3201907018807" || c.Apps["youtube"] != "9Ur5IzDKqV.TizenYouTube" {
 			t.Fatalf("builtin apps: %+v", c.Apps)
 		}
+		if c.WifiMAC != DefaultWifiMAC {
+			t.Fatalf("wifi mac: %s", c.WifiMAC)
+		}
 	}
 }
 
 func TestParseConfigOverrides(t *testing.T) {
-	c := ParseConfig(`{"machine":"office","host":"10.0.0.8","token_path":"/tmp/tv.tok","client_name":"Takan","apps":{"plex":"3201512006785"}}`)
+	c := ParseConfig(`{"machine":"office","host":"10.0.0.8","token_path":"/tmp/tv.tok","client_name":"Takan","wifi_mac":"aa:bb:cc:dd:ee:ff","apps":{"plex":"3201512006785"}}`)
 	if c.Machine != "office" || c.Host != "10.0.0.8" {
 		t.Fatalf("override: %+v", c)
+	}
+	if c.WifiMAC != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("wifi mac: %s", c.WifiMAC)
 	}
 	if c.Apps["plex"] != "3201512006785" {
 		t.Fatal("custom alias missing")
@@ -66,6 +72,19 @@ func TestResolveApp(t *testing.T) {
 	}
 }
 
+func TestUniqueApps(t *testing.T) {
+	refs := DefaultConfig().UniqueApps()
+	if len(refs) != 3 {
+		t.Fatalf("want 3 unique ids, got %+v", refs)
+	}
+	if refs[0].Alias != "Netflix" || refs[0].ID != "3201907018807" {
+		t.Fatalf("netflix first: %+v", refs[0])
+	}
+	if refs[1].Alias != "YouTube" || refs[2].Alias != "HBO Max" {
+		t.Fatalf("order: %+v", refs)
+	}
+}
+
 func TestParseAppsText(t *testing.T) {
 	m, err := ParseAppsText("Plex|3201512006785\n# skip\nSpotify = 3201601007230\n")
 	if err != nil {
@@ -94,6 +113,11 @@ func TestValidateRejectsInjection(t *testing.T) {
 	c.TokenPath = "/tmp/x;evil"
 	if err := c.Validate(); err == nil {
 		t.Fatal("expected bad token path")
+	}
+	c = DefaultConfig()
+	c.WifiMAC = "zz:zz:zz:zz:zz:zz"
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected bad MAC")
 	}
 }
 

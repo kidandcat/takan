@@ -17,6 +17,7 @@ const (
 	DefaultHost       = "192.168.68.102"
 	DefaultTokenPath  = "/Users/jairo/.samsung-tv-token"
 	DefaultClientName = "Gamma"
+	DefaultWifiMAC    = "04:B9:E3:86:CD:C0"
 )
 
 // Builtin app aliases (friendly name → Tizen app id).
@@ -35,7 +36,14 @@ type Config struct {
 	Host       string            `json:"host"`
 	TokenPath  string            `json:"token_path"`
 	ClientName string            `json:"client_name"`
+	WifiMAC    string            `json:"wifi_mac,omitempty"`
 	Apps       map[string]string `json:"apps,omitempty"`
+}
+
+// AppRef is a unique Tizen app (one row per id) for REST probes.
+type AppRef struct {
+	Alias string
+	ID    string
 }
 
 // DefaultConfig returns household defaults (machine mac on the TV LAN).
@@ -45,6 +53,7 @@ func DefaultConfig() Config {
 		Host:       DefaultHost,
 		TokenPath:  DefaultTokenPath,
 		ClientName: DefaultClientName,
+		WifiMAC:    DefaultWifiMAC,
 		Apps:       cloneApps(defaultApps),
 	}
 }
@@ -86,10 +95,14 @@ func ParseConfig(raw string) Config {
 	if _, ok := probe["client_name"]; !ok || strings.TrimSpace(c.ClientName) == "" {
 		c.ClientName = def.ClientName
 	}
+	if _, ok := probe["wifi_mac"]; !ok || strings.TrimSpace(c.WifiMAC) == "" {
+		c.WifiMAC = def.WifiMAC
+	}
 	c.Machine = strings.TrimSpace(c.Machine)
 	c.Host = strings.TrimSpace(c.Host)
 	c.TokenPath = strings.TrimSpace(c.TokenPath)
 	c.ClientName = strings.TrimSpace(c.ClientName)
+	c.WifiMAC = strings.ToUpper(strings.TrimSpace(c.WifiMAC))
 	c.Apps = mergeApps(def.Apps, c.Apps)
 	return c
 }
@@ -119,6 +132,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := validClientName(c.ClientName); err != nil {
+		return err
+	}
+	if err := validMAC(c.WifiMAC); err != nil {
 		return err
 	}
 	for alias, id := range c.Apps {
@@ -153,6 +169,27 @@ func (c Config) ResolveApp(nameOrID string) (string, error) {
 		return "", fmt.Errorf("unknown app %q", s)
 	}
 	return "", fmt.Errorf("unknown app %q — try %s or a Tizen app id", s, strings.Join(sortedKeys(c.Apps), ", "))
+}
+
+// UniqueApps returns one entry per app id (Netflix / YouTube / HBO Max first).
+func (c Config) UniqueApps() []AppRef {
+	seen := map[string]bool{}
+	var out []AppRef
+	add := func(alias string) {
+		id, ok := c.Apps[alias]
+		if !ok || seen[id] {
+			return
+		}
+		seen[id] = true
+		out = append(out, AppRef{Alias: displayAlias(alias), ID: id})
+	}
+	for _, alias := range []string{"netflix", "youtube", "hbo max", "hbo", "hbomax", "max"} {
+		add(alias)
+	}
+	for _, alias := range sortedKeys(c.Apps) {
+		add(alias)
+	}
+	return out
 }
 
 // AppsText formats aliases for the panel textarea (alias|appId per line).

@@ -212,6 +212,7 @@ type pageData struct {
 	TVHost       string
 	TVTokenPath  string
 	TVClientName string
+	TVWifiMAC    string
 	TVAppsText   string
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
@@ -828,6 +829,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 	data.TVHost = tvc.Host
 	data.TVTokenPath = tvc.TokenPath
 	data.TVClientName = tvc.ClientName
+	data.TVWifiMAC = tvc.WifiMAC
 	data.TVAppsText = tvc.AppsText()
 	email, _, postal, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
 	data.MercadonaConfigured = ok
