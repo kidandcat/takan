@@ -17,6 +17,7 @@ Integrations live under `modules/` as subpackages:
 |--------|------|--------|--------|
 | **Machine** | `modules/machine` | `machine_list`, `machine_bash` (optional), `machine_ai_runners`, `machine_ai_run`, `machine_ai_status`, `machine_ai_watch`, `machine_ai_log`, `machine_ai_cancel`, `machine_ai_reply` | Install `takan-agent`; toggle bash / AI runners in panel |
 | **Display** | `modules/display` | `display_list`, `display_show` | Name a kiosk screen on a machine; agent serves HTML at `127.0.0.1:8787` |
+| **TV** | `modules/tv` | `tv_status`, `tv_app`, `tv_key`, `tv_text` | Samsung Tizen on the LAN; hub relays short curl/samsungtvws commands to a takan-agent (panel: machine, host, token path, app aliases) |
 | **Mercadona** | `modules/mercadona` | `mercadona_search`, `mercadona_add`, `mercadona_cart` | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get` | Resend API key; enable domains |
 | **People** | `modules/people` | `people_list` / `get` / `add` / `update` / `delete` | Personal CRM in panel |

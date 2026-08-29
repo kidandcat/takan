@@ -31,6 +31,7 @@ import (
 	"github.com/kidandcat/takan/modules/people"
 	"github.com/kidandcat/takan/modules/sip"
 	"github.com/kidandcat/takan/modules/telegram"
+	"github.com/kidandcat/takan/modules/tv"
 	"github.com/kidandcat/takan/modules/vault"
 )
 
@@ -158,6 +159,7 @@ func main() {
 		SIP:       sip.Factory(st, sipHub),
 		Vault:     vault.Factory(st, box),
 		Display:   display.Factory(st, hub),
+		TV:        tv.Factory(st, hub),
 		SIPHub:    sipHub,
 	}
 

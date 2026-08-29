@@ -629,7 +629,7 @@ type ModuleState struct {
 }
 
 // defaultModuleIDs must stay in sync with modules.Catalog.
-var defaultModuleIDs = []string{"machine", "display", "mercadona", "email", "people", "health", "telegram", "sip", "vault"}
+var defaultModuleIDs = []string{"machine", "display", "tv", "mercadona", "email", "people", "health", "telegram", "sip", "vault"}
 
 func (s *Store) ListModules(ctx context.Context, userID string) ([]ModuleState, error) {
 	// ensure defaults exist
