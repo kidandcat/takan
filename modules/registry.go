@@ -10,6 +10,7 @@ import (
 	"github.com/kidandcat/takan/internal/mcp"
 	"github.com/kidandcat/takan/internal/store"
 	machinemod "github.com/kidandcat/takan/modules/machine"
+	tvmod "github.com/kidandcat/takan/modules/tv"
 )
 
 // Catalog entry for the panel.
@@ -23,6 +24,7 @@ type Info struct {
 var Catalog = []Info{
 	{ID: "machine", Name: "Machine", Description: "Remote shell + configurable AI task runners (Claude, Grok, free commands) via takan-agent."},
 	{ID: "display", Name: "Display", Description: "Remote kiosk screens: push static HTML to a takan-agent that serves it locally."},
+	{ID: "tv", Name: "TV", Description: "Samsung Tizen TV on the home LAN: status, apps, remote keys, text — via a takan-agent on the same WiFi."},
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
@@ -49,6 +51,7 @@ type Provider struct {
 	SIP       ToolFactory
 	Vault     ToolFactory
 	Display   ToolFactory
+	TV        ToolFactory
 
 	// SIPHub optional: online device / call counts for takan_status.
 	SIPHub interface {
@@ -108,6 +111,10 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.Display != nil {
 				out = append(out, p.Display(ctx, userID)...)
 			}
+		case "tv":
+			if p.TV != nil {
+				out = append(out, p.TV(ctx, userID)...)
+			}
 		}
 	}
 	return out
@@ -118,7 +125,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, displays, Mercadona linked, email domains, people, health, telegram, SIP, vault). " +
+				"(machines online, displays, TV, Mercadona linked, email domains, people, health, telegram, SIP, vault). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -232,6 +239,26 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			detail += " (" + strings.Join(names, ", ") + ")"
 		}
 		return online > 0, detail
+	case "tv":
+		cfg, err := tvmod.LoadConfig(ctx, p.Store, userID)
+		if err != nil {
+			return false, "error reading TV config"
+		}
+		if cfg.Host == "" || cfg.Machine == "" {
+			return false, "not configured (panel → TV)"
+		}
+		mac, err := p.Store.MachineByUserAndName(ctx, userID, cfg.Machine)
+		if err != nil {
+			return false, "machine " + cfg.Machine + " not registered"
+		}
+		online := p.Hub != nil && p.Hub.Online(mac.ID)
+		detail = cfg.Host + " via " + cfg.Machine
+		if online {
+			detail += " (agent online)"
+		} else {
+			detail += " (agent offline)"
+		}
+		return online, detail
 	case "mercadona":
 		email, _, postal, ok, err := p.Store.GetMercadonaCreds(ctx, userID)
 		if err != nil {

@@ -24,6 +24,7 @@ import (
 	machinemod "github.com/kidandcat/takan/modules/machine"
 	sipmod "github.com/kidandcat/takan/modules/sip"
 	telegrammod "github.com/kidandcat/takan/modules/telegram"
+	tvmod "github.com/kidandcat/takan/modules/tv"
 	"github.com/kidandcat/takan/modules/vault"
 )
 
@@ -72,6 +73,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/integrations", s.dashIntegrations)
 	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
 	mux.HandleFunc("GET /dashboard/display", s.dashDisplay)
+	mux.HandleFunc("GET /dashboard/tv", s.dashTV)
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
 	mux.HandleFunc("GET /dashboard/telegram", s.dashTelegram)
@@ -103,6 +105,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/display", s.createDisplay)
 	mux.HandleFunc("POST /dashboard/display/{id}/delete", s.deleteDisplay)
 	mux.HandleFunc("POST /dashboard/display/{id}/default", s.defaultDisplay)
+	mux.HandleFunc("POST /dashboard/tv", s.saveTV)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
 	mux.HandleFunc("POST /dashboard/mercadona/clear", s.clearMercadona)
 	mux.HandleFunc("POST /dashboard/email", s.saveEmail)
@@ -204,6 +207,12 @@ type pageData struct {
 	Displays        []displayView
 	DisplayCount    int
 	DisplayOnline   int
+	// TV module (Samsung Tizen via LAN agent)
+	TVMachine    string
+	TVHost       string
+	TVTokenPath  string
+	TVClientName string
+	TVAppsText   string
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
 	// NeedsSetup is true when this instance has no owner yet (first unlock sets the password).
@@ -527,6 +536,9 @@ func (s *Server) dashMachines(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashDisplay(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "display", "Display", "display.html")
 }
+func (s *Server) dashTV(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "tv", "TV", "tv.html")
+}
 func (s *Server) dashMercadona(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "mercadona", "Mercadona", "mercadona.html")
 }
@@ -616,6 +628,28 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.Summary = fmt.Sprintf("%d online · %d total", onlineN, len(ds))
 			}
 			mv.Ready = m.Enabled && onlineN > 0
+		case "tv":
+			mv.Path = "/dashboard/tv"
+			tvc, _ := tvmod.LoadConfig(ctx, s.Store, u.ID)
+			mac, err := s.Store.MachineByUserAndName(ctx, u.ID, tvc.Machine)
+			on := err == nil && s.Hub != nil && s.Hub.Online(mac.ID)
+			kind := "offline"
+			if on {
+				kind = "online"
+			}
+			label := tvc.Machine
+			if tvc.Host != "" {
+				label += " · " + tvc.Host
+			}
+			mv.Facts = append(mv.Facts, modFact{Label: label, Kind: kind})
+			if err != nil {
+				mv.Summary = "Machine " + tvc.Machine + " not registered"
+			} else if on {
+				mv.Summary = tvc.Host + " via " + tvc.Machine
+			} else {
+				mv.Summary = tvc.Machine + " offline"
+			}
+			mv.Ready = m.Enabled && on
 		case "mercadona":
 			mv.Path = "/dashboard/mercadona"
 			em, _, postal, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
@@ -789,6 +823,12 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			})
 		}
 	}
+	tvc, _ := tvmod.LoadConfig(ctx, s.Store, u.ID)
+	data.TVMachine = tvc.Machine
+	data.TVHost = tvc.Host
+	data.TVTokenPath = tvc.TokenPath
+	data.TVClientName = tvc.ClientName
+	data.TVAppsText = tvc.AppsText()
 	email, _, postal, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
 	data.MercadonaConfigured = ok
 	data.MercadonaEmail = email

@@ -1,0 +1,91 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>TV</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:56ch">
+      Samsung Tizen on the home LAN. The hub never talks to the TV —
+      commands run on a registered <code>takan-agent</code> that shares the TV’s WiFi
+      (this house: machine <code>mac</code>, Q60AA at <code>192.168.68.102</code>).
+    </p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>LAN relay</h3>
+        <p class="muted">Machine + TV host used when MCP tools omit overrides.</p>
+      </div>
+    </div>
+
+    <form method="post" action="/dashboard/tv" class="form-stack" style="max-width:36rem">
+      <div>
+        <label for="tv-machine">Machine</label>
+        {{if .Machines}}
+        <select id="tv-machine" name="machine">
+          {{range .Machines}}
+          <option value="{{.Name}}" {{if eq .Name $.TVMachine}}selected{{end}}>{{.Name}}{{if .Online}} (online){{end}}</option>
+          {{end}}
+        </select>
+        {{else}}
+        <input id="tv-machine" name="machine" type="text" value="{{.TVMachine}}" placeholder="mac" autocomplete="off"/>
+        {{end}}
+        <p class="muted" style="margin-top:.35rem;font-size:.8rem">
+          Must be a registered agent on the same LAN as the TV. Add one under
+          <a href="/dashboard/machines">Machines</a>.
+        </p>
+      </div>
+      <div>
+        <label for="tv-host">TV host</label>
+        <input id="tv-host" name="host" type="text" value="{{.TVHost}}"
+          placeholder="192.168.68.102" autocomplete="off"/>
+        <p class="muted" style="margin-top:.35rem;font-size:.8rem">
+          IPv4 on the LAN. REST uses port 8001; keys/text use websocket 8002.
+        </p>
+      </div>
+      <div>
+        <label for="tv-token">Token file (on the agent)</label>
+        <input id="tv-token" name="token_path" type="text" value="{{.TVTokenPath}}"
+          placeholder="/Users/jairo/.samsung-tv-token" autocomplete="off"/>
+        <p class="muted" style="margin-top:.35rem;font-size:.8rem">
+          Path on the Mac, not on the hub. First websocket call may show Allow? on the TV.
+        </p>
+      </div>
+      <div>
+        <label for="tv-client">Client name</label>
+        <input id="tv-client" name="client_name" type="text" value="{{.TVClientName}}"
+          placeholder="Gamma" autocomplete="off"/>
+      </div>
+      <div>
+        <label for="tv-apps">App aliases</label>
+        <textarea id="tv-apps" name="apps" rows="5"
+          placeholder="Netflix|3201907018807">{{.TVAppsText}}</textarea>
+        <p class="muted" style="margin-top:.35rem;font-size:.8rem">
+          One per line: <code>Name|appId</code>. Built-in: Netflix, YouTube, HBO Max.
+        </p>
+      </div>
+      <div class="row">
+        <button type="submit">Save &amp; enable</button>
+      </div>
+    </form>
+
+    <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <h3 style="margin-bottom:.35rem">MCP tools</h3>
+      <p class="muted" style="margin-bottom:.5rem">
+        When this module is enabled: <code>tv_status</code>, <code>tv_app</code>,
+        <code>tv_key</code>, <code>tv_text</code>.
+        Each call is a short command on the agent (<code>curl -m 8</code> or a tiny
+        <code>samsungtvws</code> snippet). Readiness is included in <code>takan_status</code>.
+      </p>
+      <p class="faint">
+        The Takan hub/cloud cannot open sockets to the TV. If keys hang, accept Allow? on the TV and retry.
+      </p>
+    </div>
+  </div>
+</section>
+{{end}}
