@@ -14,11 +14,11 @@ func TestVaultIsolationAndGrantOnce(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	a, err := st.CreateUserOpts(ctx, "vault-a@example.com", "password1", CreateUserOpts{AllowOpen: true})
+	a, err := st.CreateUser(ctx, "vault-a@example.com", "password1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := st.CreateUserOpts(ctx, "vault-b@example.com", "password2", CreateUserOpts{AllowOpen: true})
+	b, err := st.CreateUser(ctx, "vault-b@example.com", "password2")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,11 +14,11 @@ func TestOwnerPicksEarliestAdmin(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	a, err := st.CreateUserOpts(ctx, "first@takan.test", "password1", CreateUserOpts{AllowOpen: true})
+	a, err := st.CreateUser(ctx, "first@takan.test", "password1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := st.CreateUserOpts(ctx, "second@takan.test", "password2", CreateUserOpts{AllowOpen: true})
+	b, err := st.CreateUser(ctx, "second@takan.test", "password2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestOwnerEmailIgnoresLegacyPlaceholder(t *testing.T) {
 
 	// A database bootstrapped in the password era stores the sentinel address;
 	// it must not be treated as a destination for login codes.
-	if _, err := st.CreateUserOpts(ctx, OperatorEmail, "password1", CreateUserOpts{AllowOpen: true}); err != nil {
+	if _, err := st.CreateUser(ctx, OperatorEmail, "password1"); err != nil {
 		t.Fatal(err)
 	}
 	if got := st.OwnerEmail(ctx); got != "" {
@@ -129,11 +129,11 @@ func TestOwnerHintWinsOverCreationOrder(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	stale, err := st.CreateUserOpts(ctx, "stale-admin@example.com", "password1", CreateUserOpts{AllowOpen: true})
+	stale, err := st.CreateUser(ctx, "stale-admin@example.com", "password1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	real, err := st.CreateUserOpts(ctx, "kidandcat@example.com", "password2", CreateUserOpts{AllowOpen: true})
+	real, err := st.CreateUser(ctx, "kidandcat@example.com", "password2")
 	if err != nil {
 		t.Fatal(err)
 	}

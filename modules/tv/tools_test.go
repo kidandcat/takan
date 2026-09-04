@@ -112,7 +112,7 @@ func testUser(t *testing.T) (*store.Store, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	u, err := st.CreateUserOpts(context.Background(), "tv-tools@example.com", "password1", store.CreateUserOpts{AllowOpen: true})
+	u, err := st.CreateUser(context.Background(), "tv-tools@example.com", "password1")
 	if err != nil {
 		t.Fatal(err)
 	}

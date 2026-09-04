@@ -18,7 +18,7 @@ func TestToolsForTV(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	ctx := context.Background()
-	u, err := st.CreateUserOpts(ctx, "tv-reg@example.com", "password1", store.CreateUserOpts{AllowOpen: true})
+	u, err := st.CreateUser(ctx, "tv-reg@example.com", "password1")
 	if err != nil {
 		t.Fatal(err)
 	}

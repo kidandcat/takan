@@ -25,7 +25,7 @@ func TestLoginByEmailCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = st.CreateUserOpts(ctx, "guest@example.com", "guest-pass-1", store.CreateUserOpts{AllowOpen: true}); err != nil {
+	if _, err = st.CreateUser(ctx, "guest@example.com", "guest-pass-1"); err != nil {
 		t.Fatal(err)
 	}
 

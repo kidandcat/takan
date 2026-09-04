@@ -313,7 +313,7 @@ func TestExtraUserSessionRejected(t *testing.T) {
 	if _, err := st.BootstrapOwner(ctx, "owner@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	extra, err := st.CreateUserOpts(ctx, "guest@example.com", "guest-pass-1", store.CreateUserOpts{AllowOpen: true})
+	extra, err := st.CreateUser(ctx, "guest@example.com", "guest-pass-1")
 	if err != nil {
 		t.Fatal(err)
 	}

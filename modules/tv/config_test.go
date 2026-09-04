@@ -128,7 +128,7 @@ func TestLoadSaveConfig(t *testing.T) {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	u, err := st.CreateUserOpts(ctx, "tv-cfg@example.com", "password1", store.CreateUserOpts{AllowOpen: true})
+	u, err := st.CreateUser(ctx, "tv-cfg@example.com", "password1")
 	if err != nil {
 		t.Fatal(err)
 	}

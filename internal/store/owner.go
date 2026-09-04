@@ -64,8 +64,5 @@ func (s *Store) BootstrapOwner(ctx context.Context, email string) (*User, error)
 	if err != nil {
 		return nil, err
 	}
-	return s.CreateUserOpts(ctx, email, unusable, CreateUserOpts{
-		AllowOpen:    true,
-		DefaultQuota: 0,
-	})
+	return s.CreateUser(ctx, email, unusable)
 }
