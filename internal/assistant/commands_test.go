@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 func TestCommandsDoNotBlockThePollLoop(t *testing.T) {
 	a, fake := newTestAssistantWithTelegram(t)
 	b := a.Bot
-	b.me = &tg.User{ID: 77, Username: "casa_bot"}
+	b.setMe(&tg.User{ID: 77, Username: "casa_bot"})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	b.SetRunContext(ctx)
@@ -112,7 +113,7 @@ func TestCancelIsPerChat(t *testing.T) {
 func TestUsageIsOwnerChatOnly(t *testing.T) {
 	a, fake := newTestAssistantWithTelegram(t)
 	b := a.Bot
-	b.me = &tg.User{ID: 77, Username: "casa_bot"}
+	b.setMe(&tg.User{ID: 77, Username: "casa_bot"})
 
 	b.handleCommand(context.Background(), groupChat, ownerMsg(groupChat, "supergroup", "/usage"))
 	got := fake.TextsTo(groupChat)
@@ -170,4 +171,46 @@ func cancelledHandle() *RunHandle {
 	h.err = context.Canceled
 	close(h.done)
 	return h
+}
+
+// TestBotIdentityIsRaceFree pins a real concurrency bug: the poll loop writes
+// the bot's identity after getMe, while the panel, /health and takan_status read
+// it from HTTP handlers. It was a plain pointer field.
+func TestBotIdentityIsRaceFree(t *testing.T) {
+	a, _ := newTestAssistantWithTelegram(t)
+	b := a.Bot
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = b.Run(ctx) // writes b.me after getMe
+	}()
+
+	// Concurrent readers, as the panel and the health endpoint would be.
+	var readers sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = b.Username()
+				_ = b.addressedToUs(ownerMsg(groupChat, "supergroup", "@casa_bot hola"))
+			}
+		}()
+	}
+
+	waitFor(t, func() bool { return b.Username() == "casa_bot" }, "the bot to identify itself")
+	close(stop)
+	readers.Wait()
+	cancel()
+	<-done
 }

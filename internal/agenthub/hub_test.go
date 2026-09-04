@@ -257,6 +257,16 @@ func TestHubFillsOwnerWhenAgentOmitsIt(t *testing.T) {
 	c := dialAgent(t, srv.URL)
 	defer c.Close()
 
+	// The stub agent replies from its own goroutine while the test also writes
+	// ai_done below. gorilla/websocket allows one concurrent writer per
+	// connection, so both paths go through this mutex.
+	var wsMu sync.Mutex
+	send := func(msg wireMsg) error {
+		wsMu.Lock()
+		defer wsMu.Unlock()
+		return c.WriteJSON(msg)
+	}
+
 	go func() {
 		for {
 			_, raw, err := c.ReadMessage()
@@ -269,13 +279,13 @@ func TestHubFillsOwnerWhenAgentOmitsIt(t *testing.T) {
 			}
 			switch req.Type {
 			case "ai_start":
-				_ = c.WriteJSON(wireMsg{
+				_ = send(wireMsg{
 					Type: "ai_start_result", TaskID: req.TaskID,
 					JobID: "job-old-agent", Status: "running", Agent: req.Runner, Runner: req.Runner,
 					// older agents drop owner
 				})
 			case "ai_status":
-				_ = c.WriteJSON(wireMsg{
+				_ = send(wireMsg{
 					Type: "ai_status_result", TaskID: req.TaskID,
 					JobID: req.JobID, Status: "running", Agent: "grok", Runner: "grok",
 				})
@@ -296,7 +306,7 @@ func TestHubFillsOwnerWhenAgentOmitsIt(t *testing.T) {
 		t.Fatalf("status owner: %+v err=%v", job, err)
 	}
 
-	if err := c.WriteJSON(wireMsg{Type: "ai_done", JobID: started.JobID, Agent: "grok", Runner: "grok", Status: "done"}); err != nil {
+	if err := send(wireMsg{Type: "ai_done", JobID: started.JobID, Agent: "grok", Runner: "grok", Status: "done"}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(2 * time.Second)

@@ -34,7 +34,10 @@ type Bot struct {
 	state *StateStore
 	stt   *Transcriber
 	push  *PushSender
-	me    *tg.User
+	// me is written by the poll loop after getMe and read from HTTP handlers
+	// (the panel, /health, takan_status), so it is atomic rather than a plain
+	// pointer field.
+	me atomic.Pointer[tg.User]
 
 	// ownerTelegram is the owner's Telegram USER id. In a private chat it equals
 	// the chat id, so it doubles as the default DM target.
@@ -117,11 +120,17 @@ func (b *Bot) Ready() <-chan struct{} { return b.ready }
 
 func (b *Bot) markReady() { b.readyOnce.Do(func() { close(b.ready) }) }
 
+// setMe records the bot's own Telegram identity.
+func (b *Bot) setMe(u *tg.User) { b.me.Store(u) }
+
+// identity is the bot's own account, nil before getMe has answered.
+func (b *Bot) identity() *tg.User { return b.me.Load() }
+
 // Username is the bot's @handle: the live one once getMe has answered, else the
 // last one recorded, so the panel is not blank while polling is broken.
 func (b *Bot) Username() string {
-	if b.me != nil && b.me.Username != "" {
-		return b.me.Username
+	if me := b.identity(); me != nil && me.Username != "" {
+		return me.Username
 	}
 	return b.state.BotUsername()
 }
@@ -269,7 +278,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("getMe: %w", err)
 	}
-	b.me = me
+	b.setMe(me)
 	b.markReady()
 	if err := b.state.SetBotUsername(me.Username); err != nil {
 		log.Printf("could not record the bot username: %v", err)
@@ -447,19 +456,20 @@ func (b *Bot) addressedToUs(msg *tg.Message) bool {
 	if !msg.IsGroup() || b.opts.RespondToAll {
 		return true
 	}
+	me := b.identity()
 	// A reply to one of the assistant's own messages is addressed to it.
 	if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil &&
-		b.me != nil && msg.ReplyToMessage.From.ID == b.me.ID {
+		me != nil && msg.ReplyToMessage.From.ID == me.ID {
 		return true
 	}
-	if b.me == nil || b.me.Username == "" {
+	if me == nil || me.Username == "" {
 		return false
 	}
-	if mentionsUser(msg, b.me.Username) {
+	if mentionsUser(msg, me.Username) {
 		return true
 	}
 	log.Printf("ignoring group message in %d (%q): not addressed to @%s",
-		msg.Chat.ID, msg.ChatLabel(), b.me.Username)
+		msg.Chat.ID, msg.ChatLabel(), me.Username)
 	return false
 }
 

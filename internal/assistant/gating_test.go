@@ -37,7 +37,7 @@ func strangerMsg(chatID int64, chatType, text string, entities ...tg.Entity) *tg
 // kind to anyone else — silence, so it does not confirm its own existence.
 func TestGateIsIdentityNotChat(t *testing.T) {
 	b := newTestBot(t)
-	b.me = &tg.User{ID: 77, Username: "casa_bot"}
+	b.setMe(&tg.User{ID: 77, Username: "casa_bot"})
 
 	if !b.accept(ownerMsg(ownerChat, "private", "hola")) {
 		t.Fatal("the owner's own chat must be served")
@@ -60,7 +60,7 @@ func TestGateIsIdentityNotChat(t *testing.T) {
 
 func TestGroupsNeedAMentionOrAReply(t *testing.T) {
 	b := newTestBot(t)
-	b.me = &tg.User{ID: 77, Username: "casa_bot"}
+	b.setMe(&tg.User{ID: 77, Username: "casa_bot"})
 
 	if b.accept(ownerMsg(groupChat, "supergroup", "qué cena hay hoy")) {
 		t.Fatal("unaddressed group chatter must be ignored")
@@ -100,7 +100,7 @@ func TestGroupsNeedAMentionOrAReply(t *testing.T) {
 
 func TestIgnoredMessagesCreateNoRunner(t *testing.T) {
 	b := newTestBot(t)
-	b.me = &tg.User{ID: 77, Username: "casa_bot"}
+	b.setMe(&tg.User{ID: 77, Username: "casa_bot"})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
