@@ -249,3 +249,37 @@ func TestSeedChannelFromLegacyTelegramSettings(t *testing.T) {
 		t.Fatalf("re-seeded: %d channels", len(again))
 	}
 }
+
+// Deleting the default channel must hand the flag to a survivor, otherwise
+// every consumer that relies on the default silently loses its destination.
+func TestDeletingDefaultElectsAnother(t *testing.T) {
+	st, u, ctx := newChannelStore(t)
+	first, err := st.CreateTelegramChannel(ctx, u.ID, "one", "sealed1", "b1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := st.CreateTelegramChannel(ctx, u.ID, "two", "sealed2", "b2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.IsDefault {
+		t.Fatal("first channel should start as default")
+	}
+	if err := st.DeleteTelegramChannel(ctx, u.ID, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	def, err := st.DefaultTelegramChannel(ctx, u.ID)
+	if err != nil || def.ID != second.ID {
+		t.Fatalf("survivor should become default: %+v %v", def, err)
+	}
+	if !def.IsDefault {
+		t.Fatal("the default flag was not moved")
+	}
+	// Removing the last channel leaves nothing behind.
+	if err := st.DeleteTelegramChannel(ctx, u.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := st.ListTelegramChannels(ctx, u.ID); len(list) != 0 {
+		t.Fatalf("expected no channels, got %d", len(list))
+	}
+}

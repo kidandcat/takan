@@ -68,7 +68,7 @@ func (s *Server) createBot(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	_ = r.ParseForm()
+	_ = r.ParseForm() // safe-ignore: FormValue parses on demand and reports empty on malformed input
 	name := strings.TrimSpace(r.FormValue("name"))
 	machineID := strings.TrimSpace(r.FormValue("machine_id"))
 	channelID := strings.TrimSpace(r.FormValue("channel_id"))
@@ -132,7 +132,7 @@ func (s *Server) saveBotTarget(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	_ = r.ParseForm()
+	_ = r.ParseForm() // safe-ignore: FormValue parses on demand and reports empty on malformed input
 	if err := s.Store.SetBotTarget(r.Context(), u.ID, r.PathValue("id"), r.FormValue("machine_id")); err != nil {
 		http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
 		return

@@ -57,7 +57,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v) // safe-ignore: response already committed; the client is gone
 }
 
 func (s *Server) writeErr(w http.ResponseWriter, status int, msg string) {
@@ -455,7 +455,7 @@ func (s *Server) notifyPending(ctx context.Context, b *store.Bot, c store.BotCha
 		text += "\n\n" + truncate(c.FirstMessage, 300)
 	}
 	text += "\n\nApprove or deny: takan.es/dashboard/bots"
-	_ = s.Notify(ctx, b.UserID, text)
+	_ = s.Notify(ctx, b.UserID, text) // safe-ignore: operator notification is best-effort and must not fail the caller
 }
 
 func truncate(s string, n int) string {

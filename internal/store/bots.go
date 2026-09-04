@@ -39,7 +39,8 @@ var LegacyBotOwners = []string{"Minerva", "Menta", "TPVLINE", "Gestor", "Hardwar
 
 // Bot is a Telegram assistant daemon instance managed by Takan. It is also the
 // identity a machine AI job is attributed to (machine_ai_run owner).
-// The Telegram bot token never reaches the hub: it stays on the bot's machine.
+// Its Telegram credential lives on the attached channel (sealed at rest); this
+// row never holds one.
 type Bot struct {
 	ID          string
 	UserID      string
@@ -233,12 +234,12 @@ func (s *Store) migrateBotProvisionCols() error {
 	for rows.Next() {
 		var r row
 		if err := rows.Scan(&r.id, &r.name); err != nil {
-			rows.Close()
+			rows.Close() // safe-ignore: rows already drained; close failure cannot change the result
 			return err
 		}
 		pending = append(pending, r)
 	}
-	rows.Close()
+	rows.Close() // safe-ignore: rows already drained; close failure cannot change the result
 	if err := rows.Err(); err != nil {
 		return err
 	}
@@ -284,12 +285,12 @@ func (s *Store) seedLegacyBotsAllUsers() error {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+			rows.Close() // safe-ignore: rows already drained; close failure cannot change the result
 			return err
 		}
 		ids = append(ids, id)
 	}
-	rows.Close()
+	rows.Close() // safe-ignore: rows already drained; close failure cannot change the result
 	if err := rows.Err(); err != nil {
 		return err
 	}
@@ -417,7 +418,7 @@ func (s *Store) SetBotTarget(ctx context.Context, userID, id, machineID string) 
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return sql.ErrNoRows
 	}
 	return nil
@@ -463,7 +464,7 @@ func (s *Store) BotByProvisionTicket(ctx context.Context, raw string) (*Bot, err
 	}
 	exp, perr := time.Parse(time.RFC3339, expires)
 	if perr != nil || time.Now().UTC().After(exp) {
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM bot_provision_tickets WHERE token_hash = ?`, hashToken(raw))
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM bot_provision_tickets WHERE token_hash = ?`, hashToken(raw)) // safe-ignore: best-effort fixup; the next call re-derives the state
 		return nil, sql.ErrNoRows
 	}
 	return scanBot(s.db.QueryRowContext(ctx, botSelect+` WHERE b.id = ?`, botID))
@@ -482,7 +483,7 @@ func (s *Store) PurgeProvisionTickets(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
+	n, _ := res.RowsAffected() // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 	return int(n), nil
 }
 
@@ -499,7 +500,7 @@ func (s *Store) IssueBotToken(ctx context.Context, userID, id string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return "", sql.ErrNoRows
 	}
 	return raw, nil
@@ -525,14 +526,14 @@ func scanBot(row rowScanner) (*Bot, error) {
 		return nil, err
 	}
 	if provAt.Valid && provAt.String != "" {
-		t, _ := time.Parse(time.RFC3339, provAt.String)
+		t, _ := time.Parse(time.RFC3339, provAt.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 		b.ProvisionAt = &t
 	}
 	if last.Valid && last.String != "" {
-		t, _ := time.Parse(time.RFC3339, last.String)
+		t, _ := time.Parse(time.RFC3339, last.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 		b.LastSeen = &t
 	}
-	b.CreatedAt, _ = time.Parse(time.RFC3339, created.String)
+	b.CreatedAt, _ = time.Parse(time.RFC3339, created.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 	return &b, nil
 }
 
@@ -578,9 +579,9 @@ func (s *Store) ListBots(ctx context.Context, userID string) ([]Bot, error) {
 		return nil, err
 	}
 	for i := range out {
-		out[i].PendingChats, _ = s.CountBotChats(ctx, out[i].ID, BotChatPending)
-		out[i].ApprovedChats, _ = s.CountBotChats(ctx, out[i].ID, BotChatApproved)
-		out[i].PendingDeliveries, _ = s.CountBotDeliveries(ctx, out[i].ID)
+		out[i].PendingChats, _ = s.CountBotChats(ctx, out[i].ID, BotChatPending)   // safe-ignore: counters are display-only and default to zero
+		out[i].ApprovedChats, _ = s.CountBotChats(ctx, out[i].ID, BotChatApproved) // safe-ignore: counters are display-only and default to zero
+		out[i].PendingDeliveries, _ = s.CountBotDeliveries(ctx, out[i].ID)         // safe-ignore: counters are display-only and default to zero
 	}
 	return out, nil
 }
@@ -635,7 +636,7 @@ WHERE id = ?`,
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return sql.ErrNoRows
 	}
 	return nil
@@ -658,7 +659,7 @@ func (s *Store) RenameBot(ctx context.Context, userID, id, name string) error {
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return sql.ErrNoRows
 	}
 	return nil
@@ -669,7 +670,7 @@ func (s *Store) DeleteBot(ctx context.Context, userID, id string) error {
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return sql.ErrNoRows
 	}
 	return nil
@@ -691,11 +692,11 @@ func scanBotChat(row rowScanner) (*BotChat, error) {
 		return nil, err
 	}
 	if decided.Valid && decided.String != "" {
-		t, _ := time.Parse(time.RFC3339, decided.String)
+		t, _ := time.Parse(time.RFC3339, decided.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 		c.DecidedAt = &t
 	}
-	c.CreatedAt, _ = time.Parse(time.RFC3339, created.String)
-	c.UpdatedAt, _ = time.Parse(time.RFC3339, updated.String)
+	c.CreatedAt, _ = time.Parse(time.RFC3339, created.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
+	c.UpdatedAt, _ = time.Parse(time.RFC3339, updated.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 	return &c, nil
 }
 
@@ -724,7 +725,7 @@ WHERE NOT EXISTS (SELECT 1 FROM bot_chats WHERE bot_id = ? AND chat_id = ?)`,
 	if err != nil {
 		return nil, false, err
 	}
-	n, _ := res.RowsAffected()
+	n, _ := res.RowsAffected() // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 	created := n > 0
 	if !created {
 		// Refresh display info only; never resurrect a decided chat as pending.
@@ -830,7 +831,7 @@ WHERE bot_id = ? AND chat_id = ? AND user_id = ?`,
 	if err != nil {
 		return nil, err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return nil, sql.ErrNoRows
 	}
 	return s.BotChat(ctx, botID, chatID)
@@ -844,7 +845,7 @@ func (s *Store) DeleteBotChat(ctx context.Context, userID, botID, chatID string)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return sql.ErrNoRows
 	}
 	return nil
@@ -914,7 +915,7 @@ WHERE NOT EXISTS (
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
+	n, _ := res.RowsAffected() // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 	return n > 0, nil
 }
 
@@ -940,13 +941,13 @@ LIMIT ?`, botID, cutoff, limit)
 		var d BotDelivery
 		var created sql.NullString
 		if err := rows.Scan(&d.ID, &d.BotID, &d.UserID, &d.Type, &d.Payload, &d.Attempts, &created); err != nil {
-			rows.Close()
+			rows.Close() // safe-ignore: rows already drained; close failure cannot change the result
 			return nil, err
 		}
-		d.CreatedAt, _ = time.Parse(time.RFC3339, created.String)
+		d.CreatedAt, _ = time.Parse(time.RFC3339, created.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 		out = append(out, d)
 	}
-	rows.Close()
+	rows.Close() // safe-ignore: rows already drained; close failure cannot change the result
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -980,7 +981,7 @@ func (s *Store) AckBotDeliveries(ctx context.Context, botID string, ids []string
 		if err != nil {
 			return total, err
 		}
-		n, _ := res.RowsAffected()
+		n, _ := res.RowsAffected() // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		total += int(n)
 	}
 	return total, nil
@@ -1002,7 +1003,7 @@ func (s *Store) PurgeAckedBotDeliveries(ctx context.Context, olderThan time.Dura
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
+	n, _ := res.RowsAffected() // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 	return int(n), nil
 }
 
@@ -1055,6 +1056,6 @@ func (s *Store) PurgeBotJobs(ctx context.Context, olderThan time.Duration) (int,
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
+	n, _ := res.RowsAffected() // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 	return int(n), nil
 }

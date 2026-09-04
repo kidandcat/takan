@@ -48,7 +48,7 @@ func (s *Server) fillChannels(ctx context.Context, u *store.User, data *pageData
 		for _, ch := range c.Chats {
 			cv.Chats = append(cv.Chats, channelChatView{
 				ChatID: ch.ChatID, Type: ch.Type, Label: ch.Display(),
-				Group:  ch.Type == store.TelegramChatGroup,
+				Group: ch.Type == store.TelegramChatGroup,
 			})
 		}
 		for _, a := range c.Attachments {
@@ -89,7 +89,7 @@ func (s *Server) createChannel(w http.ResponseWriter, r *http.Request) {
 		s.redirectChannels(w, r, "error: telegram service unavailable")
 		return
 	}
-	_ = r.ParseForm()
+	_ = r.ParseForm() // safe-ignore: FormValue parses on demand and reports empty on malformed input
 	name := strings.TrimSpace(r.FormValue("name"))
 	token := strings.TrimSpace(r.FormValue("token"))
 	c, err := s.Telegram.AddChannel(r.Context(), u.ID, name, token)
@@ -141,7 +141,7 @@ func (s *Server) addChannelChat(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	_ = r.ParseForm()
+	_ = r.ParseForm() // safe-ignore: FormValue parses on demand and reports empty on malformed input
 	err := s.Store.AddChannelChat(r.Context(), u.ID, r.PathValue("id"),
 		r.FormValue("chat_id"), r.FormValue("chat_type"), r.FormValue("chat_label"))
 	if err != nil {
@@ -203,7 +203,7 @@ func (s *Server) attachChannel(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	_ = r.ParseForm()
+	_ = r.ParseForm() // safe-ignore: FormValue parses on demand and reports empty on malformed input
 	consumer := strings.TrimSpace(r.FormValue("consumer"))
 	switch consumer {
 	case store.ConsumerNotifier, store.ConsumerEmail:
@@ -227,7 +227,7 @@ func (s *Server) detachChannel(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	_ = r.ParseForm()
+	_ = r.ParseForm() // safe-ignore: FormValue parses on demand and reports empty on malformed input
 	err := s.Store.DetachChannel(r.Context(), u.ID, r.PathValue("id"),
 		r.FormValue("consumer"), r.FormValue("consumer_id"), r.FormValue("direction"))
 	if err != nil {

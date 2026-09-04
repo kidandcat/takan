@@ -271,6 +271,35 @@ purely by filename, so no registration step is needed. v1 targets **Linux with s
 provisioning refuses cleanly (with an explanatory error, no partial install) on machines without
 `systemctl`.
 
+### What provisioning installs
+
+The hub generates a fixed script (the panel never supplies shell) and runs it through the target
+machine's takan-agent over the existing `bash` transport, so machines already in the field need no
+agent update. Secrets never reach the command line: the script fetches them from the hub with a
+short-lived, run-scoped ticket, so the Telegram token never appears in the target's process list.
+
+| Path on the machine | Contents |
+|---|---|
+| `/usr/local/bin/<instance>` | the daemon binary, mode `0755` |
+| `/etc/<instance>/<instance>.env` | the environment file, mode `0600` in a `0700` directory |
+| `/etc/systemd/system/<instance>.service` | the unit (`Restart=on-failure`, `MemoryMax=512M`, `MemorySwapMax=0`, `NoNewPrivileges`, `PrivateTmp`) |
+
+`<instance>` is derived from the bot name (lowercased, non-alphanumerics collapsed to `-`).
+The env file contains exactly the four variables the daemon reads, and nothing else:
+
+```
+TELEGRAM_BOT_TOKEN="…"   # from the attached channel's sealed credential
+ALLOWED_CHAT_ID="…"      # the attachment's primary chat within that channel
+TAKAN_HUB_URL="…"        # the hub public URL; presence flips the daemon into hub mode
+TAKAN_BOT_TOKEN="…"      # the bot's hub token, minted server-side at provision time
+```
+
+Provisioning is idempotent: re-running it refreshes the binary and the env file and restarts the
+unit. The run is reported in the panel as `queued` -> `running` -> `ok` / `failed` (with the last
+error), and the outcome is pushed to the operator over Telegram. It exits non-zero, leaving the
+error visible, when the machine has no `systemd`, when the agent user has neither root nor
+passwordless `sudo`, or when the unit is installed but does not stay active.
+
 ## 6. Machine AI jobs owned by a bot
 
 `machine_ai_run` (and `machine_ai_reply`) take:

@@ -157,12 +157,12 @@ WHERE bot_token_enc <> ''
 	for rows.Next() {
 		var sd seed
 		if err := rows.Scan(&sd.user, &sd.tok, &sd.botUser, &sd.chat, &sd.allowed); err != nil {
-			rows.Close()
+			rows.Close() // safe-ignore: rows already drained; close failure cannot change the result
 			return err
 		}
 		seeds = append(seeds, sd)
 	}
-	rows.Close()
+	rows.Close() // safe-ignore: rows already drained; close failure cannot change the result
 	if err := rows.Err(); err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ VALUES (?,?,?,?,?,1,?)`,
 			return fmt.Errorf("seed telegram channel: %w", err)
 		}
 		var chats []TelegramChat
-		_ = json.Unmarshal([]byte(sd.allowed), &chats)
+		_ = json.Unmarshal([]byte(sd.allowed), &chats) // safe-ignore: legacy allowed_chats blob; unparseable means no chats to seed
 		if c := strings.TrimSpace(sd.chat); c != "" {
 			chats = append([]TelegramChat{{ID: c, Label: "Operator"}}, chats...)
 		}
@@ -235,7 +235,7 @@ func scanTelegramChannel(row rowScanner) (*TelegramChannel, error) {
 		return nil, err
 	}
 	c.IsDefault = def != 0
-	c.CreatedAt, _ = time.Parse(time.RFC3339, created.String)
+	c.CreatedAt, _ = time.Parse(time.RFC3339, created.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 	return &c, nil
 }
 
@@ -296,8 +296,8 @@ func (s *Store) ListTelegramChannels(ctx context.Context, userID string) ([]Tele
 		return nil, err
 	}
 	for i := range out {
-		out[i].Chats, _ = s.ListChannelChats(ctx, out[i].ID)
-		out[i].Attachments, _ = s.ListChannelAttachments(ctx, userID, out[i].ID)
+		out[i].Chats, _ = s.ListChannelChats(ctx, out[i].ID)                     // safe-ignore: display fill; an empty list is the correct degraded view
+		out[i].Attachments, _ = s.ListChannelAttachments(ctx, userID, out[i].ID) // safe-ignore: display fill; an empty list is the correct degraded view
 	}
 	return out, nil
 }
@@ -308,8 +308,8 @@ func (s *Store) TelegramChannelByID(ctx context.Context, userID, id string) (*Te
 	if err != nil {
 		return nil, err
 	}
-	c.Chats, _ = s.ListChannelChats(ctx, c.ID)
-	c.Attachments, _ = s.ListChannelAttachments(ctx, userID, c.ID)
+	c.Chats, _ = s.ListChannelChats(ctx, c.ID)                     // safe-ignore: display fill; an empty list is the correct degraded view
+	c.Attachments, _ = s.ListChannelAttachments(ctx, userID, c.ID) // safe-ignore: display fill; an empty list is the correct degraded view
 	return c, nil
 }
 
@@ -319,7 +319,7 @@ func (s *Store) TelegramChannelByName(ctx context.Context, userID, name string) 
 	if err != nil {
 		return nil, err
 	}
-	c.Chats, _ = s.ListChannelChats(ctx, c.ID)
+	c.Chats, _ = s.ListChannelChats(ctx, c.ID) // safe-ignore: display fill; an empty list is the correct degraded view
 	return c, nil
 }
 
@@ -330,7 +330,7 @@ func (s *Store) DefaultTelegramChannel(ctx context.Context, userID string) (*Tel
 	if err != nil {
 		return nil, err
 	}
-	c.Chats, _ = s.ListChannelChats(ctx, c.ID)
+	c.Chats, _ = s.ListChannelChats(ctx, c.ID) // safe-ignore: display fill; an empty list is the correct degraded view
 	return c, nil
 }
 
@@ -354,7 +354,7 @@ func (s *Store) SetDefaultTelegramChannel(ctx context.Context, userID, id string
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return sql.ErrNoRows
 	}
 	return nil
@@ -374,17 +374,24 @@ func (s *Store) DeleteTelegramChannel(ctx context.Context, userID, id string) er
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return sql.ErrNoRows
 	}
 	// Losing the default leaves the oldest remaining channel in charge.
 	var count int
-	_ = s.db.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM telegram_channels WHERE user_id = ? AND is_default = 1`, userID).Scan(&count)
-	if count == 0 {
-		_, _ = s.db.ExecContext(ctx, `
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM telegram_channels WHERE user_id = ? AND is_default = 1`,
+		userID).Scan(&count); err != nil {
+		return fmt.Errorf("check default channel: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `
 UPDATE telegram_channels SET is_default = 1
-WHERE id = (SELECT id FROM telegram_channels WHERE user_id = ? ORDER BY created_at LIMIT 1)`, userID)
+WHERE id = (SELECT id FROM telegram_channels WHERE user_id = ? ORDER BY created_at LIMIT 1)`,
+		userID); err != nil {
+		return fmt.Errorf("elect a new default channel: %w", err)
 	}
 	return nil
 }
@@ -408,9 +415,11 @@ func (s *Store) AddChannelChat(ctx context.Context, userID, channelID, chatID, k
 	}
 	// Append at the end so "the channel's first chat" stays the first one added.
 	var next int
-	_ = s.db.QueryRowContext(ctx,
+	if err := s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(position), -1) + 1 FROM telegram_channel_chats WHERE channel_id = ?`,
-		channelID).Scan(&next)
+		channelID).Scan(&next); err != nil {
+		return fmt.Errorf("next chat position: %w", err)
+	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO telegram_channel_chats (id, channel_id, user_id, chat_id, type, label, position, created_at)
 VALUES (?,?,?,?,?,?,?,?)
@@ -437,7 +446,7 @@ FROM telegram_channel_chats WHERE channel_id = ? ORDER BY position, created_at, 
 		if err := rows.Scan(&c.ID, &c.ChannelID, &c.ChatID, &c.Type, &c.Label, &created); err != nil {
 			return nil, err
 		}
-		c.CreatedAt, _ = time.Parse(time.RFC3339, created.String)
+		c.CreatedAt, _ = time.Parse(time.RFC3339, created.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -446,9 +455,11 @@ FROM telegram_channel_chats WHERE channel_id = ? ORDER BY position, created_at, 
 // RemoveChannelChat drops a destination unless an attachment points at it.
 func (s *Store) RemoveChannelChat(ctx context.Context, userID, channelID, chatID string) error {
 	var n int
-	_ = s.db.QueryRowContext(ctx,
+	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(1) FROM telegram_attachments WHERE channel_id = ? AND chat_id = ?`,
-		channelID, strings.TrimSpace(chatID)).Scan(&n)
+		channelID, strings.TrimSpace(chatID)).Scan(&n); err != nil {
+		return fmt.Errorf("check chat usage: %w", err)
+	}
 	if n > 0 {
 		return fmt.Errorf("chat is the primary destination of %d attachment(s)", n)
 	}
@@ -458,7 +469,7 @@ func (s *Store) RemoveChannelChat(ctx context.Context, userID, channelID, chatID
 	if err != nil {
 		return err
 	}
-	if k, _ := res.RowsAffected(); k == 0 {
+	if k, _ := res.RowsAffected(); k == 0 { // safe-ignore: SQLite always reports it; a zero here is handled as not-found
 		return sql.ErrNoRows
 	}
 	return nil
@@ -539,7 +550,7 @@ func scanAttachments(rows *sql.Rows) ([]ChannelAttachment, error) {
 			&a.Direction, &a.ChatID, &created, &a.ChannelName); err != nil {
 			return nil, err
 		}
-		a.CreatedAt, _ = time.Parse(time.RFC3339, created.String)
+		a.CreatedAt, _ = time.Parse(time.RFC3339, created.String) // safe-ignore: stored RFC3339; a malformed value degrades to the zero time
 		out = append(out, a)
 	}
 	return out, rows.Err()

@@ -155,7 +155,7 @@ func (p *Provisioner) notify(ctx context.Context, bot *store.Bot, ok bool, detai
 	if d := strings.TrimSpace(detail); d != "" {
 		head += "\n\n" + truncate(d, 400)
 	}
-	_ = p.Notify(ctx, bot.UserID, head)
+	_ = p.Notify(ctx, bot.UserID, head) // safe-ignore: operator notification is best-effort and must not fail the caller
 }
 
 // tailLine returns the last meaningful line of the preferred stream.
@@ -345,7 +345,7 @@ func (s *Server) provisionEnv(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(b.String()))
+	_, _ = w.Write([]byte(b.String())) // safe-ignore: response already committed; the client is gone
 }
 
 // writeEnv emits a systemd EnvironmentFile line with a quoted value.
