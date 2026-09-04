@@ -112,6 +112,9 @@ func main() {
 		}
 		return rl.Allow(key, cfg.LoginCodePerWindow, window)
 	}
+	// The account that receives login codes is the operator, whatever the users
+	// table creation order says.
+	st.SetOwnerHint(cfg.OwnerEmail)
 	sendLoginCode := email.LoginCodeFactory(st, box, cfg.ResendAPIKey, cfg.AuthEmailFrom)
 
 	sipHub := sip.NewHub(

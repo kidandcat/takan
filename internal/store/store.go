@@ -24,6 +24,9 @@ import (
 type Store struct {
 	node *colmena.Node
 	db   *sql.DB
+	// ownerHint is the configured operator address (TAKAN_OWNER_EMAIL). Set once
+	// at startup before serving; see SetOwnerHint.
+	ownerHint string
 }
 
 // Open starts Colmena (optional continuous backup) and migrates schema.

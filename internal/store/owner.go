@@ -11,8 +11,23 @@ import (
 // real address. It is a storage detail, not a login identifier.
 const OperatorEmail = "operator@local"
 
-// Owner returns the single operator row: earliest admin, else earliest user.
+// SetOwnerHint records the configured operator address (TAKAN_OWNER_EMAIL).
+// Call once at startup, before the server accepts requests.
+//
+// Without it, "owner" is a guess based on creation order, which picks the wrong
+// row on instances that accumulated more than one admin. With it, the account
+// that receives the login codes is unambiguously the operator.
+func (s *Store) SetOwnerHint(email string) { s.ownerHint = normalizeEmail(email) }
+
+// Owner returns the single operator row: the account matching the configured
+// owner email, else the earliest admin, else the earliest user.
 func (s *Store) Owner(ctx context.Context) (*User, error) {
+	if h := s.ownerHint; h != "" {
+		u, err := s.scanUser(s.db.QueryRowContext(ctx, userSelect+` WHERE email = ?`, h))
+		if err == nil && u != nil {
+			return u, nil
+		}
+	}
 	return s.scanUser(s.db.QueryRowContext(ctx, userSelect+`
 WHERE id = (
   SELECT id FROM users

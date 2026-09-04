@@ -118,3 +118,49 @@ func TestOwnerSessionsAndTokensCoexist(t *testing.T) {
 		t.Fatalf("access token: %v", err)
 	}
 }
+
+// TestOwnerHintWinsOverCreationOrder covers an instance that accumulated more
+// than one admin: the account receiving login codes is the operator.
+func TestOwnerHintWinsOverCreationOrder(t *testing.T) {
+	st, err := Open(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	stale, err := st.CreateUserOpts(ctx, "stale-admin@example.com", "password1", CreateUserOpts{AllowOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, err := st.CreateUserOpts(ctx, "kidandcat@example.com", "password2", CreateUserOpts{AllowOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// created_at has second granularity, so pin the order explicitly.
+	if _, err := st.db.ExecContext(ctx, `UPDATE users SET is_admin = 1, created_at = ? WHERE id = ?`,
+		time.Now().UTC().Add(time.Hour).Format(time.RFC3339), real.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE users SET created_at = ? WHERE id = ?`,
+		time.Now().UTC().Add(-time.Hour).Format(time.RFC3339), stale.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Without a hint, creation order wins and picks the stale row.
+	if owner, _ := st.Owner(ctx); owner.ID != stale.ID {
+		t.Fatalf("unhinted owner: %s", owner.ID)
+	}
+	st.SetOwnerHint("KidAndCat@Example.com")
+	owner, err := st.Owner(ctx)
+	if err != nil || owner.ID != real.ID {
+		t.Fatalf("hinted owner: %+v err=%v", owner, err)
+	}
+	if !st.IsOwner(ctx, real.ID) || st.IsOwner(ctx, stale.ID) {
+		t.Fatal("IsOwner must follow the hint")
+	}
+	// A hint that matches nobody falls back instead of locking everyone out.
+	st.SetOwnerHint("nobody@example.com")
+	if owner, _ := st.Owner(ctx); owner.ID != stale.ID {
+		t.Fatalf("unmatched hint should fall back: %+v", owner)
+	}
+}
