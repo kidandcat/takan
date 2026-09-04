@@ -1,5 +1,12 @@
 # Takan: one operator = one instance
 
+> **Auth update (2026-09):** the instance password is gone. Panel, OAuth consent and the mobile API
+> all sign in with a **one-time 6-digit code emailed to `TAKAN_OWNER_EMAIL`** (salted-hashed,
+> single-use, 10 minutes, throttled per IP and globally). `/oauth/authorize` no longer shows a
+> credential form — it redirects to `/login` and resumes consent afterwards. `users.password_hash`
+> remains in the schema but is never read. Everything below that describes password unlock is the
+> pre-change design.
+
 Decision (Hairok / kidandcat, 2026-08-21): **takan.es is a personal self-host**, same as any other. It stays behind a strong instance secret. There are no accounts, invites, or viral signup.
 
 This document is the design. The code in this branch implements the **safe application-layer cut**. Schema collapse is specified here and **must not be executed on production SQLite** (`/opt/takan/data`).

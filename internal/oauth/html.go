@@ -7,22 +7,6 @@ import (
 	"strings"
 )
 
-func (s *Server) renderLogin(w http.ResponseWriter, q url.Values, errMsg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, pageShell("Unlock Takan", `
-  <h1>Unlock Takan</h1>
-  <p class="muted">Authorize your AI client (Grok, Claude, …) with this instance password.</p>
-  `+errBlock(errMsg)+`
-  <form method="post" action="/oauth/authorize">
-    `+hiddenOAuthFields(q)+`
-    <input type="hidden" name="action" value="login"/>
-    <label>Instance password</label>
-    <input type="password" name="password" required autocomplete="current-password" minlength="8"/>
-    <button type="submit">Unlock &amp; authorize</button>
-  </form>
-`))
-}
-
 func (s *Server) renderConsent(w http.ResponseWriter, q url.Values, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, pageShell("Authorize Takan", `

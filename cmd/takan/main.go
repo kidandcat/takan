@@ -103,6 +103,16 @@ func main() {
 		}
 		return rl.Allow(key, max, time.Minute)
 	}
+	// "Send code" is far cheaper to abuse than a guess, so it gets its own
+	// window (default 3 per 15 min) applied per IP and globally.
+	loginCodeLimit := func(key string) bool {
+		window := time.Duration(cfg.LoginCodeWindowMin) * time.Minute
+		if window <= 0 {
+			window = 15 * time.Minute
+		}
+		return rl.Allow(key, cfg.LoginCodePerWindow, window)
+	}
+	sendLoginCode := email.LoginCodeFactory(st, box, cfg.ResendAPIKey, cfg.AuthEmailFrom)
 
 	sipHub := sip.NewHub(
 		func(ctx context.Context, token string) (*store.SIPDevice, error) {
@@ -173,6 +183,9 @@ func main() {
 	webSrv.SIPHub = sipHub
 	webSrv.BotWatch = botWatch
 	webSrv.AuthRateLimit = authLimit
+	webSrv.SendLoginCode = sendLoginCode
+	webSrv.OwnerEmail = cfg.OwnerEmail
+	webSrv.LoginCodeRateLimit = loginCodeLimit
 	webSrv.OnMercadonaSave = func(ctx context.Context, userID, emailAddr, password, postal string) error {
 		return mercadona.LinkAccount(ctx, st.DB(), mbox, userID, emailAddr, password, postal)
 	}
@@ -207,6 +220,10 @@ func main() {
 		OnToolsChanged: mcpSrv.NotifyToolsChanged,
 		AuthRateLimit:  authLimit,
 		StatusJSON:     prov.StatusJSON,
+
+		SendLoginCode:      sendLoginCode,
+		OwnerEmail:         cfg.OwnerEmail,
+		LoginCodeRateLimit: loginCodeLimit,
 	}
 
 	// Bot daemons (Telegram assistants) authenticate with their own bot token.
@@ -242,6 +259,9 @@ func main() {
 			}
 			if _, err := st.PurgeBotJobs(context.Background(), 30*24*time.Hour); err != nil {
 				log.Printf("bot job gc: %v", err)
+			}
+			if _, err := st.PurgeLoginCodes(context.Background(), time.Hour); err != nil {
+				log.Printf("login code gc: %v", err)
 			}
 			rl.Cleanup(2 * time.Hour)
 		}
@@ -279,6 +299,9 @@ func main() {
 		_ = httpSrv.Shutdown(ctx)
 	}()
 
+	if cfg.OwnerEmail == "" {
+		log.Printf("warning: TAKAN_OWNER_EMAIL is not set — panel login falls back to the owner row address")
+	}
 	log.Printf("takan listening on %s public=%s (single operator)", cfg.Listen, cfg.PublicURL)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)

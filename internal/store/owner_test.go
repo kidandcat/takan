@@ -34,7 +34,7 @@ func TestOwnerPicksEarliestAdmin(t *testing.T) {
 	}
 }
 
-func TestBootstrapOwnerOnce(t *testing.T) {
+func TestBootstrapOwnerUsesEmail(t *testing.T) {
 	st, err := Open(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -42,26 +42,31 @@ func TestBootstrapOwnerOnce(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	if _, err := st.BootstrapOwner(ctx, "short"); err == nil {
-		t.Fatal("expected min password length")
+	if _, err := st.BootstrapOwner(ctx, "not-an-email"); err == nil {
+		t.Fatal("expected an email address to be required")
 	}
-	u, err := st.BootstrapOwner(ctx, "instance-secret")
+	if _, err := st.BootstrapOwner(ctx, ""); err == nil {
+		t.Fatal("expected empty email to be rejected")
+	}
+	u, err := st.BootstrapOwner(ctx, "Owner@Example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Email != OperatorEmail {
-		t.Fatalf("email: %s", u.Email)
+	if u.Email != "owner@example.com" {
+		t.Fatalf("email should be normalised: %s", u.Email)
 	}
-	if _, err := st.BootstrapOwner(ctx, "instance-secret2"); err == nil {
+	if !u.IsAdmin {
+		t.Fatal("the first user must be the admin/owner")
+	}
+	if _, err := st.BootstrapOwner(ctx, "second@example.com"); err == nil {
 		t.Fatal("expected already initialized")
 	}
-	got, err := st.AuthenticatePassword(ctx, "instance-secret")
-	if err != nil || got.ID != u.ID {
-		t.Fatalf("auth: %+v err=%v", got, err)
+	if got := st.OwnerEmail(ctx); got != "owner@example.com" {
+		t.Fatalf("OwnerEmail: %q", got)
 	}
 }
 
-func TestAuthenticatePasswordOwnerOnly(t *testing.T) {
+func TestOwnerEmailIgnoresLegacyPlaceholder(t *testing.T) {
 	st, err := Open(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -69,45 +74,23 @@ func TestAuthenticatePasswordOwnerOnly(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	owner, err := st.CreateUserOpts(ctx, "kidandcat@example.com", "owner-pass-1", CreateUserOpts{AllowOpen: true})
-	if err != nil {
+	// A database bootstrapped in the password era stores the sentinel address;
+	// it must not be treated as a destination for login codes.
+	if _, err := st.CreateUserOpts(ctx, OperatorEmail, "password1", CreateUserOpts{AllowOpen: true}); err != nil {
 		t.Fatal(err)
 	}
-	extra, err := st.CreateUserOpts(ctx, "guest@example.com", "guest-pass-1", CreateUserOpts{AllowOpen: true})
-	if err != nil {
+	if got := st.OwnerEmail(ctx); got != "" {
+		t.Fatalf("placeholder must not be usable: %q", got)
+	}
+	if err := st.SetOwnerEmail(ctx, "Real@Example.com"); err != nil {
 		t.Fatal(err)
 	}
-
-	got, err := st.AuthenticatePassword(ctx, "owner-pass-1")
-	if err != nil || got.ID != owner.ID {
-		t.Fatalf("owner password: %+v err=%v", got, err)
-	}
-	if _, err := st.AuthenticatePassword(ctx, "guest-pass-1"); err == nil {
-		t.Fatal("extra user password must not unlock the instance")
-	}
-	// email+password helper also ignores email and only accepts the owner secret
-	got, err = st.Authenticate(ctx, extra.Email, "owner-pass-1")
-	if err != nil || got.ID != owner.ID {
-		t.Fatalf("Authenticate should ignore email: %+v err=%v", got, err)
-	}
-	if _, err := st.Authenticate(ctx, extra.Email, "guest-pass-1"); err == nil {
-		t.Fatal("Authenticate must not accept extra user password")
-	}
-
-	tok, exp, err := st.IssueAccessToken(ctx, extra.ID, "takan", "mcp", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if exp.IsZero() {
-		t.Fatal("expected expiry")
-	}
-	u, err := st.UserByAccessToken(ctx, tok)
-	if err != nil || u.ID != extra.ID {
-		t.Fatalf("extra user OAuth token must still resolve: %+v err=%v", u, err)
+	if got := st.OwnerEmail(ctx); got != "real@example.com" {
+		t.Fatalf("OwnerEmail after adoption: %q", got)
 	}
 }
 
-func TestSetOwnerPasswordDropsWebSessionsOnly(t *testing.T) {
+func TestOwnerSessionsAndTokensCoexist(t *testing.T) {
 	st, err := Open(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +98,7 @@ func TestSetOwnerPasswordDropsWebSessionsOnly(t *testing.T) {
 	defer st.Close()
 	ctx := context.Background()
 
-	owner, err := st.BootstrapOwner(ctx, "old-password")
+	owner, err := st.BootstrapOwner(ctx, "owner@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,20 +110,11 @@ func TestSetOwnerPasswordDropsWebSessionsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if err := st.SetOwnerPassword(ctx, "old-password", "new-password"); err != nil {
-		t.Fatal(err)
+	// Existing sessions stay valid across the move to code login.
+	if u, err := st.UserByWebSession(ctx, sess); err != nil || u.ID != owner.ID {
+		t.Fatalf("web session: %v", err)
 	}
-	if _, err := st.UserByWebSession(ctx, sess); err == nil {
-		t.Fatal("panel session should be gone")
-	}
-	if _, err := st.UserByAccessToken(ctx, access); err != nil {
-		t.Fatalf("OAuth access must survive password change: %v", err)
-	}
-	if _, err := st.AuthenticatePassword(ctx, "new-password"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.AuthenticatePassword(ctx, "old-password"); err == nil {
-		t.Fatal("old password must fail")
+	if u, err := st.UserByAccessToken(ctx, access); err != nil || u.ID != owner.ID {
+		t.Fatalf("access token: %v", err)
 	}
 }

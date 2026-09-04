@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -52,7 +53,13 @@ type Server struct {
 	SIPHub *sipmod.Hub
 	// BotWatch optional: wakes long-polling bot daemons after a panel decision.
 	BotWatch *botsmod.Watcher
-	tmpl     *template.Template
+	// SendLoginCode delivers a one-time login code by email. Required for login.
+	SendLoginCode func(ctx context.Context, to, code string, ttl time.Duration) (string, error)
+	// OwnerEmail is TAKAN_OWNER_EMAIL; it wins over the address stored in the DB.
+	OwnerEmail string
+	// LoginCodeRateLimit throttles "send code" requests (per IP and globally).
+	LoginCodeRateLimit func(key string) bool
+	tmpl               *template.Template
 }
 
 func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL, dataDir string) (*Server, error) {
@@ -69,6 +76,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", s.home)
 	mux.HandleFunc("GET /login", s.loginGet)
 	mux.HandleFunc("POST /login", s.loginPost)
+	mux.HandleFunc("POST /login/send", s.loginSendCode)
 	mux.HandleFunc("GET /register", gone)
 	mux.HandleFunc("POST /register", gone)
 	mux.HandleFunc("GET /logout", s.logout)
@@ -96,7 +104,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 		http.Redirect(w, r, "/dashboard/integrations", http.StatusFound)
 	})
 	mux.HandleFunc("POST /dashboard/modules/{id}/toggle", s.toggleModule)
-	mux.HandleFunc("POST /dashboard/instance/password", s.changeInstancePassword)
 	mux.HandleFunc("POST /dashboard/invites", gone)
 	mux.HandleFunc("POST /dashboard/invites/{id}/revoke", gone)
 	mux.HandleFunc("POST /dashboard/admin/users", gone)
@@ -234,8 +241,17 @@ type pageData struct {
 	BotInstallHint  string // flash: one-line hint with the API base URL
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
-	// NeedsSetup is true when this instance has no owner yet (first unlock sets the password).
+	// NeedsSetup is true when this instance has no owner yet (the first emailed
+	// code both creates the owner and signs in).
 	NeedsSetup bool
+	// CodeSent switches the login page to the "enter the code" step.
+	CodeSent bool
+	// OwnerEmailMasked is the destination shown on the login page (j***o@gmail.com).
+	OwnerEmailMasked string
+	// LoginNext is an optional post-login redirect (used by the OAuth consent flow).
+	LoginNext string
+	// Notice is a non-error message on the login page.
+	Notice string
 }
 
 type emailDomainView struct {
@@ -421,54 +437,161 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
-	setup := s.needsSetup(r.Context())
-	title := "Unlock"
-	if setup {
-		title = "Set password"
+// resolveOwnerEmail returns the address login codes are sent to: the
+// TAKAN_OWNER_EMAIL env value, else the address stored on the owner row.
+// Empty means login is impossible and every attempt fails closed.
+func (s *Server) resolveOwnerEmail(ctx context.Context) string {
+	if e := strings.ToLower(strings.TrimSpace(s.OwnerEmail)); e != "" {
+		return e
 	}
-	s.page(w, "login.html", pageData{Title: title, NeedsSetup: setup})
+	return s.Store.OwnerEmail(ctx)
 }
 
-func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
-	setup := s.needsSetup(r.Context())
-	title := "Unlock"
-	if setup {
-		title = "Set password"
+// maskEmail renders j***o@gmail.com so the operator can confirm the destination
+// without the page disclosing a full address to a passer-by.
+func maskEmail(e string) string {
+	e = strings.TrimSpace(e)
+	at := strings.LastIndex(e, "@")
+	if at <= 0 {
+		return ""
 	}
+	local, domain := e[:at], e[at+1:]
+	switch {
+	case len(local) <= 2:
+		return strings.Repeat("*", len(local)) + "@" + domain
+	default:
+		return local[:1] + strings.Repeat("*", len(local)-2) + local[len(local)-1:] + "@" + domain
+	}
+}
+
+// safeNext keeps post-login redirects on this host (no open redirect).
+func safeNext(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
+		return ""
+	}
+	return raw
+}
+
+func (s *Server) loginPage(w http.ResponseWriter, r *http.Request, data pageData) {
+	ctx := r.Context()
+	data.NeedsSetup = s.needsSetup(ctx)
+	data.OwnerEmailMasked = maskEmail(s.resolveOwnerEmail(ctx))
+	if data.Title == "" {
+		data.Title = "Sign in"
+	}
+	if data.LoginNext == "" {
+		data.LoginNext = safeNext(r.URL.Query().Get("next"))
+	}
+	s.page(w, "login.html", data)
+}
+
+func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
+	if u := s.currentUser(r); u != nil {
+		http.Redirect(w, r, firstNonEmpty(safeNext(r.URL.Query().Get("next")), "/dashboard"), http.StatusFound)
+		return
+	}
+	s.loginPage(w, r, pageData{CodeSent: r.URL.Query().Get("sent") == "1"})
+}
+
+// loginSendCode issues a one-time code and emails it to the operator.
+// The response never states whether sending succeeded in a way that reveals the
+// address, and the code itself is never logged.
+func (s *Server) loginSendCode(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	next := safeNext(r.FormValue("next"))
+	ctx := r.Context()
+	ip := clientIP(r)
+	if s.LoginCodeRateLimit != nil &&
+		(!s.LoginCodeRateLimit("login-code:"+ip) || !s.LoginCodeRateLimit("login-code:global")) {
+		s.loginPage(w, r, pageData{LoginNext: next, Error: "Too many code requests — try again later"})
+		return
+	}
+	email := s.resolveOwnerEmail(ctx)
+	if email == "" {
+		s.loginPage(w, r, pageData{LoginNext: next,
+			Error: "This instance has no owner email configured (TAKAN_OWNER_EMAIL). Login is disabled."})
+		return
+	}
+	if s.SendLoginCode == nil {
+		s.loginPage(w, r, pageData{LoginNext: next, Error: "Email sending is not configured on this instance."})
+		return
+	}
+	code, err := s.Store.IssueLoginCode(ctx, email, store.LoginCodeTTL)
+	if err != nil {
+		s.loginPage(w, r, pageData{LoginNext: next, Error: "Could not issue a code — try again"})
+		return
+	}
+	if _, err := s.SendLoginCode(ctx, email, code, store.LoginCodeTTL); err != nil {
+		// Detail is useful here (misconfigured Resend) and leaks no secret.
+		log.Printf("login code send failed: %v", err)
+		s.loginPage(w, r, pageData{LoginNext: next, Error: "Could not send the email: " + err.Error()})
+		return
+	}
+	s.loginPage(w, r, pageData{
+		CodeSent:  true,
+		LoginNext: next,
+		Notice:    "Code sent. It expires in 10 minutes.",
+	})
+}
+
+// loginPost verifies the emailed code and opens a session. On an empty
+// instance the first correct code also creates the owner.
+func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	_ = r.ParseForm()
+	next := safeNext(r.FormValue("next"))
 	fail := func(msg string) {
-		s.page(w, "login.html", pageData{Title: title, NeedsSetup: setup, Error: msg})
+		s.loginPage(w, r, pageData{CodeSent: true, LoginNext: next, Error: msg})
 	}
 	if s.AuthRateLimit != nil && !s.AuthRateLimit("login:"+clientIP(r)) {
 		fail("Too many attempts — try again later")
 		return
 	}
-	_ = r.ParseForm()
-	password := r.FormValue("password")
-	var (
-		u   *store.User
-		err error
-	)
-	if setup {
-		u, err = s.Store.BootstrapOwner(r.Context(), password)
-	} else {
-		u, err = s.Store.AuthenticatePassword(r.Context(), password)
-	}
-	if err != nil {
-		if setup {
-			fail(err.Error())
-		} else {
-			fail("Invalid password")
-		}
+	email := s.resolveOwnerEmail(ctx)
+	if email == "" {
+		fail("This instance has no owner email configured (TAKAN_OWNER_EMAIL). Login is disabled.")
 		return
 	}
-	tok, err := s.Store.CreateWebSession(r.Context(), u.ID, 30*24*time.Hour)
+	code := strings.TrimSpace(r.FormValue("code"))
+	if code == "" {
+		fail("Enter the code from your email")
+		return
+	}
+	if err := s.Store.ConsumeLoginCode(ctx, email, code); err != nil {
+		fail("Invalid or expired code")
+		return
+	}
+
+	u, err := s.Store.Owner(ctx)
+	if err != nil || u == nil {
+		// First ever login: the verified code bootstraps the owner.
+		u, err = s.Store.BootstrapOwner(ctx, email)
+		if err != nil {
+			fail(err.Error())
+			return
+		}
+	} else if !strings.EqualFold(u.Email, email) {
+		// Adopt the configured address on an instance bootstrapped before this flow.
+		_ = s.Store.SetOwnerEmail(ctx, email)
+	}
+
+	tok, err := s.Store.CreateWebSession(ctx, u.ID, 30*24*time.Hour)
 	if err != nil {
 		fail(err.Error())
 		return
 	}
 	s.setSession(w, tok)
-	http.Redirect(w, r, "/dashboard", http.StatusFound)
+	http.Redirect(w, r, firstNonEmpty(next, "/dashboard"), http.StatusFound)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func clientIP(r *http.Request) string {
@@ -617,6 +740,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		OAuthToken:     s.PublicURL + "/oauth/token",
 		OAuthMetadata:  s.PublicURL + "/.well-known/oauth-authorization-server",
 	}
+	data.OwnerEmailMasked = maskEmail(s.resolveOwnerEmail(ctx))
 	mods, _ := s.Store.ListModules(ctx, u.ID)
 	cat := map[string]modules.Info{}
 	for _, c := range modules.Catalog {
@@ -1111,27 +1235,6 @@ func (s *Server) toggleModule(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	s.redirectBack(w, r, "/dashboard")
-}
-
-func (s *Server) changeInstancePassword(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	_ = r.ParseForm()
-	current := r.FormValue("current")
-	next := r.FormValue("new")
-	confirm := r.FormValue("confirm")
-	if next != confirm {
-		http.Redirect(w, r, "/dashboard/instance?flash="+urlQuery("error: passwords do not match"), http.StatusFound)
-		return
-	}
-	if err := s.Store.SetOwnerPassword(r.Context(), current, next); err != nil {
-		http.Redirect(w, r, "/dashboard/instance?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
-		return
-	}
-	s.clearSession(w)
-	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
 // redirectBack sends the browser to Referer when it is on this host, else fallback.

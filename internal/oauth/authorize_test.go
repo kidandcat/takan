@@ -14,19 +14,24 @@ import (
 	"github.com/kidandcat/takan/internal/store"
 )
 
-func TestAuthorizePasswordOnly(t *testing.T) {
+func TestAuthorizeRedirectsToPanelLogin(t *testing.T) {
 	st, err := store.Open(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
 	ctx := context.Background()
-	owner, err := st.BootstrapOwner(ctx, "instance-secret")
+	owner, err := st.BootstrapOwner(ctx, "owner@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	s := &Server{Store: st, PublicURL: "http://example.test"}
+	// Signed-in state is supplied by the panel; this server never sees credentials.
+	var signedIn *store.User
+	s := &Server{
+		Store: st, PublicURL: "http://example.test",
+		UserFromSession: func(*http.Request) *store.User { return signedIn },
+	}
 	mux := http.NewServeMux()
 	s.Routes(mux)
 
@@ -40,21 +45,32 @@ func TestAuthorizePasswordOnly(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oauth/authorize?"+q.Encode(), nil))
-	body, _ := io.ReadAll(rec.Body)
-	html := string(body)
-	if strings.Contains(html, "email") || strings.Contains(html, "/register") {
-		t.Fatalf("OAuth login must be password-only without register: %s", html)
+	if rec.Code != http.StatusFound {
+		body, _ := io.ReadAll(rec.Body)
+		t.Fatalf("unauthenticated authorize must redirect to /login, got %d: %s", rec.Code, body)
 	}
-	if !strings.Contains(html, "Instance password") {
-		t.Fatal("expected instance password field")
+	loc0 := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc0, "/login?next=") {
+		t.Fatalf("redirect target: %s", loc0)
+	}
+	next, err := url.QueryUnescape(strings.TrimPrefix(loc0, "/login?next="))
+	if err != nil || !strings.HasPrefix(next, "/oauth/authorize?") {
+		t.Fatalf("next should resume consent: %q err=%v", next, err)
+	}
+
+	// Once the panel session exists, consent renders and can be granted.
+	signedIn = owner
+	crec := httptest.NewRecorder()
+	mux.ServeHTTP(crec, httptest.NewRequest(http.MethodGet, "/oauth/authorize?"+q.Encode(), nil))
+	if body, _ := io.ReadAll(crec.Body); !strings.Contains(string(body), "Authorize Takan") {
+		t.Fatalf("expected consent screen: %s", body)
 	}
 
 	form := url.Values{}
 	for k, vs := range q {
 		form[k] = append([]string{}, vs...)
 	}
-	form.Set("action", "login")
-	form.Set("password", "instance-secret")
+	form.Set("action", "allow")
 	post := httptest.NewRequest(http.MethodPost, "/oauth/authorize", strings.NewReader(form.Encode()))
 	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	prec := httptest.NewRecorder()
@@ -126,11 +142,9 @@ func TestAuthorizeDoesNotBootstrap(t *testing.T) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected login re-render, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "Set the instance password in the panel first") {
-		t.Fatalf("body: %s", rec.Body.String())
+	// A stray password POST authenticates nobody: it just bounces to /login.
+	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/login?next=") {
+		t.Fatalf("expected redirect to /login, got %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	n, _ := st.UserCount(context.Background())
 	if n != 0 {

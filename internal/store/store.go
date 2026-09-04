@@ -107,6 +107,10 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		_ = node.Close()
 		return nil, err
 	}
+	if err := s.migrateLoginCodes(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -405,12 +409,6 @@ VALUES (?,?,?,?,?,?,?)`,
 		ID: id, Email: email, PasswordHash: string(hash), CreatedAt: now,
 		InviteQuota: quota, InviteUnlimited: un != 0, IsAdmin: ad != 0,
 	}, nil
-}
-
-func (s *Store) Authenticate(ctx context.Context, email, password string) (*User, error) {
-	// Single-operator: email is ignored. Only the instance password unlocks.
-	_ = email
-	return s.AuthenticatePassword(ctx, password)
 }
 
 func (s *Store) UserByID(ctx context.Context, id string) (*User, error) {

@@ -6,7 +6,7 @@ Personal **MCP hub**: one OAuth connection for AI agents (Grok, Claude, Cursor) 
 
 ## Users
 
-- One operator per instance (Jairo on takan.es; anyone who self-hosts). Panel unlock is the instance password. No household accounts or invites.
+- One operator per instance (Jairo on takan.es; anyone who self-hosts). Panel sign-in is a one-time code emailed to the owner. No passwords, no household accounts, no invites.
 
 ## Jobs to be done
 

@@ -29,7 +29,7 @@ Takan is a **single-operator personal hub**. The operator stores secrets (sessio
 | Surface | Notes |
 |---------|--------|
 | **MCP / OAuth** | Bearer access tokens; refresh rotation; any parseable `redirect_uri` (no host/scheme allowlist — personal single-tenant hub). Tool-set changes push list_changed (best-effort); no force re-auth. |
-| **Web panel** | Instance password (bcrypt on the owner row) + `takan_session` httpOnly cookie. `TAKAN_SESSION_KEY` encrypts at-rest blobs. Protect both. |
+| **Web panel** | One-time 6-digit code emailed to `TAKAN_OWNER_EMAIL` (salted-hashed, single-use, 10 min, rate-limited) + `takan_session` httpOnly cookie. `TAKAN_SESSION_KEY` encrypts at-rest blobs. Protect the mailbox and the key. |
 | **Machine agent** | Outbound WSS + `machine_bash` / AI jobs run **on the machine that installed the agent**. Treat agent tokens as root-equivalent for that host. |
 | **Mercadona** | Unofficial store API; credentials encrypted at rest with the session key material. See README disclaimer. |
 | **Email** | Resend API key encrypted at rest; only user-enabled domains may send/read. |
@@ -38,7 +38,7 @@ Takan is a **single-operator personal hub**. The operator stores secrets (sessio
 
 - Generate a long random `TAKAN_SESSION_KEY` (never use the dev default in production).
 - Bind the hub to localhost and terminate TLS at a reverse proxy (see `deploy/`).
-- Set a strong instance password before exposing the listen address. There is no public signup (`TAKAN_ALLOW_REGISTER` is ignored).
+- Set `TAKAN_OWNER_EMAIL` before exposing the listen address: whoever receives the code owns the instance. There is no public signup (`TAKAN_ALLOW_REGISTER` is ignored).
 - Rate limits: `TAKAN_AUTH_PER_MIN`, `TAKAN_MACHINE_BASH_PER_MIN`.
 - Do not commit `data/`, `.env`, or production agent tokens.
 - Rotate agent tokens if a machine is lost or shared.

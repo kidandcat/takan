@@ -3,20 +3,52 @@
   <div class="card-head">
     <div>
       {{if .NeedsSetup}}
-      <h1>Set instance password</h1>
-      <p class="muted" style="margin-top:.35rem">This Takan has one operator. Choose a strong password (min 8 characters). Anyone who can reach this form first owns the instance — bind it to localhost until this is done.</p>
+      <h1>Claim this instance</h1>
+      <p class="muted" style="margin-top:.35rem">
+        This Takan has one operator and no account yet. Send a code to the configured owner address
+        and enter it here — that first code creates the instance owner.
+      </p>
       {{else}}
-      <h1>Unlock</h1>
-      <p class="muted" style="margin-top:.35rem">Enter the instance password to open the panel.</p>
+      <h1>Sign in</h1>
+      <p class="muted" style="margin-top:.35rem">
+        Takan emails a one-time code to the operator. There is no password.
+      </p>
       {{end}}
     </div>
   </div>
+
   {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+  {{if .Notice}}<p class="ok">{{.Notice}}</p>{{end}}
+
+  {{if .CodeSent}}
   <form method="post" action="/login">
-    <label for="password">Password</label>
-    <input id="password" type="password" name="password" required minlength="8"
-      autocomplete="{{if .NeedsSetup}}new-password{{else}}current-password{{end}}"/>
-    <button type="submit" style="width:100%">{{if .NeedsSetup}}Set password{{else}}Unlock{{end}}</button>
+    {{if .LoginNext}}<input type="hidden" name="next" value="{{.LoginNext}}"/>{{end}}
+    <label for="code">6-digit code{{if .OwnerEmailMasked}} sent to {{.OwnerEmailMasked}}{{end}}</label>
+    <input id="code" type="text" name="code" required inputmode="numeric" pattern="[0-9]*"
+      maxlength="6" autocomplete="one-time-code" autofocus
+      style="letter-spacing:.35em;font-size:1.2rem;text-align:center"/>
+    <button type="submit" style="width:100%">Sign in</button>
   </form>
+  <form method="post" action="/login/send" style="margin-top:.75rem">
+    {{if .LoginNext}}<input type="hidden" name="next" value="{{.LoginNext}}"/>{{end}}
+    <button type="submit" class="secondary" style="width:100%">Send a new code</button>
+  </form>
+  <p class="faint" style="margin-top:.75rem">
+    A new code invalidates the previous one. Codes expire after 10 minutes and work once.
+  </p>
+  {{else}}
+  <form method="post" action="/login/send">
+    {{if .LoginNext}}<input type="hidden" name="next" value="{{.LoginNext}}"/>{{end}}
+    {{if .OwnerEmailMasked}}
+    <p class="muted">Code goes to <strong>{{.OwnerEmailMasked}}</strong>.</p>
+    {{else}}
+    <p class="err">No owner email configured on this instance (<code>TAKAN_OWNER_EMAIL</code>).</p>
+    {{end}}
+    <button type="submit" style="width:100%;margin-top:.75rem" {{if not .OwnerEmailMasked}}disabled{{end}}>Send code</button>
+  </form>
+  <p class="faint" style="margin-top:.75rem">
+    Already have a code? <a href="/login?sent=1{{if .LoginNext}}&next={{.LoginNext}}{{end}}">Enter it</a>.
+  </p>
+  {{end}}
 </div>
 {{end}}

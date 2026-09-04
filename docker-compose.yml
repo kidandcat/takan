@@ -1,6 +1,6 @@
 # One-command self-host:
 #   docker compose up --build
-# Then open http://localhost:8090 and set the instance password.
+# Set TAKAN_OWNER_EMAIL, then open http://localhost:8090 and sign in with an emailed code.
 #
 # On a LAN or behind TLS, set TAKAN_PUBLIC_URL to the URL browsers and MCP clients use:
 #   TAKAN_PUBLIC_URL=https://takan.example.com docker compose up --build

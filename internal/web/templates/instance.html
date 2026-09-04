@@ -3,8 +3,8 @@
   <div>
     <h1>Instance</h1>
     <p class="muted" style="margin-top:.4rem;max-width:52ch">
-      One operator. The password unlocks this panel and OAuth for Grok / Claude / Cursor.
-      Changing it signs the panel out; MCP tokens stay valid.
+      One operator. Sign-in is a one-time code emailed to the owner address — this panel and the
+      OAuth consent screen for Grok / Claude / Cursor both use it. There is no instance password.
     </p>
   </div>
 </section>
@@ -14,16 +14,17 @@
 {{end}}
 
 <section class="section">
-  <div class="section-title"><span class="dot"></span><h2>Password</h2></div>
-  <div class="card" style="max-width:28rem">
-    <form method="post" action="/dashboard/instance/password">
-      <label for="current">Current password</label>
-      <input id="current" type="password" name="current" required autocomplete="current-password"/>
-      <label for="new">New password (min 8)</label>
-      <input id="new" type="password" name="new" required minlength="8" autocomplete="new-password"/>
-      <label for="confirm">Confirm new password</label>
-      <input id="confirm" type="password" name="confirm" required minlength="8" autocomplete="new-password"/>
-      <button type="submit" style="margin-top:1rem">Change password</button>
+  <div class="section-title"><span class="dot"></span><h2>Sign-in</h2></div>
+  <div class="card" style="max-width:34rem">
+    <ul class="mod-facts">
+      <li><span>Owner address: <strong>{{if .OwnerEmailMasked}}{{.OwnerEmailMasked}}{{else}}not configured{{end}}</strong></span></li>
+      <li><span>Set with <code>TAKAN_OWNER_EMAIL</code> in the service environment; falls back to the address on the owner row.</span></li>
+      <li><span>Codes are 6 digits, single-use, valid 10 minutes, stored salted-hashed. Issuing a new one invalidates the previous.</span></li>
+      <li><span>Sending uses the stored Resend key directly, so login keeps working even if the Email module is toggled off. Override the From address with <code>TAKAN_AUTH_EMAIL_FROM</code>.</span></li>
+      <li><span>Signing out drops this browser session only; MCP tokens and other sessions stay valid.</span></li>
+    </ul>
+    <form method="post" action="/logout" style="margin-top:1rem">
+      <button type="submit" class="secondary">Sign out of this browser</button>
     </form>
   </div>
 </section>

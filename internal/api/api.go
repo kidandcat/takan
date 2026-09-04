@@ -1,11 +1,13 @@
 // Package api serves the JSON REST API for the Takan mobile app (and future clients).
-// Auth: OAuth-style access/refresh tokens issued via POST /api/v1/auth/login.
+// Auth: request a one-time code with POST /api/v1/auth/send-code, then exchange
+// it for access/refresh tokens with POST /api/v1/auth/login.
 package api
 
 import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -32,9 +34,16 @@ type Server struct {
 	AuthRateLimit func(key string) bool
 	// StatusJSON optional: modules.Provider.status — inject from main.
 	StatusJSON func(ctx context.Context, userID string) (string, error)
+	// SendLoginCode delivers a one-time login code by email (same sender as the panel).
+	SendLoginCode func(ctx context.Context, to, code string, ttl time.Duration) (string, error)
+	// OwnerEmail is TAKAN_OWNER_EMAIL; it wins over the address stored in the DB.
+	OwnerEmail string
+	// LoginCodeRateLimit throttles "send code" requests (per IP and globally).
+	LoginCodeRateLimit func(key string) bool
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/auth/send-code", s.sendLoginCode)
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("POST /api/v1/auth/refresh", s.refresh)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
@@ -128,27 +137,81 @@ func userJSON(u *store.User) map[string]any {
 
 // --- auth ---
 
+// sendLoginCode emails a one-time code to the operator. The response never
+// reveals the address or whether an owner exists.
+func (s *Server) sendLoginCode(w http.ResponseWriter, r *http.Request) {
+	ip := s.clientIP(r)
+	if s.LoginCodeRateLimit != nil &&
+		(!s.LoginCodeRateLimit("api-login-code:"+ip) || !s.LoginCodeRateLimit("login-code:global")) {
+		s.writeErr(w, http.StatusTooManyRequests, "too many code requests")
+		return
+	}
+	email := s.ownerEmail(r.Context())
+	if email == "" {
+		s.writeErr(w, http.StatusServiceUnavailable, "no owner email configured on this instance")
+		return
+	}
+	if s.SendLoginCode == nil {
+		s.writeErr(w, http.StatusServiceUnavailable, "email sending is not configured")
+		return
+	}
+	code, err := s.Store.IssueLoginCode(r.Context(), email, store.LoginCodeTTL)
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "could not issue a code")
+		return
+	}
+	if _, err := s.SendLoginCode(r.Context(), email, code, store.LoginCodeTTL); err != nil {
+		log.Printf("api login code send failed: %v", err)
+		s.writeErr(w, http.StatusBadGateway, "could not send the email")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"sent":       true,
+		"expires_in": int(store.LoginCodeTTL.Seconds()),
+	})
+}
+
+// ownerEmail resolves the configured owner address (env wins over the DB row).
+func (s *Server) ownerEmail(ctx context.Context) string {
+	if e := strings.ToLower(strings.TrimSpace(s.OwnerEmail)); e != "" {
+		return e
+	}
+	return s.Store.OwnerEmail(ctx)
+}
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if s.AuthRateLimit != nil && !s.AuthRateLimit("api-login:"+s.clientIP(r)) {
 		s.writeErr(w, http.StatusTooManyRequests, "too many attempts")
 		return
 	}
 	var body struct {
-		Email    string `json:"email"` // ignored; kept so existing mobile clients keep working
-		Password string `json:"password"`
+		Email string `json:"email"` // ignored; kept so existing mobile clients keep working
+		Code  string `json:"code"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		s.writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if body.Password == "" {
-		s.writeErr(w, http.StatusBadRequest, "password required")
+	if strings.TrimSpace(body.Code) == "" {
+		s.writeErr(w, http.StatusBadRequest, "code required — call POST /api/v1/auth/send-code first")
 		return
 	}
-	u, err := s.Store.AuthenticatePassword(r.Context(), body.Password)
-	if err != nil {
-		s.writeErr(w, http.StatusUnauthorized, "invalid credentials")
+	email := s.ownerEmail(r.Context())
+	if email == "" {
+		s.writeErr(w, http.StatusServiceUnavailable, "no owner email configured on this instance")
 		return
+	}
+	if err := s.Store.ConsumeLoginCode(r.Context(), email, body.Code); err != nil {
+		s.writeErr(w, http.StatusUnauthorized, "invalid or expired code")
+		return
+	}
+	u, err := s.Store.Owner(r.Context())
+	if err != nil || u == nil {
+		u, err = s.Store.BootstrapOwner(r.Context(), email)
+		if err != nil {
+			s.writeErr(w, http.StatusInternalServerError, "could not initialize the instance")
+			return
+		}
 	}
 	access, exp, err := s.Store.IssueAccessToken(r.Context(), u.ID, clientMobile, scopeMobile, accessTokenTTL)
 	if err != nil {

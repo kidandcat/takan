@@ -15,7 +15,7 @@ go run ./cmd/takan
 
 Self-host via Docker: `docker compose up --build` (see README). Do not point `takan-agent --url` at someone else's hub.
 
-Panel: open `TAKAN_PUBLIC_URL`. First visit sets the instance password.
+Panel: open `TAKAN_PUBLIC_URL` and press **Send code** (needs `TAKAN_OWNER_EMAIL` plus a stored Resend key). The first verified code creates the owner.
 
 ## Pull requests
 

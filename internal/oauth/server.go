@@ -106,6 +106,13 @@ func parseRedirectURIs(r *http.Request) []string {
 	return body.RedirectURIs
 }
 
+// redirectToLogin sends the browser to the panel login, remembering the
+// authorize request so consent resumes after the code is verified.
+func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request, q url.Values) {
+	next := "/oauth/authorize?" + q.Encode()
+	http.Redirect(w, r, "/login?next="+url.QueryEscape(next), http.StatusFound)
+}
+
 func (s *Server) authorizeGET(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if err := s.validateAuthorizeQuery(q); err != nil {
@@ -117,7 +124,7 @@ func (s *Server) authorizeGET(w http.ResponseWriter, r *http.Request) {
 		user = s.UserFromSession(r)
 	}
 	if user == nil {
-		s.renderLogin(w, q, "")
+		s.redirectToLogin(w, r, q)
 		return
 	}
 	s.renderConsent(w, q, "")
@@ -142,32 +149,11 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 		user = s.UserFromSession(r)
 	}
 
-	if action == "login" || user == nil {
-		if s.RateLimit != nil && !s.RateLimit("oauth-login:"+clientIP(r)) {
-			s.renderLogin(w, q, "Too many attempts — try again later")
-			return
-		}
-		if n, err := s.Store.UserCount(r.Context()); err != nil || n == 0 {
-			s.renderLogin(w, q, "Set the instance password in the panel first")
-			return
-		}
-		u, err := s.Store.AuthenticatePassword(r.Context(), r.FormValue("password"))
-		if err != nil {
-			s.renderLogin(w, q, "Invalid password")
-			return
-		}
-		if s.CreateSession != nil {
-			tok, err := s.CreateSession(r.Context(), u.ID)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			if s.SetSessionCookie != nil {
-				s.SetSessionCookie(w, tok)
-			}
-		}
-		user = u
-		action = "allow"
+	// Sign-in is the panel's emailed-code flow; this server never sees a
+	// credential. Unauthenticated consent bounces through /login and comes back.
+	if user == nil {
+		s.redirectToLogin(w, r, q)
+		return
 	}
 
 	if action != "allow" {

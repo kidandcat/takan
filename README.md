@@ -48,7 +48,8 @@ JSON REST for the Flutter app (`takan-app`). Bearer access tokens (same store as
 
 | Method | Path | Notes |
 |--------|------|--------|
-| POST | `/api/v1/auth/login` | `{password}` (email ignored) → access + refresh |
+| POST | `/api/v1/auth/send-code` | emails a one-time code to the owner |
+| POST | `/api/v1/auth/login` | `{code}` (email ignored) → access + refresh |
 | POST | `/api/v1/auth/refresh` | rotate refresh |
 | POST | `/api/v1/auth/logout` | revoke access |
 | GET | `/api/v1/me` | current user |
@@ -66,8 +67,8 @@ Credential reads for agents still use vault grants (`secrets_request` → approv
 
 One process = one operator. There is no signup, invite, or admin/user split. See [TAKAN_SINGLE_OPERATOR.md](TAKAN_SINGLE_OPERATOR.md).
 
-- **Panel:** first visit sets the instance password; afterwards `POST /login` is password-only unlock (httpOnly session cookie, rate-limited).
-- **MCP / Grok:** OAuth 2.1 + PKCE + DCR. The browser asks for the same instance password. Tokens still store an internal `user_id` (the owner row) so existing connectors keep working.
+- **Panel:** sign-in is a 6-digit one-time code emailed to `TAKAN_OWNER_EMAIL` (single-use, 10 min, rate-limited). There is no password. The first verified code also creates the owner.
+- **MCP / Grok:** OAuth 2.1 + PKCE + DCR. `/oauth/authorize` has no credential form: it bounces to `/login` and resumes consent afterwards. Tokens still store an internal `user_id` (the owner row) so existing connectors keep working.
 - Module tables remain keyed by that owner id. `TAKAN_ALLOW_REGISTER` is ignored.
 - OAuth: PKCE; any parseable `redirect_uri`; access tokens 24h; refresh rotates (30d).
 
@@ -93,7 +94,7 @@ go test ./...
 go run ./cmd/takan
 ```
 
-Open the public URL. First visit sets the instance password (bind to localhost until then).
+Set `TAKAN_OWNER_EMAIL`, open the public URL and press **Send code**. The first verified code creates the owner.
 
 ### Agent (local)
 
@@ -106,7 +107,7 @@ Create a machine in the panel to get the install one-liner / token.
 
 ## Self-hosting
 
-Takan is a **single-operator personal hub**: you run it, you set the instance password. It is not a multi-tenant SaaS. There is no signup or invites (`TAKAN_ALLOW_REGISTER` is ignored). See [TAKAN_SINGLE_OPERATOR.md](TAKAN_SINGLE_OPERATOR.md).
+Takan is a **single-operator personal hub**: you run it, and login codes go to your address. It is not a multi-tenant SaaS. There is no signup or invites (`TAKAN_ALLOW_REGISTER` is ignored). See [TAKAN_SINGLE_OPERATOR.md](TAKAN_SINGLE_OPERATOR.md).
 
 ### Docker Compose (recommended)
 
@@ -116,7 +117,7 @@ cd takan
 docker compose up --build
 ```
 
-Open http://localhost:8090 and set the instance password. Create a machine in the panel, then on each PC:
+Open http://localhost:8090 and sign in with an emailed code. Create a machine in the panel, then on each PC:
 
 ```bash
 curl -fsSL http://localhost:8090/install.sh | bash -s -- <agent-token>
@@ -153,7 +154,7 @@ MCP URL for Grok / Claude / Cursor: `http://localhost:8090/mcp`.
 
 5. **Agent binaries** — put `takan-agent-<os>-<arch>` in `TAKAN_AGENT_BIN_DIR` (default `/opt/takan/agents`) so `/install.sh` works. The Docker image already includes linux/darwin amd64+arm64.
 
-6. **Set the instance password** on the panel, create machines, enable modules, paste the MCP URL into your AI client.
+6. **Sign in with an emailed code** on the panel, create machines, enable modules, paste the MCP URL into your AI client.
 
 OSS packaging notes (what is in / out of a hosted SaaS): [TAKAN_OSS_SELFHOST.md](TAKAN_OSS_SELFHOST.md).
 
