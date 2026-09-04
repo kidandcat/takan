@@ -77,7 +77,7 @@ func (a *Assistant) deliverJobResult(ctx context.Context, machineName string, jo
 
 	// Emit mirrors the owner's copy into the durable history, so the phone app
 	// shows the same result the chat just received.
-	if err := a.Bot.Emit(ctx, Outbound{
+	if _, err := a.Bot.Emit(ctx, Outbound{
 		ChatID: target, Text: FormatJobResult(machineName, job), Source: SourceJob,
 	}); err != nil {
 		return err

@@ -43,7 +43,7 @@ func (a *Assistant) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	// Emit is the one exit for outbound messages: it sends to Telegram and
 	// mirrors the owner's copy into the app history in the same step.
-	if err := a.Bot.Emit(ctx, Outbound{
+	if _, err := a.Bot.Emit(ctx, Outbound{
 		ChatID: req.ChatID, Text: text, File: req.File, Source: SourceSend,
 	}); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())

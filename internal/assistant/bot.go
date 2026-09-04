@@ -751,7 +751,7 @@ func (b *Bot) deliverNotice(ctx context.Context, chatID int64, hasTG bool, text 
 	if b.noticeHook != nil {
 		b.noticeHook(text)
 	}
-	if err := b.Emit(ctx, Outbound{
+	if _, err := b.Emit(ctx, Outbound{
 		ChatID: chatID, Text: text, Source: SourceApp, Event: EventDone, SkipTelegram: !hasTG,
 	}); err != nil {
 		log.Printf("failed to send notice: %v", err)
@@ -849,7 +849,7 @@ func (b *Bot) persistTelegramInbound(chatID int64, batch []*queuedMsg) {
 
 // deliverAssistant closes a conversational turn with the agent's answer.
 func (b *Bot) deliverAssistant(ctx context.Context, chatID int64, hasTG bool, text string) {
-	if err := b.Emit(ctx, Outbound{
+	if _, err := b.Emit(ctx, Outbound{
 		ChatID: chatID, Text: text, Source: SourceApp, Event: EventDone, SkipTelegram: !hasTG,
 	}); err != nil {
 		log.Printf("failed to send reply: %v", err)
@@ -864,7 +864,7 @@ func (b *Bot) deliverError(ctx context.Context, chatID int64, hasTG bool, text s
 // emitError is the error-shaped Emit, used for both turn failures and the
 // daemon's own "something went wrong" notices.
 func (b *Bot) emitError(ctx context.Context, chatID int64, skipTelegram bool, text string) {
-	if err := b.Emit(ctx, Outbound{
+	if _, err := b.Emit(ctx, Outbound{
 		ChatID: chatID, Text: text, Source: SourceApp, Event: EventError, SkipTelegram: skipTelegram,
 	}); err != nil {
 		log.Printf("failed to send error: %v", err)

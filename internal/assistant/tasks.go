@@ -156,7 +156,7 @@ func (m *TaskManager) announceTo(chatID int64, text string) {
 		log.Printf("tasks: no delivery channel available for: %s", tg.TruncateRunes(text, 200))
 		return
 	}
-	if err := m.out.Emit(context.Background(), Outbound{
+	if _, err := m.out.Emit(context.Background(), Outbound{
 		ChatID: chatID, Text: text, Source: SourceSend,
 	}); err != nil {
 		log.Printf("tasks: failed to deliver to chat %d: %v", chatID, err)

@@ -474,7 +474,8 @@ func (s *Scheduler) execute(ctx context.Context, job Job, late bool) error {
 
 	switch job.Type {
 	case JobMessage:
-		return s.out.Emit(ctx, Outbound{ChatID: target, Text: prefix + job.Payload, Source: SourceSend})
+		_, err := s.out.Emit(ctx, Outbound{ChatID: target, Text: prefix + job.Payload, Source: SourceSend})
+		return err
 
 	case JobAgent:
 		// Routines run in their own directory with a fresh session so they never
@@ -490,10 +491,12 @@ func (s *Scheduler) execute(ctx context.Context, job Job, late bool) error {
 				s.tasks.NoteRateLimited()
 			}
 			log.Printf("scheduler: agent job %s stderr: %s", job.ID, tg.TruncateRunes(res.Stderr, 2000))
-			return s.out.Emit(ctx, Outbound{ChatID: target, Source: SourceSend, Event: EventError,
+			_, sendErr := s.out.Emit(ctx, Outbound{ChatID: target, Source: SourceSend, Event: EventError,
 				Text: fmt.Sprintf("%sLa rutina %q ha fallado: %s", prefix, job.Name, tg.TruncateRunes(err.Error(), 200))})
+			return sendErr
 		}
-		return s.out.Emit(ctx, Outbound{ChatID: target, Text: prefix + res.Stdout, Source: SourceSend})
+		_, sendErr := s.out.Emit(ctx, Outbound{ChatID: target, Text: prefix + res.Stdout, Source: SourceSend})
+		return sendErr
 	}
 	return fmt.Errorf("unknown job type %q", job.Type)
 }

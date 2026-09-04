@@ -37,6 +37,9 @@ type Config struct {
 	FirebaseServiceAccount string
 	// LegacyDir is the standalone daemon's data directory, imported once.
 	LegacyDir string
+	// TelegramAPIBase overrides the Bot API host. Empty means Telegram's own;
+	// it exists for a self-hosted Bot API server and for tests.
+	TelegramAPIBase string
 }
 
 // Assistant is the personal assistant running inside the hub process.
@@ -103,7 +106,7 @@ func New(ctx context.Context, st *store.Store, box *cryptox.Box, hub *agenthub.H
 		}
 	}
 
-	client := tg.New(token)
+	client := tg.NewWithBase(token, cfg.TelegramAPIBase)
 	push, err := NewPushSender(ctx, cfg.FirebaseServiceAccount)
 	if err != nil {
 		return nil, err
@@ -214,16 +217,24 @@ func (a *Assistant) Notify(ctx context.Context, userID, text string) error {
 	if userID != "" && userID != a.OwnerID {
 		return fmt.Errorf("assistant: %s is not the operator", userID)
 	}
-	return a.Bot.Emit(ctx, Outbound{Text: text, Source: SourceSend})
+	_, err := a.Bot.Emit(ctx, Outbound{Text: text, Source: SourceSend})
+	return err
 }
 
-// SendTelegram delivers a message to a chat, defaulting to the owner DM. It
-// backs the telegram_send MCP tool.
+// SendTelegram delivers a message to a chat, defaulting to the owner's own
+// chat. It backs the telegram_send MCP tool, and goes through Emit like
+// everything else: a message another agent sends the operator belongs in his
+// app history too.
 func (a *Assistant) SendTelegram(ctx context.Context, chatID int64, text, parseMode string) (int64, error) {
-	if chatID == 0 {
-		chatID = a.OwnerTelegram
+	if strings.TrimSpace(parseMode) == "" {
+		// Explicitly plain, so Emit takes the single-message path and can report
+		// a message id back to the caller.
+		parseMode = "plain"
 	}
-	return a.Bot.tg.SendMessage(ctx, chatID, text, parseMode)
+	receipt, err := a.Bot.Emit(ctx, Outbound{
+		ChatID: chatID, Text: text, Source: SourceSend, ParseMode: parseMode,
+	})
+	return receipt.MessageID, err
 }
 
 // Status is the panel and takan_status view of the assistant.

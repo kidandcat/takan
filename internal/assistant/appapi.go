@@ -222,7 +222,7 @@ func (b *Bot) handleAppNotify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "text or file is required")
 		return
 	}
-	if err := b.Emit(r.Context(), Outbound{
+	if _, err := b.Emit(r.Context(), Outbound{
 		Text: text, File: req.File, Source: SourceSend, SkipTelegram: true,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not persist message")

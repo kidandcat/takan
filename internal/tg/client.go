@@ -18,18 +18,32 @@ import (
 // message.
 const MaxMessageRunes = 4096
 
+// DefaultAPIBase is Telegram's own Bot API host.
+const DefaultAPIBase = "https://api.telegram.org"
+
 // Client is a minimal Bot API client built on the standard library.
 type Client struct {
-	token  string
+	token string
+	// base is the API host. It is overridable for a self-hosted Bot API server,
+	// and so tests never reach the real Telegram.
+	base   string
 	client *http.Client
 	// pollClient uses a longer timeout because getUpdates blocks server-side.
 	pollClient *http.Client
 }
 
 // New builds a client for the given bot token.
-func New(token string) *Client {
+func New(token string) *Client { return NewWithBase(token, DefaultAPIBase) }
+
+// NewWithBase builds a client against a specific Bot API host.
+func NewWithBase(token, base string) *Client {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		base = DefaultAPIBase
+	}
 	return &Client{
 		token:      strings.TrimSpace(token),
+		base:       base,
 		client:     &http.Client{Timeout: 60 * time.Second},
 		pollClient: &http.Client{Timeout: 120 * time.Second},
 	}
@@ -44,7 +58,7 @@ type apiResponse struct {
 }
 
 func (c *Client) endpoint(method string) string {
-	return "https://api.telegram.org/bot" + c.token + "/" + method
+	return c.base + "/bot" + c.token + "/" + method
 }
 
 // call posts a JSON payload to a Bot API method and decodes result into out.
@@ -219,7 +233,7 @@ func (c *Client) GetFile(ctx context.Context, fileID string) (*File, error) {
 
 // DownloadFile fetches a resolved file and writes it to dst.
 func (c *Client) DownloadFile(ctx context.Context, filePath, dst string) error {
-	rawURL := "https://api.telegram.org/file/bot" + c.token + "/" + filePath
+	rawURL := c.base + "/file/bot" + c.token + "/" + filePath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
