@@ -118,6 +118,10 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		_ = node.Close()
 		return nil, err
 	}
+	if err := s.migrateRuntimeBundles(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

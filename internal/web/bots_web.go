@@ -10,8 +10,17 @@ import (
 	botsmod "github.com/kidandcat/takan/modules/bots"
 )
 
+// runtimeBundleImportHint is the command that captures a bundle on the hub
+// host. It is shown, never run: the panel deliberately has no upload form, so
+// the only way in is an operator with shell on the hub.
+const runtimeBundleImportHint = `takan bundle import \
+  --grok-home /home/debian/.grok \
+  --atlas-data /home/debian/atlas-data \
+  --env /home/debian/atlas.env`
+
 // fillBotsDashboard loads bots + their chats for the Bots page and overview card.
 func (s *Server) fillBotsDashboard(ctx context.Context, u *store.User, data *pageData) {
+	s.fillRuntimeBundle(ctx, u, data)
 	list, err := s.Store.ListBots(ctx, u.ID)
 	if err != nil {
 		return
@@ -51,6 +60,21 @@ func (s *Server) fillBotsDashboard(ctx context.Context, u *store.User, data *pag
 		}
 		data.Bots = append(data.Bots, bv)
 	}
+}
+
+// fillRuntimeBundle reports presence and inventory of the account's bundle.
+// It never unseals it: only the clear metadata columns are read.
+func (s *Server) fillRuntimeBundle(ctx context.Context, u *store.User, data *pageData) {
+	data.RuntimeBundle.ImportHint = runtimeBundleImportHint
+	row, err := s.Store.RuntimeBundle(ctx, u.ID)
+	if err != nil || row == nil {
+		return
+	}
+	data.RuntimeBundle.Present = true
+	data.RuntimeBundle.Source = row.SourceName
+	data.RuntimeBundle.GrokVersion = row.GrokVersion
+	data.RuntimeBundle.Updated = row.UpdatedAt.UTC().Format("2006-01-02 15:04")
+	data.RuntimeBundle.Components = row.Components
 }
 
 func botChatViewOf(b store.Bot, c store.BotChat) botChatView {

@@ -216,6 +216,55 @@
   <div class="card">
     <div class="card-head">
       <div>
+        <h3>Runtime bundle</h3>
+        <p class="muted">
+          The brain a freshly provisioned bot receives: the grok CLI credentials and config, the
+          transcription key and the daemon's base config. Sealed with the vault key, handed out only
+          over a run-scoped provision ticket, never shown here.
+        </p>
+      </div>
+      {{if .RuntimeBundle.Present}}
+        <span class="pill on">imported</span>
+      {{else}}
+        <span class="pill off">missing</span>
+      {{end}}
+    </div>
+    {{if .RuntimeBundle.Present}}
+    <p class="faint">
+      from <strong>{{.RuntimeBundle.Source}}</strong>
+      {{if .RuntimeBundle.GrokVersion}} · grok {{.RuntimeBundle.GrokVersion}}{{end}}
+      · updated {{.RuntimeBundle.Updated}}
+    </p>
+    <table class="data-table" style="margin-top:.6rem">
+      <thead><tr><th>Component</th><th>Size</th></tr></thead>
+      <tbody>
+        {{range .RuntimeBundle.Components}}
+        <tr><td class="mono">{{.Name}}</td><td>{{.Bytes}} bytes</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+    <p class="muted" style="margin-top:.6rem">Re-run the import to refresh it (for example after the grok credentials rotate):</p>
+    {{else}}
+    <p class="muted">
+      No bundle yet, so a provisioned daemon installs and runs but cannot answer. Capture one on the
+      hub host, from a machine that already has a working daemon:
+    </p>
+    {{end}}
+    <div class="code-wrap">
+      <pre id="bundle-import">{{.RuntimeBundle.ImportHint}}</pre>
+      <button type="button" class="copy-btn" onclick="copyText('bundle-import', this)">Copy</button>
+    </div>
+    <p class="faint" style="margin-top:.5rem">
+      The import is read-only on the source files and asserts their ownership is unchanged
+      afterwards. There is no upload form on purpose: the bundle only enters through a shell on this
+      host.
+    </p>
+  </div>
+</section>
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
         <h3>Daemon API</h3>
         <p class="muted">Authenticated with the bot token (<code>Authorization: Bearer …</code>).</p>
       </div>
@@ -230,6 +279,7 @@
         <tr><td class="mono">GET /api/bots/deliveries</td><td>outbox (AI job results); <code>wait</code> for long-poll</td></tr>
         <tr><td class="mono">POST /api/bots/deliveries/ack</td><td>confirm what was forwarded; unacked deliveries come back</td></tr>
         <tr><td class="mono">GET /api/bots/binary?os=&amp;arch=</td><td>daemon binary (agent token or provision ticket)</td></tr>
+        <tr><td class="mono">GET /api/bots/provision/bundle</td><td>runtime bundle as a tar (provision ticket only)</td></tr>
       </tbody>
     </table>
     <p class="muted" style="margin-top:.6rem">

@@ -36,6 +36,16 @@ import (
 )
 
 func main() {
+	// Subcommands are operator tools run on the hub host, not server modes.
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		switch os.Args[1] {
+		case "bundle":
+			os.Exit(runBundleCLI(os.Args[2:]))
+		default:
+			log.Fatalf("unknown command %q (known: bundle)", os.Args[1])
+		}
+	}
+
 	cfg := config.Load()
 	if cfg.SessionKey == "dev-insecure-change-me" {
 		log.Printf("WARNING: TAKAN_SESSION_KEY is the insecure default — set a random key before storing secrets")
@@ -169,6 +179,7 @@ func main() {
 		PublicURL: cfg.PublicURL,
 		Token:     tgSvc.Token,
 		Notify:    tgSvc.Notifier(),
+		Box:       box,
 	}
 
 	prov := &modules.Provider{

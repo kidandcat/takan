@@ -45,6 +45,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/bots/deliveries/ack", s.ackDeliveries)
 	// Provisioning: ticket-authenticated, used by the generated install script.
 	mux.HandleFunc("GET /api/bots/provision/env", s.provisionEnv)
+	mux.HandleFunc("GET /api/bots/provision/bundle", s.provisionBundle)
 	mux.HandleFunc("GET /api/bots/binary", s.serveBinary)
 }
 

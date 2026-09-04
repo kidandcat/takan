@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kidandcat/takan/internal/agenthub"
+	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/store"
 )
 
@@ -53,6 +54,10 @@ type Provisioner struct {
 	Notify Notifier
 	// BinDir overrides DefaultBotBinDir.
 	BinDir string
+	// Box unseals the runtime bundle (grok CLI credentials + daemon config).
+	// Without it the bundle endpoint 404s and provisioning still installs a
+	// daemon, it just has no brain.
+	Box *cryptox.Box
 }
 
 func (p *Provisioner) binDir() string {
@@ -202,10 +207,12 @@ if ! command -v systemctl >/dev/null 2>&1; then
   echo "takan-provision: this machine has no systemd; bot provisioning supports Linux/systemd hosts only" >&2
   exit 78
 fi
-if ! command -v curl >/dev/null 2>&1; then
-  echo "takan-provision: curl is required on the target machine" >&2
-  exit 78
-fi
+for tool in curl tar; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "takan-provision: $tool is required on the target machine" >&2
+    exit 78
+  fi
+done
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
@@ -226,12 +233,21 @@ UNIT=/etc/systemd/system/$INSTANCE.service
 ENVDIR=/etc/$INSTANCE
 ENVFILE=$ENVDIR/$INSTANCE.env
 BIN=/usr/local/bin/$INSTANCE
+SVCHOME=` + shellQuote(DefaultServiceHome) + `
+GROKHOME=$SVCHOME/.grok
+DATADIR=/var/lib/$INSTANCE
 TMPBIN="$(mktemp)"
-trap 'rm -f "$TMPBIN"' EXIT
+BUNDLEDIR="$(mktemp -d)"
+trap 'rm -f "$TMPBIN"; rm -rf "$BUNDLEDIR"' EXIT
 
 # A unit we did not write belongs to the operator: adopt it instead of
 # replacing it. Adoption only adds an environment drop-in, so the original unit,
 # its ExecStart, its user and its binary are all left exactly as they are.
+#
+# This guard runs BEFORE anything is written, because the runtime bundle below
+# writes into the service user's home and data directory: on an adopted unit
+# those belong to the operator, and re-owning them is exactly the incident
+# TAKAN_BOTS.md section 9 exists to prevent.
 MODE=install
 if [ -e "$UNIT" ] && ! grep -qF ` + shellQuote(UnitMarker) + ` "$UNIT" 2>/dev/null; then
   MODE=adopt
@@ -242,7 +258,7 @@ $SUDO mkdir -p "$ENVDIR"
 
 # Secrets travel in the response body, never on a command line.
 curl -fsS --max-time 60 -H "Authorization: Bearer $TICKET" \
-  "$HUB/api/bots/provision/env" | $SUDO tee "$ENVFILE" >/dev/null
+  "$HUB/api/bots/provision/env?mode=$MODE" | $SUDO tee "$ENVFILE" >/dev/null
 $SUDO chmod 600 "$ENVFILE"
 
 if [ "$MODE" = install ]; then
@@ -253,6 +269,78 @@ if [ "$MODE" = install ]; then
     exit 1
   fi
   $SUDO install -m 0755 "$TMPBIN" "$BIN"
+  # The daemon dispatches on argv[0] for its helper CLIs, and the workspace
+  # guide tells the agent to call them by name.
+  for helper in send sched task; do
+    $SUDO ln -sf "$BIN" "/usr/local/bin/$INSTANCE-$helper"
+  done
+  $SUDO install -d -m 0700 "$DATADIR"
+  $SUDO install -d -m 0755 "$DATADIR/workspace"
+
+  # --- runtime bundle: the daemon's brain ---
+  # grok CLI + its subscription credentials + the base daemon config, fetched
+  # over the same run-scoped ticket. Absent bundle is not fatal: the daemon
+  # installs and runs, it just cannot answer until one is imported.
+  if curl -fsS --max-time 120 -H "Authorization: Bearer $TICKET" \
+      "$HUB/api/bots/provision/bundle" -o "$BUNDLEDIR/bundle.tar"; then
+    tar -xf "$BUNDLEDIR/bundle.tar" -C "$BUNDLEDIR"
+    $SUDO install -d -m 0700 "$GROKHOME"
+
+    # Install the CLI only when the machine has none. Never replace an existing
+    # grok or an existing /usr/local/bin/grok wrapper: on the hub host that
+    # wrapper carries a root-drop guard that must survive (section 9).
+    if ! command -v grok >/dev/null 2>&1 && [ ! -x "$GROKHOME/bin/grok" ]; then
+      GROKVER=""
+      if [ -f "$BUNDLEDIR/grok-version" ]; then
+        GROKVER="$(tr -d '[:space:]' < "$BUNDLEDIR/grok-version")"
+      fi
+      INSTALLER="$BUNDLEDIR/grok-install.sh"
+      if curl -fsSL --max-time 120 https://x.ai/cli/install.sh -o "$INSTALLER"; then
+        # Pinned version first (the same build the bundle came from), latest as
+        # the fallback when that version is no longer published.
+        if [ -n "$GROKVER" ] && $SUDO env HOME="$SVCHOME" bash "$INSTALLER" "$GROKVER" >/dev/null 2>&1; then
+          :
+        elif $SUDO env HOME="$SVCHOME" bash "$INSTALLER" >/dev/null 2>&1; then
+          :
+        else
+          echo "takan-provision: grok CLI install failed; $INSTANCE will run but cannot answer" >&2
+        fi
+      else
+        echo "takan-provision: could not download the grok installer" >&2
+      fi
+    fi
+    if [ ! -e /usr/local/bin/grok ] && [ -x "$GROKHOME/bin/grok" ]; then
+      $SUDO tee /usr/local/bin/grok >/dev/null <<GROKEOF
+#!/bin/bash
+` + UnitMarker + `
+# grok wrapper for the $INSTANCE service user. That user is root here (the
+# generated unit sets no User=), so there is nobody to drop privileges to; on a
+# host where grok belongs to a human, this file is never written.
+export HOME=$SVCHOME
+export XDG_CONFIG_HOME=$SVCHOME/.config
+export PATH="$GROKHOME/bin:\$PATH"
+exec $GROKHOME/bin/grok "\$@"
+GROKEOF
+      $SUDO chmod 0755 /usr/local/bin/grok
+    fi
+
+    # Credentials are refreshed on every run; the operator-tunable files are
+    # only seeded, so a local edit survives a re-provision.
+    if [ -f "$BUNDLEDIR/grok/auth.json" ]; then
+      $SUDO install -m 0600 "$BUNDLEDIR/grok/auth.json" "$GROKHOME/auth.json"
+    fi
+    if [ -f "$BUNDLEDIR/grok/config.toml" ]; then
+      $SUDO install -m 0600 "$BUNDLEDIR/grok/config.toml" "$GROKHOME/config.toml"
+    fi
+    if [ -f "$BUNDLEDIR/data/config.toml" ] && [ ! -f "$DATADIR/config.toml" ]; then
+      $SUDO install -m 0600 "$BUNDLEDIR/data/config.toml" "$DATADIR/config.toml"
+    fi
+    if [ -f "$BUNDLEDIR/data/workspace/AGENTS.md" ] && [ ! -f "$DATADIR/workspace/AGENTS.md" ]; then
+      $SUDO install -m 0644 "$BUNDLEDIR/data/workspace/AGENTS.md" "$DATADIR/workspace/AGENTS.md"
+    fi
+  else
+    echo "takan-provision: no runtime bundle on the hub; $INSTANCE will run without grok credentials" >&2
+  fi
 
   $SUDO tee "$UNIT" >/dev/null <<UNITEOF
 ` + UnitMarker + `
@@ -264,13 +352,17 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENVFILE
+Environment=HOME=$SVCHOME
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$GROKHOME/bin
+WorkingDirectory=$DATADIR
 ExecStart=$BIN
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
-MemoryMax=512M
+MemoryMax=1G
 MemorySwapMax=0
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
@@ -370,7 +462,7 @@ func (s *Server) provisionEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	hub := strings.TrimSuffix(s.PublicURL, "/")
 
-	// Exactly the four variables the daemon reads (see TAKAN_BOTS.md).
+	// The four variables the daemon has always read (see TAKAN_BOTS.md §5).
 	var b strings.Builder
 	b.WriteString("# Generated by Takan. Do not edit; re-provision from the panel instead.\n")
 	writeEnv(&b, "TELEGRAM_BOT_TOKEN", token)
@@ -378,9 +470,61 @@ func (s *Server) provisionEnv(w http.ResponseWriter, r *http.Request) {
 	writeEnv(&b, "TAKAN_HUB_URL", hub)
 	writeEnv(&b, "TAKAN_BOT_TOKEN", hubToken)
 
+	// The data directory is only ours to set when Takan wrote the unit:
+	// repointing an adopted daemon's data dir would orphan its state.
+	if r.URL.Query().Get("mode") != "adopt" {
+		writeEnv(&b, "ATLAS_DATA_DIR", BundleDataDir(bot.Instance))
+	}
+	// GROQ_API_KEY (voice transcription) rides the runtime bundle and is safe
+	// to hand an adopted daemon too — it adds a capability, it moves nothing.
+	if bundle, err := s.bundleFor(r.Context(), bot.UserID); err == nil && bundle != nil && bundle.GroqAPIKey != "" {
+		writeEnv(&b, "GROQ_API_KEY", bundle.GroqAPIKey)
+	}
+
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(b.String())) // safe-ignore: response already committed; the client is gone
+}
+
+// bundleFor unseals the account's runtime bundle, or returns (nil, nil) when
+// there is none (or no key configured) — provisioning still works without it.
+func (s *Server) bundleFor(ctx context.Context, userID string) (*Bundle, error) {
+	if s.Provision == nil || s.Provision.Box == nil {
+		return nil, nil
+	}
+	row, err := s.Store.RuntimeBundle(ctx, userID)
+	if err != nil || row == nil {
+		return nil, err
+	}
+	return OpenBundle(s.Provision.Box, row.PayloadEnc)
+}
+
+// provisionBundle serves the runtime bundle as a tar for one provision run.
+// Ticket-authenticated like the env endpoint; the body is the only place the
+// grok credentials appear, so they never reach argv on the target machine.
+func (s *Server) provisionBundle(w http.ResponseWriter, r *http.Request) {
+	bot, ok := s.authTicket(r)
+	if !ok {
+		s.writeErr(w, http.StatusUnauthorized, "invalid or expired provision ticket")
+		return
+	}
+	bundle, err := s.bundleFor(r.Context(), bot.UserID)
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "runtime bundle could not be unsealed")
+		return
+	}
+	if bundle == nil {
+		s.writeErr(w, http.StatusNotFound, "no runtime bundle imported on this hub")
+		return
+	}
+	body, err := bundle.Tar(bot.Name, bot.Instance, BundleDataDir(bot.Instance))
+	if err != nil {
+		s.writeErr(w, http.StatusInternalServerError, "could not render the runtime bundle")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(body) // safe-ignore: response already committed; the client is gone
 }
 
 // writeEnv emits a systemd EnvironmentFile line with a quoted value.

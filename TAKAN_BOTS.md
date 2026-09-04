@@ -262,6 +262,7 @@ extending its deploy to upload the built binaries).
 | Response | `application/octet-stream` with the binary body |
 | Auth | `Authorization: Bearer <token>`, accepting **either** a machine agent token **or** a short-lived provision ticket |
 | Not found | `404` when no binary matches the requested `os`/`arch` |
+| Runtime bundle | `GET /api/bots/provision/bundle` — tar, provision ticket only (§5.1) |
 
 Concretely, the **atlas** deploy should upload its freshly built binary to
 `/opt/takan/bot-binaries/atlas-linux-amd64` on the hub host (vps2), preserving the executable bit
@@ -280,22 +281,87 @@ short-lived, run-scoped ticket, so the Telegram token never appears in the targe
 
 | Path on the machine | Contents |
 |---|---|
-| `/usr/local/bin/<instance>` | the daemon binary, mode `0755` |
+| `/usr/local/bin/<instance>` | the daemon binary, mode `0755`, plus `<instance>-send` / `-sched` / `-task` symlinks |
 | `/etc/<instance>/<instance>.env` | the environment file, mode `0600` in a `0700` directory |
-| `/etc/systemd/system/<instance>.service` | the unit (`Restart=on-failure`, `MemoryMax=512M`, `MemorySwapMax=0`, `NoNewPrivileges`, `PrivateTmp`) |
+| `/etc/systemd/system/<instance>.service` | the unit (`Restart=on-failure`, `MemoryMax=1G`, `MemorySwapMax=0`, `LimitNOFILE=65535`, `NoNewPrivileges`, `PrivateTmp`) |
+| `/var/lib/<instance>/` | the daemon data dir: `config.toml`, `workspace/AGENTS.md`, state (mode `0700`) |
+| `/root/.grok/` | the grok CLI home for the service user: `auth.json`, `config.toml` (mode `0600`) |
 
 `<instance>` is derived from the bot name (lowercased, non-alphanumerics collapsed to `-`).
-The env file contains exactly the four variables the daemon reads, and nothing else:
+The env file contains the variables the daemon reads, and nothing else:
 
 ```
 TELEGRAM_BOT_TOKEN="…"   # from the attached channel's sealed credential
 ALLOWED_CHAT_ID="…"      # the attachment's primary chat within that channel
 TAKAN_HUB_URL="…"        # the hub public URL; presence flips the daemon into hub mode
 TAKAN_BOT_TOKEN="…"      # the bot's hub token, minted server-side at provision time
+ATLAS_DATA_DIR="…"       # /var/lib/<instance> — install mode only, never on adopt
+GROQ_API_KEY="…"         # voice transcription, from the runtime bundle (§5.1)
 ```
 
-Provisioning is idempotent: re-running it refreshes the binary and the env file and restarts the
-unit. The run is reported in the panel as `queued` -> `running` -> `ok` / `failed` (with the last
+### 5.1 The runtime bundle (the daemon's brain)
+
+A daemon with an env file still cannot answer: it shells out to a CLI coding agent, and that agent
+needs to exist and be signed in. The **runtime bundle** is the one-per-account blob that supplies
+it, so a freshly provisioned bot on a brand-new VPS needs zero manual steps.
+
+| Component | Source on the hub host | Where it lands on the target |
+|---|---|---|
+| grok CLI | installed from `https://x.ai/cli/install.sh`, pinned to the bundle's version | `/root/.grok/bin/grok` + a `/usr/local/bin/grok` wrapper |
+| `auth.json` | `<grok-home>/auth.json` (subscription credential) | `/root/.grok/auth.json`, `0600` |
+| `config.toml` | `<grok-home>/config.toml` (carries the Takan MCP entry) | `/root/.grok/config.toml`, `0600` |
+| `GROQ_API_KEY` | the daemon env file | the generated env file |
+| daemon `config.toml` | `<data-dir>/config.toml` | `/var/lib/<instance>/config.toml` |
+| `workspace/AGENTS.md` | `<data-dir>/workspace/AGENTS.md` | `/var/lib/<instance>/workspace/AGENTS.md` |
+
+**Storage.** The whole payload is sealed with the vault's `cryptox.Box`, exactly like a channel
+credential, in the `runtime_bundles` table. Only the inventory (component names and plaintext
+sizes), the grok version and the source instance name are stored in the clear, and that is all the
+panel ever shows — there is no upload form and no way to read a component back.
+
+**Import.** The only way in is a CLI on the hub host:
+
+```
+takan bundle import \
+  --grok-home /home/debian/.grok \
+  --atlas-data /home/debian/atlas-data \
+  --env /home/debian/atlas.env
+```
+
+It is **read-only on the source**: it never writes, executes, chowns or chmods anything there and
+it never invokes `grok` (that would refresh and re-own `auth.json` — §9). Before and after the
+import it snapshots owner, group and mode of every source file and fails loudly on any drift.
+Run it as the user that owns the Takan data directory, so the SQLite files keep their owner.
+`takan bundle status` prints the stored inventory.
+
+**Templating.** The source instance identity is stripped at import time and re-expanded per bot at
+provision time, so every bot is itself: the display name (`Atlas` → the bot's name, including
+anywhere it appears as a `machine_ai_run owner`), the slug (`atlas-send` → `<instance>-send`) and
+the data dir path (`/home/debian/atlas-data` → `/var/lib/<instance>`).
+
+**Delivery.** `GET /api/bots/provision/bundle`, authenticated with the same run-scoped ticket as
+the env endpoint, returns a tar. Nothing reaches argv or the agent's logs. A missing bundle is a
+clean `404` and provisioning still succeeds — the daemon installs and runs, it just cannot answer.
+
+**Never on adopt.** Bundle placement sits inside the install-only branch, *after* the unit guard.
+An adopted unit belongs to the operator: its user, its home and its data dir are not Takan's to
+write, which is the same rule §9 exists for. An adopted daemon gets `GROQ_API_KEY` (a capability it
+did not have) but never `ATLAS_DATA_DIR` (which would orphan its state).
+
+**Never clobber an existing CLI.** The script installs grok only when the machine has none, and it
+never overwrites an existing `/usr/local/bin/grok` — on the hub host that wrapper carries the
+root-drop guard from §9.
+
+**Known limitation: the Takan MCP bearer is shared.** `config.toml` carries the operator's own MCP
+bearer, and every provisioned bot receives that same one. The hub has no per-client MCP credential
+to mint instead: MCP auth is OAuth, access tokens live 24 h and are renewed through a browser
+authorization flow, so there is nothing durable and bot-scoped to issue. Consequences: a bot's MCP
+calls are indistinguishable from the operator's, and revoking that bearer cuts every bot at once.
+Fixing it properly means adding long-lived, per-consumer MCP tokens to the hub — a separate change.
+
+Provisioning is idempotent: re-running it refreshes the binary, the env file and the grok
+credentials, and restarts the unit. `config.toml` and `AGENTS.md` are only seeded, so a local edit
+survives. The run is reported in the panel as `queued` -> `running` -> `ok` / `failed` (with the last
 error), and the outcome is pushed to the operator over Telegram. It exits non-zero, leaving the
 error visible, when the machine has no `systemd`, when the agent user has neither root nor
 passwordless `sudo`, or when the unit is installed but does not stay active.
@@ -363,13 +429,17 @@ Rules that follow:
   invoked as root, so agent jobs, cron and a stray `sudo grok` are all safe. Keep
   that guard if the wrapper is ever regenerated.
 - **Never invoke `grok` as root on vps2.**
-- Anything that reads a service user's home (a future runtime-bundle import) must
-  read it **read-only**: plain `sudo cat` / `cp` of the files, never executing
-  `grok`, never triggering a token refresh, and never changing ownership or
-  permissions of anything under `/home/debian`.
+- Anything that reads a service user's home (the runtime-bundle import, §5.1)
+  must read it **read-only**: plain reads of the files, never executing `grok`,
+  never triggering a token refresh, and never changing ownership or permissions
+  of anything under `/home/debian`. `takan bundle import` is built this way and
+  asserts owner/group/mode of every source file before and after.
 - After such an import, assert `~/.grok/auth.json` is still owned by the service
   user and mode 0600. If it is not, the import re-owned it and the daemon is
   about to fail with "Not signed in".
+- The same rule points the other way on a target machine: provisioning writes
+  `~/.grok` only for a unit **Takan itself installed** (whose service user is
+  root). An adopted unit's home is never touched.
 
 ### A daemon's reported machine name is only a hint
 

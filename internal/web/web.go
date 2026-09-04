@@ -255,6 +255,9 @@ type pageData struct {
 	BotChannels     []channelView
 	BotToken        string // flash: bot token shown once after create/reissue
 	BotInstallHint  string // flash: one-line hint with the API base URL
+	// RuntimeBundle describes the sealed brain handed to provisioned bots.
+	// It is metadata only: no secret ever reaches this struct.
+	RuntimeBundle bundleView
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
 	// NeedsSetup is true when this instance has no owner yet (the first emailed
@@ -346,6 +349,19 @@ type botView struct {
 	LastSeen                                       string
 	Pending, Approved, Deliveries                  int
 	Chats                                          []botChatView
+}
+
+// bundleView is the panel's read-only view of the runtime bundle. There is no
+// upload form and no way to read a component back: the bundle is imported by a
+// CLI on the hub host and only ever leaves over a provision ticket.
+type bundleView struct {
+	Present     bool
+	Source      string
+	GrokVersion string
+	Updated     string
+	Components  []store.BundleComponent
+	// ImportHint is the exact command an operator runs on the hub host.
+	ImportHint string
 }
 
 type botChatView struct {
