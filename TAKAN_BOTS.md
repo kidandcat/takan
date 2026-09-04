@@ -331,7 +331,9 @@ takan bundle import \
 It is **read-only on the source**: it never writes, executes, chowns or chmods anything there and
 it never invokes `grok` (that would refresh and re-own `auth.json` — §9). Before and after the
 import it snapshots owner, group and mode of every source file and fails loudly on any drift.
-Run it as the user that owns the Takan data directory, so the SQLite files keep their owner.
+Run it **as the user that owns the Takan data directory** (`debian` on vps2, not root — a root run
+leaves root-owned WAL/SHM files behind and the service can no longer write), and **with
+`takan.service` stopped**, because Colmena does not expect a second writer on a live database.
 `takan bundle status` prints the stored inventory.
 
 **Templating.** The source instance identity is stripped at import time and re-expanded per bot at
