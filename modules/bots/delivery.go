@@ -62,6 +62,10 @@ func (d *JobDelivery) OnJobEvent(userID, machineName string, job agenthub.AIJob)
 }
 
 func (d *JobDelivery) deliver(ctx context.Context, userID, machineName string, job agenthub.AIJob) error {
+	// A disabled module means no daemon may poll, so queueing would only pile up.
+	if on, err := d.Store.ModuleEnabled(ctx, userID, "bots"); err != nil || !on {
+		return err
+	}
 	bot, chatID, err := d.resolve(ctx, userID, job)
 	if err != nil || bot == nil {
 		return err

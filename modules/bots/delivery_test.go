@@ -208,3 +208,18 @@ func TestOutputTailIsTruncated(t *testing.T) {
 		t.Fatalf("short tail changed: %q", short)
 	}
 }
+
+func TestJobDeliverySkippedWhenModuleDisabled(t *testing.T) {
+	f := newFixture(t)
+	if err := f.st.SetModuleEnabled(f.ctx(), f.user.ID, "bots", false); err != nil {
+		t.Fatal(err)
+	}
+	d := &JobDelivery{Store: f.st, Watch: f.srv.Watch}
+	job := agenthub.AIJob{JobID: "job-off", Status: "done", Owner: "test-bot"}
+	if err := d.deliver(f.ctx(), f.user.ID, "vps2", job); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := f.st.CountBotDeliveries(f.ctx(), f.bot.ID); n != 0 {
+		t.Fatalf("disabled module still queued %d deliveries", n)
+	}
+}
