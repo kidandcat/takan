@@ -1,27 +1,55 @@
-# Example systemd unit for a self-hosted hub.
-#   sudo useradd --system --home /opt/takan --shell /usr/sbin/nologin takan
-#   sudo mkdir -p /opt/takan /opt/takan/data /opt/takan/agents /etc/takan
-#   sudo chown -R takan:takan /opt/takan
-#   sudo chmod 700 /etc/takan /opt/takan/data
-# Copy this file to /etc/systemd/system/takan.service and
-# deploy/takan.env.example to /etc/takan/takan.env (set TAKAN_SESSION_KEY).
+# Systemd unit for the merged hub: panel + MCP + machine agents + the personal
+# assistant, all in one process.
+#
+#   sudo mkdir -p /opt/takan/data /opt/takan/agents /etc/takan
+#   sudo cp deploy/takan.env.example /etc/takan/takan.env   # then edit it
+#   sudo chmod 600 /etc/takan/takan.env
+#   sudo cp deploy/takan.service /etc/systemd/system/takan.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now takan
+#
+# The service runs as an ordinary login user, not a system account: the CLI
+# agent it spawns needs a real home for its credentials (~/.grok/auth.json),
+# and running as that user is what makes them readable without any copying.
 
 [Unit]
-Description=Takan hub (MCP + panel + agents)
+Description=Takan hub (panel + MCP + agents + assistant)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=takan
-Group=takan
+User=debian
+Group=debian
 WorkingDirectory=/opt/takan
-ExecStart=/opt/takan/takan
 EnvironmentFile=/etc/takan/takan.env
-Restart=on-failure
-RestartSec=3
+
+# HOME is where the CLI agent finds its credentials. Without it systemd leaves
+# HOME unset and the agent starts unauthenticated.
+Environment=HOME=/home/debian
+# The agent and its own tools must be on PATH.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/debian/.grok/bin:/home/debian/.local/bin
+
+ExecStart=/opt/takan/takan
+Restart=always
+RestartSec=5
+
+# The agent subprocesses live in this cgroup, so the cap covers them too.
+# 512M was enough for the hub alone and is not enough now: a single agent run
+# will exceed it and be OOM-killed.
+MemoryMax=2G
+# Swap thrashing on this box is worse than an OOM kill.
+MemorySwapMax=0
+LimitNOFILE=65535
+
 NoNewPrivileges=true
 PrivateTmp=true
+TimeoutStopSec=30
+# The agent runs in its own process group; mixed kill reaches the whole tree.
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=takan
 
 [Install]
 WantedBy=multi-user.target

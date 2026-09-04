@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#
+# Deploy the hub.
+#
+# Cross-compiles on the Mac (the VPS has no Go toolchain), ships the binary,
+# installs the unit and the atlas-send / atlas-sched / atlas-task symlinks, then
+# restarts and health-checks both listeners.
+#
+# It will NOT restart while a conversation is running: a restart mid-turn kills
+# a live agent and loses the answer.
+#
+# Usage: deploy/deploy.sh [ssh-host]   (default host: vps2)
+
+set -euo pipefail
+
+HOST="${1:-vps2}"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+cd "$REPO_DIR"
+
+echo "==> Testing"
+go build ./... && go vet ./... && go test ./... >/dev/null
+
+echo "==> Building for linux/amd64"
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/takan-linux-amd64 ./cmd/takan
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /tmp/takan-agent-linux-amd64 ./cmd/takan-agent
+
+echo "==> Uploading to $HOST"
+scp -q /tmp/takan-linux-amd64 "$HOST:/tmp/takan"
+scp -q /tmp/takan-agent-linux-amd64 "$HOST:/tmp/takan-agent-linux-amd64"
+scp -q deploy/takan.service "$HOST:/tmp/takan.service"
+
+echo "==> Installing on $HOST"
+ssh "$HOST" bash -s <<'EOF'
+set -euo pipefail
+
+BIN_PATH=/opt/takan/takan
+AGENT_DIR=/opt/takan/agents
+
+sudo mkdir -p /opt/takan/data "$AGENT_DIR"
+
+# Keep the previous binary so a rollback is a copy, not a rebuild.
+if [ -f "$BIN_PATH" ]; then
+  sudo cp -a "$BIN_PATH" "$BIN_PATH.bak.$(date +%s)"
+fi
+sudo install -o root -g root -m 0755 /tmp/takan "$BIN_PATH"
+sudo install -o root -g root -m 0755 /tmp/takan-agent-linux-amd64 "$AGENT_DIR/takan-agent-linux-amd64"
+
+# The helper CLIs are the same binary; it dispatches on argv[0].
+sudo ln -sf "$BIN_PATH" /usr/local/bin/atlas-send
+sudo ln -sf "$BIN_PATH" /usr/local/bin/atlas-sched
+sudo ln -sf "$BIN_PATH" /usr/local/bin/atlas-task
+
+sudo install -o root -g root -m 0644 /tmp/takan.service /etc/systemd/system/takan.service
+# The old 512M drop-in would OOM-kill every agent run now that they share this
+# cgroup. The unit sets 2G; remove the override that would win over it.
+sudo rm -f /etc/systemd/system/takan.service.d/memory.conf
+sudo systemctl daemon-reload
+sudo systemctl enable takan.service
+
+# Do not kill an in-flight conversation. Walk the descendants of the hub looking
+# for an agent whose cwd is the live workspace (not tasks/ or routines/, which
+# are detached and survive a restart as orphans).
+descendants() {
+  local pid=$1 child
+  for child in $(pgrep -P "$pid" || true); do
+    printf '%s\n' "$child"
+    descendants "$child"
+  done
+}
+
+conversation_agent_running() {
+  local hub_pid comm cwd
+  hub_pid=$(systemctl show -p MainPID --value takan.service)
+  if [[ -z "$hub_pid" || "$hub_pid" == "0" ]]; then
+    return 1
+  fi
+  while read -r pid; do
+    [[ -z "$pid" ]] && continue
+    comm=$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')
+    cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
+    if [[ "$comm" == grok* && "$cwd" != *"/tasks/"* && "$cwd" != *"/routines/"* ]]; then
+      return 0
+    fi
+  done < <(descendants "$hub_pid")
+  return 1
+}
+
+if conversation_agent_running; then
+  echo "waiting for the in-flight conversation to finish before restarting"
+  deadline=$((SECONDS + 360))
+  while conversation_agent_running; do
+    if (( SECONDS >= deadline )); then
+      echo "refusing to restart: a conversation agent is still running" >&2
+      exit 1
+    fi
+    sleep 5
+  done
+fi
+
+sudo systemctl restart takan.service
+rm -f /tmp/takan /tmp/takan.service /tmp/takan-agent-linux-amd64
+EOF
+
+echo "==> Waiting for the service to come up"
+sleep 4
+ssh "$HOST" bash -s <<'EOF'
+set -euo pipefail
+systemctl is-active takan.service
+echo "--- panel ---"
+curl -fsS localhost:8090/healthz
+echo "--- assistant (loopback) ---"
+curl -fsS localhost:8099/health && echo
+echo "--- app channel ---"
+curl -fsS localhost:8090/v1/health && echo
+echo "--- memory cap (must be >= 2G) ---"
+systemctl show -p MemoryMax --value takan.service
+EOF
+
+echo "==> Deployed"

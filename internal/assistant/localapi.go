@@ -78,7 +78,13 @@ func (a *Assistant) handleLocalHealth(w http.ResponseWriter, r *http.Request) {
 		payload["last_poll_ok_at"] = lastOK.UTC().Format(time.RFC3339)
 	}
 	status := http.StatusOK
-	if !a.Opts.Enabled {
+	if reason := b.StoppedReason(); reason != "" {
+		// The loop exited and will not come back: page now, do not wait out the
+		// stall threshold.
+		status = http.StatusServiceUnavailable
+		payload["status"] = "stopped"
+		payload["error"] = "the assistant stopped: " + reason
+	} else if !a.Opts.Enabled {
 		// Deliberately off: healthy, but say so rather than pretending to poll.
 		payload["status"] = "disabled"
 	} else if !healthy {

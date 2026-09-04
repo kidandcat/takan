@@ -208,7 +208,11 @@ func (a *Assistant) Run(ctx context.Context) error {
 	}
 	log.Printf("assistant: starting (data dir %s, workspace %s, soft budget %s, hard cap %s)",
 		a.dataDir, a.workdir, a.Opts.SoftTimeout(), a.Opts.TaskTimeout())
-	return a.Bot.Run(ctx)
+	err := a.Bot.Run(ctx)
+	// Record it so /health reports a dead poller straight away instead of
+	// looking healthy until the stall threshold expires.
+	a.Bot.markStopped(err)
+	return err
 }
 
 // Notify sends an operator message to the owner's Telegram DM. It replaces the
@@ -250,6 +254,9 @@ type Status struct {
 	PollHealthy   bool
 	LastPollOK    time.Time
 	LastPollError string
+	// StoppedReason is set when the poll loop exited for good, e.g. a rejected
+	// bot token. It is the difference between "not up yet" and "never will be".
+	StoppedReason string
 }
 
 // Status snapshots the assistant for the panel and the status tool.
@@ -262,6 +269,9 @@ func (a *Assistant) Status(ctx context.Context) Status {
 		ScheduledJobs: len(a.Sched.Store().List()),
 	}
 	s.PollHealthy, s.LastPollOK, s.LastPollError = a.Bot.PollHealth()
+	if s.StoppedReason = a.Bot.StoppedReason(); s.StoppedReason != "" {
+		s.PollHealthy = false
+	}
 	if chats, err := a.Store.ListAssistantChats(ctx, a.OwnerID); err == nil {
 		s.KnownChats = len(chats)
 	}

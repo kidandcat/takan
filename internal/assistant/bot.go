@@ -92,6 +92,24 @@ type Bot struct {
 	// ready closes once getMe has succeeded.
 	ready     chan struct{}
 	readyOnce sync.Once
+
+	// stopped records why the poll loop exited for good. A dead poller and a
+	// slow start look identical to a timeout-based health check for the whole
+	// grace window, which is five minutes of a silent assistant.
+	stopped atomic.Value
+}
+
+// markStopped records that the poll loop has exited and will not resume.
+func (b *Bot) markStopped(err error) {
+	if err != nil {
+		b.stopped.Store(err.Error())
+	}
+}
+
+// StoppedReason is why polling ended, or "" while it is still running.
+func (b *Bot) StoppedReason() string {
+	reason, _ := b.stopped.Load().(string)
+	return reason
 }
 
 // Ready is closed once the Telegram identity is known.
