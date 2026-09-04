@@ -286,10 +286,11 @@ if [ "$MODE" = install ]; then
     tar -xf "$BUNDLEDIR/bundle.tar" -C "$BUNDLEDIR"
     $SUDO install -d -m 0700 "$GROKHOME"
 
-    # Install the CLI only when the machine has none. Never replace an existing
-    # grok or an existing /usr/local/bin/grok wrapper: on the hub host that
-    # wrapper carries a root-drop guard that must survive (section 9).
-    if ! command -v grok >/dev/null 2>&1 && [ ! -x "$GROKHOME/bin/grok" ]; then
+    # The CLI is installed into the SERVICE USER's home, even when the machine
+    # already has one elsewhere: a host wrapper typically pins HOME at a human's
+    # account, so a shared grok would read that human's credentials and, run as
+    # root, re-own them (section 9). A self-contained brain avoids both.
+    if [ ! -x "$GROKHOME/bin/grok" ]; then
       GROKVER=""
       if [ -f "$BUNDLEDIR/grok-version" ]; then
         GROKVER="$(tr -d '[:space:]' < "$BUNDLEDIR/grok-version")"
@@ -353,7 +354,7 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=$ENVFILE
 Environment=HOME=$SVCHOME
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$GROKHOME/bin
+Environment=PATH=$GROKHOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=$DATADIR
 ExecStart=$BIN
 Restart=on-failure

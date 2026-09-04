@@ -21,8 +21,10 @@ import (
 // fixtureAgentConfig / fixtureAgentsMD mirror the real vps2 files: the daemon
 // config points at its own data dir and the guide names the instance, its
 // helper CLIs and its inbox path — every one of which has to be rewritten.
-const fixtureAgentConfig = `[instance]
-name = "Atlas"
+// Like the live vps2 file, this one has no [instance] section at all: the
+// daemon falls back to its built-in default there.
+const fixtureAgentConfig = `# Atlas configuration.
+# Secrets are NOT stored here: they come from %ENV%
 
 [agent]
 command = "grok"
@@ -43,13 +45,15 @@ func writeSource(t *testing.T) ImportPaths {
 	root := t.TempDir()
 	grokHome := filepath.Join(root, ".grok")
 	dataDir := filepath.Join(root, "atlas-data")
-	sub := func(s string) string { return strings.ReplaceAll(s, "%DATA%", dataDir) }
+	envFile := filepath.Join(root, "atlas.env")
+	sub := func(s string) string {
+		return strings.NewReplacer("%DATA%", dataDir, "%ENV%", envFile).Replace(s)
+	}
 	mustWrite(t, filepath.Join(grokHome, "auth.json"), `{"https://auth.x.ai::abc":{"refresh":"r"}}`, 0o600)
 	mustWrite(t, filepath.Join(grokHome, "config.toml"), "[mcp_servers.takan]\nurl = \"https://takan.es/mcp\"\n", 0o644)
 	mustWrite(t, filepath.Join(grokHome, "version.json"), `{"version":"0.2.118"}`, 0o644)
 	mustWrite(t, filepath.Join(dataDir, "config.toml"), sub(fixtureAgentConfig), 0o644)
 	mustWrite(t, filepath.Join(dataDir, "workspace", "AGENTS.md"), sub(fixtureAgentsMD), 0o644)
-	envFile := filepath.Join(root, "atlas.env")
 	mustWrite(t, envFile, "TELEGRAM_BOT_TOKEN=\"tg\"\nGROQ_API_KEY=gsk_fixture\n", 0o600)
 	return ImportPaths{GrokHome: grokHome, AgentData: dataDir, EnvFile: envFile}
 }
@@ -129,7 +133,7 @@ func TestReadBundleParsesSourceAndTemplatizes(t *testing.T) {
 	// The source identity must be gone from the stored copies, otherwise every
 	// provisioned bot would call itself Atlas and write Atlas's data dir.
 	for _, body := range []string{res.Bundle.AgentConfig, res.Bundle.AgentsMD} {
-		for _, leak := range []string{"Atlas", res.DataDir} {
+		for _, leak := range []string{"Atlas", res.DataDir, paths.EnvFile} {
 			if strings.Contains(body, leak) {
 				t.Fatalf("templatize left %q behind in %q", leak, body)
 			}
@@ -137,7 +141,8 @@ func TestReadBundleParsesSourceAndTemplatizes(t *testing.T) {
 	}
 	if !strings.Contains(res.Bundle.AgentsMD, PlaceholderName) ||
 		!strings.Contains(res.Bundle.AgentsMD, PlaceholderInstance) ||
-		!strings.Contains(res.Bundle.AgentConfig, PlaceholderDataDir) {
+		!strings.Contains(res.Bundle.AgentConfig, PlaceholderDataDir) ||
+		!strings.Contains(res.Bundle.AgentConfig, PlaceholderEnvFile) {
 		t.Fatal("placeholders missing from the templated bundle")
 	}
 	for _, want := range []string{filepath.Join(paths.GrokHome, "auth.json"), paths.EnvFile} {
@@ -220,6 +225,9 @@ func TestBundleTarRendersPerBotIdentity(t *testing.T) {
 	if !strings.Contains(cfg, `name = "Casa"`) || !strings.Contains(cfg, "/var/lib/casa/workspace") {
 		t.Fatalf("daemon config not rendered for the target:\n%s", cfg)
 	}
+	if !strings.Contains(cfg, "/etc/casa/casa.env") {
+		t.Fatalf("the env path still points at the source machine:\n%s", cfg)
+	}
 	for name, body := range files {
 		if strings.Contains(body, "Atlas") || strings.Contains(body, PlaceholderName) {
 			t.Fatalf("%s still carries the source identity or an unrendered placeholder", name)
@@ -228,6 +236,42 @@ func TestBundleTarRendersPerBotIdentity(t *testing.T) {
 	// Credentials pass through byte for byte.
 	if !json.Valid([]byte(files["grok/auth.json"])) {
 		t.Fatal("auth.json was mangled in transit")
+	}
+}
+
+// TestBundleTarNamesTheInstance covers both source shapes: a config without an
+// [instance] section (the live vps2 one — the daemon would otherwise default to
+// "Atlas" and every provisioned bot would introduce itself as Atlas) and one
+// that names the instance explicitly.
+func TestBundleTarNamesTheInstance(t *testing.T) {
+	paths := writeSource(t)
+	res, err := ReadBundle(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := res.Bundle.Tar("Casa", "casa", BundleDataDir("casa"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := readTar(t, raw)["data/config.toml"]
+	if !strings.Contains(cfg, "[instance]") || !strings.Contains(cfg, `name = "Casa"`) {
+		t.Fatalf("a nameless source config was not given the bot's name:\n%s", cfg)
+	}
+
+	// An explicit name in the source is rewritten in place, not duplicated.
+	mustWrite(t, filepath.Join(paths.AgentData, "config.toml"),
+		"[instance]\nname = \"Atlas\"\n\n[agent]\ncommand = \"grok\"\n", 0o644)
+	res, err = ReadBundle(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err = res.Bundle.Tar("Casa", "casa", BundleDataDir("casa"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg = readTar(t, raw)["data/config.toml"]
+	if strings.Count(cfg, "[instance]") != 1 || !strings.Contains(cfg, `name = "Casa"`) {
+		t.Fatalf("an explicitly named source config was not rewritten cleanly:\n%s", cfg)
 	}
 }
 
@@ -376,7 +420,7 @@ func TestProvisionScriptBundleStepsFollowTheUnitGuard(t *testing.T) {
 
 	for _, want := range []string{
 		"$HUB/api/bots/provision/env?mode=$MODE",   // adoption tells the hub
-		"command -v grok",                          // never replace an existing CLI
+		`[ ! -x "$GROKHOME/bin/grok" ]`,            // the CLI is the service user's own
 		"[ ! -e /usr/local/bin/grok ]",             // never replace an existing wrapper
 		`Environment=HOME=$SVCHOME`,                // grok finds its own home
 		"$HUB/api/bots/binary?os=linux&arch=$ARCH", // unchanged
@@ -384,6 +428,14 @@ func TestProvisionScriptBundleStepsFollowTheUnitGuard(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q", want)
 		}
+	}
+	// The service user's own grok must win over any host-wide wrapper, which
+	// typically pins HOME at a human account and would read that human's
+	// credentials (and, run as root, re-own them).
+	unitPath := script[strings.Index(script, "Environment=PATH="):]
+	unitPath = unitPath[:strings.Index(unitPath, "\n")]
+	if !strings.HasPrefix(unitPath, "Environment=PATH=$GROKHOME/bin:") {
+		t.Fatalf("the service user's grok is not first on PATH: %s", unitPath)
 	}
 	if strings.Contains(script, "gsk_") || strings.Contains(script, "auth.x.ai") {
 		t.Fatal("the script carries bundle secrets; they must travel in a response body")

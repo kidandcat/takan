@@ -348,9 +348,16 @@ An adopted unit belongs to the operator: its user, its home and its data dir are
 write, which is the same rule §9 exists for. An adopted daemon gets `GROQ_API_KEY` (a capability it
 did not have) but never `ATLAS_DATA_DIR` (which would orphan its state).
 
-**Never clobber an existing CLI.** The script installs grok only when the machine has none, and it
-never overwrites an existing `/usr/local/bin/grok` — on the hub host that wrapper carries the
-root-drop guard from §9.
+**The CLI belongs to the service user.** grok is installed into `/root/.grok` even when the machine
+already has one, and that copy is **first on the unit's `PATH`**. A host-wide `/usr/local/bin/grok`
+is typically a wrapper pinning `HOME` at a human's account: sharing it would make the bot read that
+human's credentials and, running as root, re-own them — §9 again. The script never overwrites an
+existing `/usr/local/bin/grok`; it only writes that wrapper when there is none.
+
+**The bot is named in its own config.** The source `config.toml` on vps2 has no `[instance]`
+section (the daemon falls back to its built-in `Atlas`), so rendering injects `[instance] name =
+"<bot>"` when the source did not set one. Without that, every provisioned bot would introduce
+itself, and register, as Atlas.
 
 **Known limitation: the Takan MCP bearer is shared.** `config.toml` carries the operator's own MCP
 bearer, and every provisioned bot receives that same one. The hub has no per-client MCP credential
