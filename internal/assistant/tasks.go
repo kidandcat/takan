@@ -474,16 +474,23 @@ func (m *TaskManager) report(task *Task, res *AgentResult) {
 	full := header + "\n\n" + body
 	ctx := context.WithoutCancel(m.ctx)
 	progress := m.takeProgress(task.ID)
+	// Logged because it is the invariant worth being able to check on a live
+	// box: a task is one Telegram message, and this says which one it was.
+	messageID := progress.MessageID()
 	switch {
 	case progress.FinishWith(ctx, full):
+		log.Printf("tasks: %s reported by editing its own message %d in place", task.ID, messageID)
 		return
 	case progress.FinishHeader(ctx, fmt.Sprintf("%s Tarea %s — %s (%s) · resultado abajo ↓",
 		icon, task.ID, tg.TruncateRunes(strings.TrimSpace(task.Title), 60),
 		task.Duration().Truncate(time.Second))):
 		// Too long to live in one message: the progress message becomes a
 		// one-line "done" and the result follows through the chunked send.
+		log.Printf("tasks: %s result is too long for message %d; it keeps the header and the body follows",
+			task.ID, messageID)
 	default:
 		progress.Discard(ctx)
+		log.Printf("tasks: %s had no message to edit; sending the result as a new one", task.ID)
 	}
 	m.announceTo(task.ChatID, full)
 }
