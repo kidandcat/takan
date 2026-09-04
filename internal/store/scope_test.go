@@ -106,12 +106,12 @@ func TestDefaultModulesMatchTheCatalog(t *testing.T) {
 	for _, m := range mods {
 		seen[m.ModuleID] = true
 	}
-	for _, want := range []string{"assistant", "machine", "vault"} {
+	for _, want := range []string{"machine", "vault"} {
 		if !seen[want] {
 			t.Fatalf("module %s missing from %v", want, seen)
 		}
 	}
-	for _, gone := range []string{"bots", "telegram", "sip"} {
+	for _, gone := range []string{"bots", "telegram", "sip", "assistant"} {
 		if seen[gone] {
 			t.Fatalf("module %s should be retired", gone)
 		}

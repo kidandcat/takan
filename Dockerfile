@@ -25,10 +25,7 @@ COPY --from=build --chown=takan:takan /out/takan /usr/local/bin/takan
 COPY --from=build --chown=takan:takan /out/agents/ /opt/takan/agents/
 COPY --from=build --chown=takan:takan /out/agents/takan-agent-linux-${TARGETARCH} /usr/local/bin/takan-agent
 COPY --chown=root:root deploy/docker-entrypoint.sh /usr/local/bin/takan-entrypoint
-RUN chmod 755 /usr/local/bin/takan /usr/local/bin/takan-agent /usr/local/bin/takan-entrypoint /opt/takan/agents/* \
- && ln -s /usr/local/bin/takan /usr/local/bin/atlas-send \
- && ln -s /usr/local/bin/takan /usr/local/bin/atlas-sched \
- && ln -s /usr/local/bin/takan /usr/local/bin/atlas-task
+RUN chmod 755 /usr/local/bin/takan /usr/local/bin/takan-agent /usr/local/bin/takan-entrypoint /opt/takan/agents/*
 USER takan
 ENV TAKAN_LISTEN=0.0.0.0:8090 \
     TAKAN_PUBLIC_URL=http://localhost:8090 \

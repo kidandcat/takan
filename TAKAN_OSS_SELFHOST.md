@@ -6,7 +6,8 @@ Audit of [github.com/kidandcat/takan](https://github.com/kidandcat/takan) plus t
 **Superseded twice — read this as history.**
 
 1. PR #5 (`feat/single-operator`, merged 2026-08-22) removed register/invites. The product is one operator. See [TAKAN_SINGLE_OPERATOR.md](TAKAN_SINGLE_OPERATOR.md). Sections below that discuss household invites, guest quotas or per-user isolation as a *product* feature describe the **pre-#5** tree; `user_id` survives only as the storage key for the owner row.
-2. The assistant merge (2026-09) folded the standalone Telegram daemon into this process and retired the Bots and SIP modules along with the Telegram channel layer. The current capability list is in [README.md](README.md); the module inventory in §7 below is stale.
+2. The assistant merge (2026-09) folded the standalone Telegram daemon into this process and retired the Bots and SIP modules along with the Telegram channel layer.
+3. That assistant was itself removed on **2026-09-05**. Takan is the MCP hub and its panel: no Telegram, no phone app channel, no background tasks, no scheduler. Every `ATLAS_*` variable is gone; the env is plain `TAKAN_*` again. The current capability list is in [README.md](README.md); the module inventory in §7 below is stale.
 
 Nothing here should be used as a description of the current tree. It is kept for the packaging analysis, which is still accurate.  
 **Method:** read the public repo (clone at `/home/debian/takan`, `master` @ `0f2df2b`) and the live unit/env/SQLite on this VPS. No invented modules. No production deploy from this work.
@@ -58,7 +59,7 @@ Items below are the **pre-PR** snapshot. P0 packaging/docs in §4 are implemente
 
 ### Secrets / first-run
 
-- Empty `TAKAN_SESSION_KEY` falls back to `dev-insecure-change-me` (`config.Load`). That key **encrypts the vault, Mercadona, email and the Telegram bot token**. Docker must persist a generated key on the data volume or a restart mangles ciphertext. *(2026-09: the variable is now `ATLAS_SESSION_KEY`, with the old name still accepted.)*
+- Empty `TAKAN_SESSION_KEY` falls back to `dev-insecure-change-me` (`config.Load`). That key **encrypts the vault, Mercadona and email credentials**. Docker must persist a generated key on the data volume or a restart mangles ciphertext.
 - No CLI `takan bootstrap` — not required: `/register` is open when `UserCount == 0` even if register is closed afterwards.
 
 ### Cloud dependencies (modules, not the hub)
@@ -68,7 +69,6 @@ None of these are required to boot the hub. They are BYO credentials in the pane
 | Module | External API | Self-host implication |
 |--------|----------------|------------------------|
 | Email | Resend (`api.resend.com`) | Operator’s own Resend key + domains. No self-hosted SMTP. |
-| Telegram | Bot API | Operator’s bot token. *(2026-09: also the assistant's inbound long-poll.)* |
 | Groq | `api.groq.com` Whisper | Optional; transcribes voice notes. |
 | FCM | `fcm.googleapis.com` | Optional; push to the phone app when it is closed. |
 | Mercadona | Unofficial `tienda.mercadona.es` + public Algolia app `7UZJKL1DJ0` | Breaks if Mercadona changes; keys are the SPA’s anonymous search keys (documented in README). |
@@ -185,7 +185,7 @@ Agent cmdline on this VPS includes the raw token (`ps` shows `--token …`). Tha
 
 *(as of 2026-08)* `machine`, `display`, `mercadona`, `email`, `people`, `health`, `telegram`, `sip`, `vault`, plus always-on `takan_status`. Memory was removed (`ca2cbbf`).
 
-*(2026-09)* `bots`, `telegram` and `sip` are gone; `assistant` replaces them, carrying the Telegram bot, the phone app channel, background tasks and the scheduler. Current list: `assistant`, `machine`, `display`, `tv`, `mercadona`, `email`, `people`, `health`, `vault`.
+*(2026-09)* `bots`, `telegram` and `sip` are gone; `assistant` replaced them, and was itself removed on 2026-09-05. Current list: `machine`, `display`, `tv`, `mercadona`, `email`, `people`, `health`, `vault`.
 
 ---
 

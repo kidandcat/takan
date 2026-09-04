@@ -1,40 +1,22 @@
-# Two hosts, one process.
+# One host, one process: the panel, MCP, OAuth, the takan-agent WebSocket and
+# /install.sh are all served from the same listener.
 #
-# The panel host serves everything: the panel, MCP, OAuth, the agent WebSocket,
-# /install.sh. The app host serves only /v1/*, because it authenticates with a
-# static bearer token while the panel uses cookies — exposing the panel there
-# would put both behind the weaker of the two.
+# Replace the placeholder with your own host. Nothing in the binary knows a
+# domain; it comes from TAKAN_PUBLIC_URL.
 #
-# Replace the placeholders with your own hosts. Nothing in the binary knows a
-# domain; both come from ATLAS_PUBLIC_URL and ATLAS_APP_URL.
-#
-# Both upstreams below must be the hub's ATLAS_LISTEN / TAKAN_LISTEN port from
-# /etc/takan/takan.env — 8090 here is only this file's default, and vps2 runs on
-# 8096. Check the env file before pasting; a stale port here is a 502 on every
-# request while the service itself looks perfectly healthy.
+# The upstream port must be the hub's TAKAN_LISTEN from /etc/takan/takan.env —
+# 8090 here is only this file's default, and vps2 runs on 8096. Check the env
+# file before pasting; a stale port here is a 502 on every request while the
+# service itself looks perfectly healthy.
 
 takan.example.com {
-	# The hub's TAKAN_LISTEN port (8096 on vps2).
-	reverse_proxy 127.0.0.1:8090
-}
-
-app.example.com {
-	request_body {
-		max_size 32MB
-	}
-	handle /v1/* {
-		# The hub's TAKAN_LISTEN port (8096 on vps2).
-		reverse_proxy 127.0.0.1:8090 {
-			# The app holds an SSE stream: no buffering, no read deadline.
-			flush_interval -1
-			header_up X-Real-IP {remote_host}
-			transport http {
-				read_timeout 0
-				write_timeout 0
-			}
+	reverse_proxy 127.0.0.1:8090 {
+		# MCP clients hold an SSE stream: no buffering, no read deadline.
+		flush_interval -1
+		header_up X-Real-IP {remote_host}
+		transport http {
+			read_timeout 0
+			write_timeout 0
 		}
-	}
-	handle {
-		respond "not found" 404
 	}
 }

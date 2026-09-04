@@ -68,10 +68,10 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		_ = node.Close()
 		return nil, fmt.Errorf("pragma foreign_keys: %w", err)
 	}
-	// Do not take that on trust. Every ON DELETE CASCADE in this schema — and
-	// the users collapse the assistant migration performs — depends on it, and
-	// if the pragma were ever lost the failure would be silent: orphan rows,
-	// deletes that leave their children behind, and no error anywhere.
+	// Do not take that on trust. Every ON DELETE CASCADE in this schema depends
+	// on it, and if the pragma were ever lost the failure would be silent:
+	// orphan rows, deletes that leave their children behind, and no error
+	// anywhere.
 	if err := s.verifyForeignKeys(); err != nil {
 		_ = node.Close()
 		return nil, err
@@ -113,10 +113,6 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		return nil, err
 	}
 	if err := s.migrateLoginCodes(); err != nil {
-		_ = node.Close()
-		return nil, err
-	}
-	if err := s.migrateAssistant(); err != nil {
 		_ = node.Close()
 		return nil, err
 	}
@@ -282,9 +278,13 @@ func (s *Store) UserCount(ctx context.Context) (int, error) {
 }
 
 // migrateDropBots removes the bot registry, the Telegram channel layer, the
-// runtime bundles and the invite system. They were replaced by the single
-// in-process assistant; leaving the tables behind would only invite a stale
-// read. Dropping is safe because nothing in the tree references them.
+// runtime bundles and the invite system. Nothing in the tree references them,
+// and leaving the tables behind would only invite a stale read.
+//
+// The assistant module id is retired here too. Its tables are NOT dropped on
+// boot — that is a one-off operator step (deploy/cleanup-assistant.sql, which
+// takes a snapshot first) — but the module row must go, or an old database
+// would keep advertising a capability this binary no longer has.
 func (s *Store) migrateDropBots() error {
 	for _, table := range []string{
 		"bot_provision_tickets", "bot_deliveries", "bot_jobs", "bot_chats", "bots",
@@ -297,8 +297,9 @@ func (s *Store) migrateDropBots() error {
 			return fmt.Errorf("drop %s: %w", table, err)
 		}
 	}
-	// Retire the two module ids that no longer exist.
-	if _, err := s.db.Exec(`DELETE FROM user_modules WHERE module_id IN ('bots','telegram','sip')`); err != nil {
+	// Retire the module ids that no longer exist.
+	if _, err := s.db.Exec(
+		`DELETE FROM user_modules WHERE module_id IN ('bots','telegram','sip','assistant')`); err != nil {
 		return err
 	}
 	return nil
@@ -629,7 +630,7 @@ type ModuleState struct {
 }
 
 // defaultModuleIDs must stay in sync with modules.Catalog.
-var defaultModuleIDs = []string{"assistant", "machine", "display", "tv", "mercadona", "email", "people", "health", "vault"}
+var defaultModuleIDs = []string{"machine", "display", "tv", "mercadona", "email", "people", "health", "vault"}
 
 func (s *Store) ListModules(ctx context.Context, userID string) ([]ModuleState, error) {
 	// ensure defaults exist

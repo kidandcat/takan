@@ -2,23 +2,20 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	// tzdata is embedded so Europe/Madrid resolves on a host without it, which
-	// is what the scheduler interprets every reminder in.
+	// is the zone the health diary resolves "today" in.
 	_ "time/tzdata"
 
 	"github.com/kidandcat/takan/internal/agenthub"
 	"github.com/kidandcat/takan/internal/api"
-	"github.com/kidandcat/takan/internal/assistant"
 	"github.com/kidandcat/takan/internal/config"
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/mcp"
@@ -27,7 +24,6 @@ import (
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/internal/web"
 	"github.com/kidandcat/takan/modules"
-	assistantmod "github.com/kidandcat/takan/modules/assistant"
 	"github.com/kidandcat/takan/modules/display"
 	"github.com/kidandcat/takan/modules/email"
 	"github.com/kidandcat/takan/modules/health"
@@ -39,42 +35,9 @@ import (
 )
 
 func main() {
-	// atlas-send / atlas-sched / atlas-task are the helper binaries the CLI
-	// agent calls. They are symlinks to this binary, so dispatch on the invoked
-	// name and also accept the equivalent subcommands.
-	switch filepath.Base(os.Args[0]) {
-	case "atlas-send":
-		runSend(os.Args[1:])
-		return
-	case "atlas-sched":
-		runSched(os.Args[1:])
-		return
-	case "atlas-task":
-		runTask(os.Args[1:])
-		return
-	}
-	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
-		switch os.Args[1] {
-		case "send":
-			runSend(os.Args[2:])
-			return
-		case "sched":
-			runSched(os.Args[2:])
-			return
-		case "task":
-			runTask(os.Args[2:])
-			return
-		default:
-			log.Fatalf("unknown command %q (known: send, sched, task)", os.Args[1])
-		}
-	}
-
 	cfg := config.Load()
 	if cfg.SessionKey == "dev-insecure-change-me" {
-		log.Printf("WARNING: ATLAS_SESSION_KEY is the insecure default — set a random key before storing secrets")
-	}
-	if err := cfg.CheckLocalAddr(); err != nil {
-		log.Fatalf("config: %v", err)
+		log.Printf("WARNING: TAKAN_SESSION_KEY is the insecure default — set a random key before storing secrets")
 	}
 	var backup *store.BackupOpts
 	if cfg.BackupBucket != "" {
@@ -156,10 +119,6 @@ func main() {
 	st.SetOwnerHint(cfg.OwnerEmail)
 	sendLoginCode := email.LoginCodeFactory(st, box, cfg.ResendAPIKey, cfg.AuthEmailFrom)
 
-	// The assistant needs an owner row to hang its data off. On a fresh instance
-	// there is none yet, so it starts on the next boot, after the first sign-in.
-	asst := startAssistant(ctx, st, box, hub, cfg)
-
 	prov := &modules.Provider{
 		Store: st,
 		Hub:   hub,
@@ -175,12 +134,6 @@ func main() {
 		Display:   display.Factory(st, hub),
 		TV:        tv.Factory(st, hub),
 	}
-	if asst != nil {
-		prov.Assistant = assistantmod.Factory(asst)
-		prov.AssistantStatus = func(ctx context.Context) (bool, string) {
-			return assistantReadiness(asst.Status(ctx))
-		}
-	}
 
 	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir)
 	if err != nil {
@@ -190,9 +143,6 @@ func main() {
 	webSrv.SendLoginCode = sendLoginCode
 	webSrv.OwnerEmail = cfg.OwnerEmail
 	webSrv.LoginCodeRateLimit = loginCodeLimit
-	if asst != nil {
-		webSrv.Assistant = asst
-	}
 	webSrv.OnMercadonaSave = func(ctx context.Context, userID, emailAddr, password, postal string) error {
 		return mercadona.LinkAccount(ctx, st.DB(), mbox, userID, emailAddr, password, postal)
 	}
@@ -213,13 +163,9 @@ func main() {
 		},
 		ToolsFor: prov.ToolsFor,
 	}
-	// A finished machine_ai_run wakes other agents over MCP SSE and lands in the
-	// Telegram chat that asked for it.
+	// A finished machine_ai_run wakes the agents watching it over MCP SSE.
 	hub.OnJobEvent = func(userID, machineName string, job agenthub.AIJob) {
 		mcpSrv.NotifyUser(userID, "notifications/takan/machine_ai_job", machine.NotificationFromJob(machineName, job))
-		if asst != nil {
-			asst.OnJobEvent(userID, machineName, job)
-		}
 	}
 	webSrv.OnToolsChanged = mcpSrv.NotifyToolsChanged
 
@@ -253,9 +199,6 @@ func main() {
 			} else if n > 0 {
 				log.Printf("token gc: removed %d expired rows", n)
 			}
-			if _, err := st.PurgeJobChats(context.Background(), 30*24*time.Hour); err != nil {
-				log.Printf("job chat gc: %v", err)
-			}
 			if _, err := st.PurgeLoginCodes(context.Background(), time.Hour); err != nil {
 				log.Printf("login code gc: %v", err)
 			}
@@ -267,10 +210,6 @@ func main() {
 	webSrv.Routes(mux)
 	oauthSrv.Routes(mux)
 	apiSrv.Routes(mux)
-	if asst != nil {
-		// The phone app talks to the app host, which proxies only /v1/*.
-		asst.AppRoutes(mux)
-	}
 	mux.HandleFunc("POST /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("GET /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("DELETE /mcp", mcpSrv.HandleHTTP)
@@ -288,115 +227,34 @@ func main() {
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
-	// The loopback server carries /health, /jobs, /tasks and /internal/*: the
-	// surface the assistant CLIs and Gatus use, never reverse-proxied.
-	var localSrv *http.Server
-	if asst != nil {
-		localMux := http.NewServeMux()
-		asst.LocalRoutes(localMux)
-		localSrv = &http.Server{
-			Addr:              cfg.LocalAddr,
-			Handler:           localMux,
-			ReadHeaderTimeout: 15 * time.Second,
-		}
-		go func() {
-			log.Printf("assistant local API on %s", cfg.LocalAddr)
-			if err := localSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("local API error: %v", err)
-			}
-		}()
-		go func() {
-			if err := asst.Run(ctx); err != nil {
-				log.Printf("assistant stopped: %v", err)
-			}
-		}()
-	}
-
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutdown)
-		if localSrv != nil {
-			_ = localSrv.Shutdown(shutdown)
-		}
 	}()
 
 	if cfg.OwnerEmail == "" {
-		log.Printf("warning: ATLAS_OWNER_EMAIL is not set — panel login falls back to the owner row address")
+		log.Printf("warning: TAKAN_OWNER_EMAIL is not set — panel login falls back to the owner row address")
 	}
-	log.Printf("takan listening on %s public=%s app=%s data=%s (single operator)",
-		cfg.Listen, cfg.PublicURL, cfg.AppURL, cfg.DataDir)
+	log.Printf("takan listening on %s public=%s data=%s (single operator)",
+		cfg.Listen, cfg.PublicURL, cfg.DataDir)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
-}
-
-// startAssistant builds the in-process assistant, or returns nil with a clear
-// log line. A missing credential must not take the panel down: the hub is still
-// useful without the Telegram side, and the panel is where it gets configured.
-func startAssistant(ctx context.Context, st *store.Store, box *cryptox.Box,
-	hub *agenthub.Hub, cfg config.Config) *assistant.Assistant {
-	owner, err := st.Owner(ctx)
-	if err != nil || owner == nil {
-		log.Printf("assistant: not started — this instance has no owner yet; sign in to the panel first")
-		return nil
-	}
-	a, err := assistant.New(ctx, st, box, hub, assistant.Config{
-		OwnerID:                owner.ID,
-		OwnerTelegram:          cfg.OwnerTelegramID,
-		DataDir:                cfg.DataDir,
-		AgentHome:              cfg.AgentHome,
-		TelegramBotToken:       cfg.TelegramBotToken,
-		GroqAPIKey:             cfg.GroqAPIKey,
-		AppToken:               cfg.AppToken,
-		FirebaseServiceAccount: cfg.FirebaseServiceAccount,
-		LegacyDir:              cfg.LegacyDir,
-	})
-	if err != nil {
-		log.Printf("assistant: not started — %v", err)
-		return nil
-	}
-	return a
-}
-
-// assistantReadiness renders the module status row for takan_status.
-func assistantReadiness(s assistant.Status) (bool, string) {
-	bot := s.BotUsername
-	if bot == "" {
-		bot = "connecting"
-	} else {
-		bot = "@" + bot
-	}
-	detail := fmt.Sprintf("%s · owner %d · %d chat(s) · %d task(s) running · %d job(s) scheduled",
-		bot, s.OwnerTelegram, s.KnownChats, s.RunningTasks, s.ScheduledJobs)
-	if !s.Enabled {
-		return false, detail + " · disabled in the panel"
-	}
-	if !s.PollHealthy {
-		reason := s.LastPollError
-		if reason == "" {
-			reason = "no successful poll yet"
-		}
-		return false, detail + " · not receiving updates: " + reason
-	}
-	return true, detail
 }
 
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		if r.URL.Path != "/healthz" && r.URL.Path != "/v1/health" {
+		if r.URL.Path != "/healthz" {
 			log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
 		}
 	})
 }
 
 func agentBinDir() string {
-	if d := os.Getenv("ATLAS_AGENT_BIN_DIR"); d != "" {
-		return d
-	}
 	if d := os.Getenv("TAKAN_AGENT_BIN_DIR"); d != "" {
 		return d
 	}

@@ -185,8 +185,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 				Tool: mcp.Tool{
 					Name: "machine_ai_run",
 					Description: "Launch an autonomous AI agent on a machine. Returns immediately with job_id " +
-						"(does not wait for the agent to finish). When the job ends its result is delivered to the " +
-						"operator's Telegram chat, or to chat_id when you name one. After launch, follow the job: " +
+						"(does not wait for the agent to finish). After launch, follow the job: " +
 						"machine_ai_watch waits until it finishes; machine_ai_status is a quick status + log tail; " +
 						"machine_ai_log fetches the full transcript; machine_ai_cancel kills a running job; " +
 						"machine_ai_reply continues as a new job (runners are one-shot and cannot be interrupted in-process). " +
@@ -212,10 +211,6 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 								"type":        "string",
 								"description": "Working directory on the machine (optional)",
 							},
-							"chat_id": map[string]any{
-								"type":        "string",
-								"description": "Telegram chat that gets the result (optional; default: the operator's own chat)",
-							},
 						},
 						"required": []string{"machine", "runner", "prompt"},
 					},
@@ -237,17 +232,15 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if err != nil {
 						return "", err
 					}
-					delivery := recordJobChat(ctx, st, userID, res.JobID, strArg(args, "chat_id"), name)
 					out := map[string]any{
-						"machine":  name,
-						"job_id":   res.JobID,
-						"runner":   r.ID,
-						"name":     r.Name,
-						"command":  r.Command,
-						"status":   res.Status,
-						"pid":      res.PID,
-						"delivery": delivery,
-						"hint":     followHint(),
+						"machine": name,
+						"job_id":  res.JobID,
+						"runner":  r.ID,
+						"name":    r.Name,
+						"command": r.Command,
+						"status":  res.Status,
+						"pid":     res.PID,
+						"hint":    followHint(),
 					}
 					if res.Error != "" {
 						out["error"] = res.Error
@@ -432,7 +425,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"the new job stores parent_job_id. " +
 						"Limitation: typical runners (e.g. grok --always-approve -p, claude -p) are one-shot with no live stdin session — " +
 						"this cannot attach to or interrupt a running process. To stop the parent first, call machine_ai_cancel. " +
-						"Defaults to the parent job's runner, cwd and delivery chat.",
+						"Defaults to the parent job's runner and cwd.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -450,10 +443,6 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 							"cwd": map[string]any{
 								"type":        "string",
 								"description": "Override working directory (default: parent job's cwd)",
-							},
-							"chat_id": map[string]any{
-								"type":        "string",
-								"description": "Telegram chat to answer in (optional; default: the parent job's chat)",
 							},
 						},
 						"required": []string{"machine", "job_id", "message"},
@@ -503,13 +492,6 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if err != nil {
 						return "", err
 					}
-					chatID := strArg(args, "chat_id")
-					if chatID == "" {
-						if link, err := st.JobChatByID(ctx, parent.JobID); err == nil && link != nil {
-							chatID = link.ChatID
-						}
-					}
-					delivery := recordJobChat(ctx, st, userID, res.JobID, chatID, name)
 					out := map[string]any{
 						"machine":       name,
 						"job_id":        res.JobID,
@@ -519,7 +501,6 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"command":       r.Command,
 						"status":        res.Status,
 						"pid":           res.PID,
-						"delivery":      delivery,
 						"hint":          followHint() + " This is a new job; the parent was not interrupted.",
 					}
 					if res.Error != "" {
@@ -556,8 +537,8 @@ func requireMachine(ctx context.Context, st *store.Store, userID, name string) (
 	return name, nil
 }
 
-// parseRunArgs validates a machine_ai_run call. An "owner" key sent by an older
-// client is accepted and ignored: results are routed by chat_id now.
+// parseRunArgs validates a machine_ai_run call. Unknown keys sent by an older
+// client (e.g. "owner", "chat_id") are accepted and ignored.
 func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[string]any) (name, runnerID, prompt, cwd string, err error) {
 	if err = requireAI(ctx, st, userID); err != nil {
 		return "", "", "", "", err
@@ -577,22 +558,6 @@ func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[
 		return "", "", "", "", err
 	}
 	return name, runnerID, prompt, cwd, nil
-}
-
-// recordJobChat remembers where a launched job's result must be delivered, and
-// returns a short human note for the tool result. An empty chat means the
-// operator's own chat.
-func recordJobChat(ctx context.Context, st *store.Store, userID, jobID, chatID, machine string) string {
-	if jobID == "" {
-		return "none (no job id)"
-	}
-	if err := st.RecordJobChat(ctx, jobID, userID, chatID, machine); err != nil {
-		return "none (" + err.Error() + ")"
-	}
-	if chatID != "" {
-		return "the result will be sent to chat " + chatID + " when the job finishes"
-	}
-	return "the result will be sent to the operator's chat when the job finishes"
 }
 
 func enabledRunner(cfg Config, runnerID string) (Runner, error) {

@@ -32,7 +32,7 @@ Light only (desk / phone daylight). Dark theme later if needed.
 
 ## Layout
 
-- Sidebar 248px sticky, grouped: **Console** (overview, integrations), **Channels** (Assistant, Email — how the operator is reached), **Capabilities** (what agents can do), **Instance**. A flat module list stopped scanning once it passed about eight entries.
+- Sidebar 248px sticky, grouped: **Console** (overview, integrations), **Capabilities** (what agents can do), **Instance**.
 - Content max readable width with generous padding.
 - Spacing scale: 4 / 8 / 12 / 16 / 24 / 32 / 48.
 - Cards: white, 1px border, soft shadow (offset + blur), radius 12px. No nested cards.
@@ -49,12 +49,6 @@ Light only (desk / phone daylight). Dark theme later if needed.
 ## Motion
 
 150–200ms ease on hover/focus only. No page-load choreography.
-
-## Assistant-specific
-
-- The page is read-only except the runner settings: chats need no approval, so there is nothing to decide there. Listing them is orientation, not a queue.
-- It must render when the assistant failed to start, and say which setting is missing — that page is where a broken assistant gets diagnosed.
-- Device push tokens are shown masked. They are credentials, not identifiers.
 
 ## Vault-specific
 

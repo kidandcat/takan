@@ -46,8 +46,6 @@ type Server struct {
 	OnMercadonaClear func(ctx context.Context, userID string) error
 	// OnToolsChanged notifies MCP clients (tools/list_changed) after module changes.
 	OnToolsChanged func(userID string)
-	// Assistant optional: the in-process personal assistant, for its panel page.
-	Assistant AssistantView
 	// SendLoginCode delivers a one-time login code by email. Required for login.
 	SendLoginCode func(ctx context.Context, to, code string, ttl time.Duration) (string, error)
 	// OwnerEmail is TAKAN_OWNER_EMAIL; it wins over the address stored in the DB.
@@ -77,7 +75,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /logout", s.logout)
 	mux.HandleFunc("GET /dashboard", s.dashOverview)
 	mux.HandleFunc("GET /dashboard/integrations", s.dashIntegrations)
-	mux.HandleFunc("GET /dashboard/assistant", s.dashAssistant)
 	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
 	mux.HandleFunc("GET /dashboard/display", s.dashDisplay)
 	mux.HandleFunc("GET /dashboard/tv", s.dashTV)
@@ -89,12 +86,12 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/instance", s.dashInstance)
 	mux.HandleFunc("GET /dashboard/invites", gone)
 	mux.HandleFunc("GET /dashboard/admin", gone)
-	// The bot fleet and the Telegram channel layer became one assistant.
+	// The bot fleet, the Telegram channel layer, SIP and the Atlas assistant were
+	// all retired: Takan is the MCP hub and its panel, nothing else.
 	mux.HandleFunc("GET /dashboard/bots", gone)
 	mux.HandleFunc("GET /dashboard/sip", gone)
-	mux.HandleFunc("GET /dashboard/telegram", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dashboard/assistant", http.StatusFound)
-	})
+	mux.HandleFunc("GET /dashboard/telegram", gone)
+	mux.HandleFunc("GET /dashboard/assistant", gone)
 	// Old routes → overview / integrations
 	mux.HandleFunc("GET /dashboard/connect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -116,12 +113,6 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/display/{id}/delete", s.deleteDisplay)
 	mux.HandleFunc("POST /dashboard/display/{id}/default", s.defaultDisplay)
 	mux.HandleFunc("POST /dashboard/tv", s.saveTV)
-	mux.HandleFunc("POST /dashboard/assistant", s.saveAssistant)
-	mux.HandleFunc("POST /dashboard/assistant/chats/{chat}/forget", s.forgetAssistantChat)
-	mux.HandleFunc("POST /dashboard/assistant/jobs/{id}/delete", s.deleteAssistantJob)
-	mux.HandleFunc("POST /dashboard/assistant/jobs/{id}/run", s.runAssistantJob)
-	mux.HandleFunc("POST /dashboard/assistant/tasks/{id}/kill", s.killAssistantTask)
-	mux.HandleFunc("POST /dashboard/assistant/devices/{token}/delete", s.deleteAssistantDevice)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
 	mux.HandleFunc("POST /dashboard/mercadona/clear", s.clearMercadona)
 	mux.HandleFunc("POST /dashboard/email", s.saveEmail)
@@ -204,8 +195,6 @@ type pageData struct {
 	TVClientName string
 	TVWifiMAC    string
 	TVAppsText   string
-	// Assistant module (the personal assistant: bot identity, chats, tasks, jobs)
-	Assistant assistantView
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
 	// NeedsSetup is true when this instance has no owner yet (the first emailed
@@ -621,9 +610,6 @@ func (s *Server) dashOverview(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashIntegrations(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "integrations", "Integrations", "integrations.html")
 }
-func (s *Server) dashAssistant(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "assistant", "Assistant", "assistant.html")
-}
 func (s *Server) dashMachines(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "machine", "Machines", "machines.html")
 }
@@ -667,12 +653,14 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 		cat[c.ID] = c
 	}
 	for _, m := range mods {
-		info := cat[m.ModuleID]
+		info, known := cat[m.ModuleID]
+		if !known {
+			// A row left behind by a retired module: it has no settings page,
+			// so a card for it would be a dead link.
+			continue
+		}
 		mv := modView{
 			ID: m.ModuleID, Name: info.Name, Description: info.Description, Enabled: m.Enabled,
-		}
-		if mv.Name == "" {
-			mv.Name = m.ModuleID
 		}
 		switch m.ModuleID {
 		case "machine":
@@ -863,7 +851,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			})
 		}
 	}
-	s.fillAssistant(ctx, u, &data)
 	tvc, _ := tvmod.LoadConfig(ctx, s.Store, u.ID)
 	data.TVMachine = tvc.Machine
 	data.TVHost = tvc.Host

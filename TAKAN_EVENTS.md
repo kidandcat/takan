@@ -1,5 +1,12 @@
 # Takan MCP events vs Grok Bot wakeup
 
+> **Status update (2026-09-05): the assistant is gone and the wakeup gap is OPEN again.** Takan
+> is the MCP hub and its panel, nothing else. A finished `machine_ai_run` emits
+> `notifications/takan/machine_ai_job` on open MCP SSE streams and is otherwise read back with
+> `machine_ai_status` / `machine_ai_watch` / `machine_ai_log`. There is no Telegram delivery, no
+> phone app channel and no `job_chats` routing. Everything below, including the 2026-09 banner
+> that follows, is history.
+>
 > **Status update (2026-09):** the wakeup gap analysed below is closed, and the mechanism that
 > closed it has since been simplified twice.
 >

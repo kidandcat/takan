@@ -1,6 +1,6 @@
 #!/bin/sh
 # Persist a session key on the data volume when the operator did not set one.
-# The key encrypts vault / Mercadona / email / telegram / SIP — do not lose the volume.
+# The key encrypts vault / Mercadona / email credentials — do not lose the volume.
 set -eu
 DATA="${TAKAN_DATA_DIR:-/data}"
 mkdir -p "$DATA"

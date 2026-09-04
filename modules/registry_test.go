@@ -5,8 +5,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kidandcat/takan/internal/agenthub"
+	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/store"
-	assistantmod "github.com/kidandcat/takan/modules/assistant"
+	"github.com/kidandcat/takan/modules/display"
+	"github.com/kidandcat/takan/modules/email"
+	"github.com/kidandcat/takan/modules/health"
+	"github.com/kidandcat/takan/modules/machine"
+	"github.com/kidandcat/takan/modules/people"
+	"github.com/kidandcat/takan/modules/tv"
+	"github.com/kidandcat/takan/modules/vault"
 )
 
 func TestCatalogShape(t *testing.T) {
@@ -20,32 +28,18 @@ func TestCatalogShape(t *testing.T) {
 		}
 		ids[c.ID] = c.Name
 	}
-	for _, want := range []string{"assistant", "machine", "display", "tv", "mercadona", "email", "people", "health", "vault"} {
+	for _, want := range []string{"machine", "display", "tv", "mercadona", "email", "people", "health", "vault"} {
 		if _, ok := ids[want]; !ok {
 			t.Fatalf("module %q missing from the catalog", want)
 		}
 	}
-	// The bot fleet, the Telegram channel layer and SIP were retired together.
-	for _, gone := range []string{"bots", "telegram", "sip"} {
+	// The bot fleet, the Telegram channel layer, SIP and the Atlas assistant
+	// were all retired: Takan is the MCP hub and its panel.
+	for _, gone := range []string{"bots", "telegram", "sip", "assistant"} {
 		if _, ok := ids[gone]; ok {
 			t.Fatalf("module %q should be gone from the catalog", gone)
 		}
 	}
-	if ids["assistant"] != "Assistant" {
-		t.Fatalf("assistant name: %q", ids["assistant"])
-	}
-}
-
-// stubSender records what telegram_send would have delivered.
-type stubSender struct {
-	chatID    int64
-	text      string
-	parseMode string
-}
-
-func (s *stubSender) SendTelegram(_ context.Context, chatID int64, text, parseMode string) (int64, error) {
-	s.chatID, s.text, s.parseMode = chatID, text, parseMode
-	return 42, nil
 }
 
 func newProviderOwner(t *testing.T) (*store.Store, string, context.Context) {
@@ -63,118 +57,73 @@ func newProviderOwner(t *testing.T) (*store.Store, string, context.Context) {
 	return st, owner.ID, ctx
 }
 
-func TestAssistantToolsAreGatedByTheModule(t *testing.T) {
-	st, userID, ctx := newProviderOwner(t)
-	sender := &stubSender{}
-	p := &Provider{Store: st, Assistant: assistantmod.Factory(sender)}
-
-	for _, name := range namesOf(p.ToolsFor(ctx, userID)) {
-		if name == "telegram_send" {
-			t.Fatal("telegram_send must not appear while the module is off")
-		}
-	}
-	if err := st.SetModuleEnabled(ctx, userID, "assistant", true); err != nil {
-		t.Fatal(err)
-	}
-	on := namesOf(p.ToolsFor(ctx, userID))
-	if !contains(on, "telegram_send") {
-		t.Fatalf("telegram_send missing from %v", on)
-	}
-}
-
-// TestRetiredToolsAreGone pins the surface other agents see: the bot registry
-// and the channel picker no longer exist.
+// TestRetiredToolsAreGone pins the surface other agents see with EVERY module
+// on: the bot registry, the channel picker and the assistant no longer exist.
 func TestRetiredToolsAreGone(t *testing.T) {
 	st, userID, ctx := newProviderOwner(t)
-	p := &Provider{Store: st, Assistant: assistantmod.Factory(&stubSender{})}
-	for _, mod := range []string{"assistant", "machine", "vault", "people", "health"} {
-		if err := st.SetModuleEnabled(ctx, userID, mod, true); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, name := range namesOf(p.ToolsFor(ctx, userID)) {
-		if strings.HasPrefix(name, "bots_") || name == "telegram_chats" {
-			t.Fatalf("retired tool %q is still exposed", name)
-		}
-	}
-}
-
-func TestTelegramSendDefaultsToTheOperatorChat(t *testing.T) {
-	st, userID, ctx := newProviderOwner(t)
-	if err := st.SetModuleEnabled(ctx, userID, "assistant", true); err != nil {
-		t.Fatal(err)
-	}
-	sender := &stubSender{}
-	tools := (&Provider{Store: st, Assistant: assistantmod.Factory(sender)}).ToolsFor(ctx, userID)
-
-	var send func(context.Context, string, map[string]any) (string, error)
-	for _, tl := range tools {
-		if tl.Name == "telegram_send" {
-			send = tl.Handler
-		}
-	}
-	if send == nil {
-		t.Fatal("telegram_send is not registered")
-	}
-
-	out, err := send(ctx, userID, map[string]any{"text": "hola"})
+	box, err := cryptox.NewBox("0123456789abcdef0123456789abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sender.chatID != 0 {
-		t.Fatalf("an omitted chat_id means the operator's own chat, got %d", sender.chatID)
+	hub := agenthub.New(nil, nil)
+	p := &Provider{
+		Store:   st,
+		Hub:     hub,
+		Machine: machine.Factory(st, hub, nil),
+		Email:   email.Factory(st, box),
+		People:  people.Factory(st),
+		Health:  health.Factory(st),
+		Vault:   vault.Factory(st, box),
+		Display: display.Factory(st, hub),
+		TV:      tv.Factory(st, hub),
 	}
-	if !strings.Contains(out, `"message_id": 42`) {
-		t.Fatalf("the tool should report the message id: %s", out)
+	for _, c := range Catalog {
+		if err := st.SetModuleEnabled(ctx, userID, c.ID, true); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	if _, err := send(ctx, userID, map[string]any{"text": "hola", "chat_id": "-1002233445566"}); err != nil {
-		t.Fatal(err)
+	names := namesOf(p.ToolsFor(ctx, userID))
+	if len(names) < 20 {
+		t.Fatalf("expected a full tool list, got %v", names)
 	}
-	if sender.chatID != -1002233445566 {
-		t.Fatalf("an explicit chat_id must be honoured, got %d", sender.chatID)
+	for _, name := range names {
+		for _, prefix := range []string{"bots_", "telegram_", "assistant_", "task_", "sip_"} {
+			if strings.HasPrefix(name, prefix) {
+				t.Fatalf("retired tool %q is still exposed", name)
+			}
+		}
 	}
-
-	// A non-numeric chat id is a caller mistake, not a silent fallback to the
-	// operator's chat — that would send private text to the wrong place.
-	if _, err := send(ctx, userID, map[string]any{"text": "hola", "chat_id": "not-a-number"}); err == nil {
-		t.Fatal("a malformed chat_id must be rejected")
+	// machine_ai_run routed its result through a Telegram chat; nothing does now.
+	for _, tl := range p.ToolsFor(ctx, userID) {
+		props, _ := tl.InputSchema["properties"].(map[string]any)
+		if _, ok := props["chat_id"]; ok {
+			t.Fatalf("%s still takes a chat_id", tl.Name)
+		}
 	}
 }
 
-// TestAssistantReadinessIsReported keeps takan_status useful: it is how another
-// agent finds out the assistant is not receiving anything.
-func TestAssistantReadinessIsReported(t *testing.T) {
+// TestStatusHasNoAssistantRow: takan_status is how another agent discovers what
+// this hub can do, so a module that no longer exists must not be listed — even
+// if an old database still carries the row.
+func TestStatusHasNoAssistantRow(t *testing.T) {
 	st, userID, ctx := newProviderOwner(t)
-	if err := st.SetModuleEnabled(ctx, userID, "assistant", true); err != nil {
+	// Simulate a database that predates the removal.
+	if _, err := st.DB().ExecContext(ctx,
+		`INSERT OR IGNORE INTO user_modules (user_id, module_id, enabled) VALUES (?, 'assistant', 1)`,
+		userID); err != nil {
 		t.Fatal(err)
 	}
 
-	// With no assistant wired, the status must say why rather than claim ready.
 	p := &Provider{Store: st}
+	if names := namesOf(p.ToolsFor(ctx, userID)); len(names) != 1 || names[0] != "takan_status" {
+		t.Fatalf("a stale assistant row must produce no tools, got %v", names)
+	}
 	status, err := p.StatusJSON(ctx, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(status, "assistant not running") {
-		t.Fatalf("status should explain a missing assistant:\n%s", status)
+	if strings.Contains(status, `"assistant"`) {
+		t.Fatalf("status still lists the assistant:\n%s", status)
 	}
-
-	p.AssistantStatus = func(context.Context) (bool, string) { return true, "@casa_bot · 2 chat(s)" }
-	status, err = p.StatusJSON(ctx, userID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(status, "@casa_bot") {
-		t.Fatalf("status should carry the assistant detail:\n%s", status)
-	}
-}
-
-func contains(have []string, want string) bool {
-	for _, h := range have {
-		if h == want {
-			return true
-		}
-	}
-	return false
 }

@@ -22,7 +22,6 @@ type Info struct {
 
 // All known modules (static catalog). Keep IDs in sync with store.defaultModuleIDs.
 var Catalog = []Info{
-	{ID: "assistant", Name: "Assistant", Description: "Your personal assistant: one Telegram bot, the phone app channel, background tasks and scheduled routines, driven by a CLI coding agent."},
 	{ID: "machine", Name: "Machine", Description: "Remote shell + configurable AI task runners (Claude, Grok, free commands) via takan-agent."},
 	{ID: "display", Name: "Display", Description: "Remote kiosk screens: push static HTML to a takan-agent that serves it locally."},
 	{ID: "tv", Name: "TV", Description: "Samsung Tizen TV on the home LAN: status, apps, keys, volume, mute, power, now playing — via a takan-agent on the same WiFi."},
@@ -41,7 +40,6 @@ type Provider struct {
 	// MercadonaLinked optional: whether Mercadona session tokens exist for user.
 	MercadonaLinked func(ctx context.Context, userID string) bool
 
-	Assistant ToolFactory
 	Machine   ToolFactory
 	Mercadona ToolFactory
 	Email     ToolFactory
@@ -50,9 +48,6 @@ type Provider struct {
 	Vault     ToolFactory
 	Display   ToolFactory
 	TV        ToolFactory
-
-	// AssistantStatus optional: readiness detail for the assistant module.
-	AssistantStatus func(ctx context.Context) (ready bool, detail string)
 }
 
 // ToolFactory produces tools when the module is enabled.
@@ -70,10 +65,6 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			continue
 		}
 		switch m.ModuleID {
-		case "assistant":
-			if p.Assistant != nil {
-				out = append(out, p.Assistant(ctx, userID)...)
-			}
 		case "machine":
 			if p.Machine != nil {
 				out = append(out, p.Machine(ctx, userID)...)
@@ -116,7 +107,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(assistant, machines online, displays, TV, Mercadona linked, email domains, people, health, vault). " +
+				"(machines online, displays, TV, Mercadona linked, email domains, people, health, vault). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -150,9 +141,12 @@ func (p *Provider) statusJSON(ctx context.Context, userID string) (string, error
 	}
 	var rows []moduleStatus
 	for _, m := range mods {
-		name := cat[m.ModuleID]
-		if name == "" {
-			name = m.ModuleID
+		name, known := cat[m.ModuleID]
+		if !known {
+			// A row left behind by a retired module (bots, telegram, sip,
+			// assistant). takan_status is how another agent decides what this
+			// hub can do, so it must describe the binary, not the database.
+			continue
 		}
 		row := moduleStatus{ID: m.ModuleID, Name: name, Enabled: m.Enabled}
 		if !m.Enabled {
@@ -175,11 +169,6 @@ func (p *Provider) statusJSON(ctx context.Context, userID string) (string, error
 
 func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string) (ready bool, detail string) {
 	switch moduleID {
-	case "assistant":
-		if p.AssistantStatus == nil {
-			return false, "assistant not running (check TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_ID)"
-		}
-		return p.AssistantStatus(ctx)
 	case "machine":
 		ms, err := p.Store.ListMachines(ctx, userID)
 		if err != nil {

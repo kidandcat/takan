@@ -8,41 +8,9 @@ import (
 	"testing"
 	"time"
 
-	asst "github.com/kidandcat/takan/internal/assistant"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/modules"
 )
-
-// stubAssistant stands in for the running assistant so the panel can be
-// rendered without a Telegram connection.
-type stubAssistant struct{}
-
-func (stubAssistant) Status(context.Context) asst.Status {
-	return asst.Status{
-		Enabled: true, BotUsername: "casa_bot", OwnerTelegram: 282611642,
-		KnownChats: 2, RunningTasks: 1, ScheduledJobs: 3, Messages: 120,
-		PollHealthy: true, LastPollOK: time.Now(),
-	}
-}
-
-func (stubAssistant) Jobs() []asst.Job {
-	return []asst.Job{{
-		ID: "a1b2c3d4", Name: "weekly review", Type: asst.JobMessage,
-		Cron: "0 9 * * 1", NextRun: time.Now().Add(time.Hour), LastStatus: "ok", Runs: 12,
-	}}
-}
-
-func (stubAssistant) Tasks() []asst.Task {
-	return []asst.Task{{
-		ID: "51be991d", Title: "build", State: asst.TaskRunning,
-		StartedAt: time.Now().Add(-time.Minute), Promoted: true,
-	}}
-}
-
-func (stubAssistant) KillTask(string) (bool, error)        { return true, nil }
-func (stubAssistant) DeleteJob(string) (bool, error)       { return true, nil }
-func (stubAssistant) RunJob(context.Context, string) error { return nil }
-func (stubAssistant) Workdir() string                      { return "/opt/atlas/data/workspace" }
 
 // signedIn returns a session cookie for a bootstrapped owner.
 func signedIn(t *testing.T, s *Server, st *store.Store) *http.Cookie {
@@ -65,13 +33,11 @@ func signedIn(t *testing.T, s *Server, st *store.Store) *http.Cookie {
 // panel, can be weeks later.
 func TestEveryPanelPageRenders(t *testing.T) {
 	s, st, h := testWeb(t)
-	s.Assistant = stubAssistant{}
 	cookie := signedIn(t, s, st)
 
 	pages := map[string]string{
 		"/dashboard":              "Overview",
 		"/dashboard/integrations": "integrations",
-		"/dashboard/assistant":    "Assistant",
 		"/dashboard/machines":     "Machines",
 		"/dashboard/display":      "Display",
 		"/dashboard/tv":           "TV",
@@ -116,49 +82,18 @@ func TestPublicPagesRender(t *testing.T) {
 	}
 }
 
-// TestAssistantPageRendersWithoutARunningAssistant: the page is where a broken
-// assistant gets diagnosed, so it must render when the assistant failed to start.
-func TestAssistantPageRendersWithoutARunningAssistant(t *testing.T) {
-	s, st, h := testWeb(t)
-	s.Assistant = nil
-	cookie := signedIn(t, s, st)
-
-	req := httptest.NewRequest(http.MethodGet, "/dashboard/assistant", nil)
-	req.AddCookie(cookie)
-	rec := doReq(h, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d\n%s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "did not start") {
-		t.Fatalf("the page should explain what is wrong:\n%s", body)
-	}
-	if !strings.Contains(body, "OWNER_TELEGRAM_ID") {
-		t.Fatalf("the page should name the missing settings:\n%s", body)
-	}
-}
-
-// TestRetiredPagesAreGone: the bot fleet and the Telegram channel layer no
-// longer exist, and SIP went with them.
+// TestRetiredPagesAreGone: the bot fleet, the Telegram channel layer, SIP and
+// the Atlas assistant no longer exist. Takan is the MCP hub and its panel.
 func TestRetiredPagesAreGone(t *testing.T) {
 	s, st, h := testWeb(t)
 	cookie := signedIn(t, s, st)
 
-	for _, path := range []string{"/dashboard/bots", "/dashboard/sip"} {
+	for _, path := range []string{"/dashboard/bots", "/dashboard/sip", "/dashboard/telegram", "/dashboard/assistant"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.AddCookie(cookie)
 		if rec := doReq(h, req); rec.Code != http.StatusNotFound {
 			t.Fatalf("%s should be gone, got %d", path, rec.Code)
 		}
-	}
-	// The old Telegram page redirects, because it is where the operator would
-	// look for the bot settings.
-	req := httptest.NewRequest(http.MethodGet, "/dashboard/telegram", nil)
-	req.AddCookie(cookie)
-	rec := doReq(h, req)
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/dashboard/assistant" {
-		t.Fatalf("expected a redirect to the assistant page, got %d %q",
-			rec.Code, rec.Header().Get("Location"))
 	}
 }
 
@@ -186,7 +121,6 @@ func TestNoDomainLiteralsInTemplates(t *testing.T) {
 // with no nav entry is unreachable.
 func TestNavCoversEveryModule(t *testing.T) {
 	s, st, h := testWeb(t)
-	s.Assistant = stubAssistant{}
 	cookie := signedIn(t, s, st)
 
 	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
@@ -198,7 +132,7 @@ func TestNavCoversEveryModule(t *testing.T) {
 			t.Errorf("module %q (%s) has no sidebar entry", mod.Name, mod.ID)
 		}
 	}
-	for _, gone := range []string{"/dashboard/bots", "/dashboard/sip"} {
+	for _, gone := range []string{"/dashboard/bots", "/dashboard/sip", "/dashboard/telegram", "/dashboard/assistant"} {
 		if strings.Contains(body, `href="`+gone+`"`) {
 			t.Errorf("the sidebar still links to %s", gone)
 		}
