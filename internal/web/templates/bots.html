@@ -1,0 +1,236 @@
+{{define "content"}}
+<section class="section hero">
+  <div>
+    <h1>Bots</h1>
+    <p class="muted" style="margin-top:.4rem;max-width:60ch">
+      Telegram assistant bots running as daemons on your machines. Takan owns the fleet and the
+      chat whitelist: an unknown chat lands here as <strong>pending</strong> until you approve it.
+      The Telegram bot token never leaves the bot's machine. A bot name is also a
+      <code>machine_ai_run</code> owner: results of the jobs it launches are queued in its outbox
+      and delivered by its daemon.
+    </p>
+  </div>
+</section>
+
+{{if .Flash}}
+  <div class="flash{{if .FlashIsError}} err{{end}}">{{.Flash}}</div>
+{{end}}
+
+{{if .BotToken}}
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Bot token (shown once)</h3>
+        <p class="muted">Put it in the bot daemon config. Takan stores only a hash.</p>
+      </div>
+      <span class="pill on"><span class="live"></span> Copy now</span>
+    </div>
+    <div class="install-box">
+      <p class="ok">Token</p>
+      <div class="code-wrap">
+        <pre id="bot-token">{{.BotToken}}</pre>
+        <button type="button" class="copy-btn" onclick="copyText('bot-token', this)">Copy</button>
+      </div>
+      <p class="muted" style="margin-top:.75rem">API base</p>
+      <div class="code-wrap">
+        <pre id="bot-api">{{.BotInstallHint}}</pre>
+        <button type="button" class="copy-btn" onclick="copyText('bot-api', this)">Copy</button>
+      </div>
+    </div>
+  </div>
+</section>
+{{end}}
+
+{{if .BotPendingChats}}
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Pending approvals</h3>
+        <p class="muted">Someone wrote to a bot. Approve to let the bot answer that chat; approving a group authorises the whole group.</p>
+      </div>
+      <span class="pill warn">{{.BotsPending}} pending</span>
+    </div>
+    <div class="machine-list">
+      {{range .BotPendingChats}}
+      <div class="machine-row">
+        <div>
+          <div class="row" style="gap:.45rem">
+            <span class="name">{{.Label}}</span>
+            <span class="pill {{if eq .Type "group"}}warn{{else}}neutral{{end}}">{{.Type}}</span>
+            <span class="pill neutral">{{.BotName}}</span>
+          </div>
+          <p class="faint" style="margin-top:.2rem">chat {{.ChatID}} · reported {{.Reported}}</p>
+          {{if .Snippet}}<p class="muted" style="margin-top:.3rem">“{{.Snippet}}”</p>{{end}}
+        </div>
+        <div class="row" style="gap:.4rem">
+          <form method="post" action="/dashboard/bots/{{.BotID}}/chats/{{.ChatID}}/approve">
+            <button type="submit">Approve</button>
+          </form>
+          <form method="post" action="/dashboard/bots/{{.BotID}}/chats/{{.ChatID}}/deny">
+            <button type="submit" class="secondary">Deny</button>
+          </form>
+        </div>
+      </div>
+      {{end}}
+    </div>
+  </div>
+</section>
+{{end}}
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Bots</h3>
+        <p class="muted">Name is what agents pass to <code>bots_approve</code>. Online means a heartbeat in the last 3 minutes.</p>
+      </div>
+      <span class="pill {{if gt .BotsOnline 0}}on{{else}}neutral{{end}}">
+        {{if gt .BotsOnline 0}}<span class="live"></span>{{end}}
+        {{.BotsOnline}} online
+      </span>
+    </div>
+
+    {{if .Bots}}
+    <div class="machine-list">
+      {{range .Bots}}
+      {{$bot := .}}
+      <div class="machine-row" style="align-items:flex-start">
+        <div style="flex:1">
+          <div class="row" style="gap:.45rem">
+            <span class="name">{{.Name}}</span>
+            {{if .Online}}
+              <span class="pill on"><span class="live"></span> Online</span>
+            {{else}}
+              <span class="pill off">Offline</span>
+            {{end}}
+            {{if gt .Pending 0}}<span class="pill warn">{{.Pending}} pending</span>{{end}}
+            {{if gt .Deliveries 0}}<span class="pill warn">{{.Deliveries}} queued</span>{{end}}
+            {{if .Legacy}}<span class="pill neutral">legacy owner</span>{{end}}
+          </div>
+          <p class="faint" style="margin-top:.2rem">
+            {{if .Username}}@{{.Username}} · {{end}}
+            {{if .MachineName}}machine {{.MachineName}}{{else}}no machine reported{{end}}
+            {{if .Version}} · v{{.Version}}{{end}}
+            {{if .LastSeen}} · last seen {{.LastSeen}}{{end}}
+            · {{.Approved}} approved chat(s)
+          </p>
+          {{if .Legacy}}
+          <p class="faint" style="margin-top:.2rem">
+            Placeholder kept so <code>machine_ai_run owner={{.Name}}</code> still resolves.
+            Issue a token to turn it into a real bot daemon.
+          </p>
+          {{end}}
+
+          {{if .Chats}}
+          <table class="table" style="margin-top:.6rem">
+            <thead>
+              <tr><th>Chat</th><th>Type</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody>
+              {{range .Chats}}
+              <tr>
+                <td>
+                  <span class="name">{{.Label}}</span>
+                  <span class="faint mono"> {{.ChatID}}</span>
+                </td>
+                <td>{{.Type}}</td>
+                <td>
+                  {{if .Pending}}<span class="pill warn">pending</span>
+                  {{else if .Approved}}<span class="pill on">approved</span>
+                  {{else}}<span class="pill off">denied</span>{{end}}
+                </td>
+                <td>
+                  <div class="row" style="gap:.35rem;justify-content:flex-end">
+                    {{if not .Approved}}
+                    <form method="post" action="/dashboard/bots/{{.BotID}}/chats/{{.ChatID}}/approve">
+                      <button type="submit" class="secondary">Approve</button>
+                    </form>
+                    {{end}}
+                    {{if .Pending}}
+                    <form method="post" action="/dashboard/bots/{{.BotID}}/chats/{{.ChatID}}/deny">
+                      <button type="submit" class="secondary">Deny</button>
+                    </form>
+                    {{else}}
+                    <form method="post" action="/dashboard/bots/{{.BotID}}/chats/{{.ChatID}}/forget"
+                          onsubmit="return confirm('Forget chat {{.ChatID}}? It will ask again on the next message.')">
+                      <button type="submit" class="secondary">Forget</button>
+                    </form>
+                    {{end}}
+                  </div>
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="faint" style="margin-top:.5rem">No chats reported yet.</p>
+          {{end}}
+        </div>
+
+        <div class="row" style="gap:.4rem;align-items:flex-start">
+          <form method="post" action="/dashboard/bots/{{.ID}}/token"
+                onsubmit="return confirm('{{if $bot.HasToken}}Issue a NEW token for {{$bot.Name}}? The current one stops working.{{else}}Issue a daemon token for {{$bot.Name}}?{{end}}')">
+            <button type="submit" class="secondary">{{if $bot.HasToken}}New token{{else}}Issue token{{end}}</button>
+          </form>
+          <form method="post" action="/dashboard/bots/{{.ID}}/delete" onsubmit="return confirm('Remove bot {{.Name}}? Its token stops working and queued deliveries are dropped.')">
+            <button type="submit" class="secondary">Remove</button>
+          </form>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">No bots yet. Create one below, then install the daemon on the machine with its token.</div>
+    {{end}}
+  </div>
+</section>
+
+<section class="section">
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <h3>Add bot</h3>
+        <p class="muted">Issues a bot token for the daemon. The Telegram bot token stays in the daemon's own config.</p>
+      </div>
+    </div>
+    <form method="post" action="/dashboard/bots" class="form-stack" style="max-width:28rem">
+      <div>
+        <label for="name">Name</label>
+        <input id="name" name="name" type="text" required placeholder="Atlas" autocomplete="off"/>
+      </div>
+      <div>
+        <label for="machine_id">Machine (optional)</label>
+        <select id="machine_id" name="machine_id">
+          <option value="">— report on register —</option>
+          {{range .Machines}}
+          <option value="{{.ID}}">{{.Name}}{{if .Online}} (online){{end}}</option>
+          {{end}}
+        </select>
+      </div>
+      <div class="row">
+        <button type="submit">Add bot</button>
+      </div>
+    </form>
+
+    <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <h3 style="margin-bottom:.35rem">Daemon API</h3>
+      <p class="muted">Authenticated with the bot token (<code>Authorization: Bearer …</code>):</p>
+      <ul class="mod-facts" style="margin-top:.4rem">
+        <li><span><code>POST /api/bots/register</code> — announce name, telegram username, machine, version (idempotent)</span></li>
+        <li><span><code>POST /api/bots/heartbeat</code> — liveness + whitelist cursor</span></li>
+        <li><span><code>GET /api/bots/chats</code> — whitelist; <code>updated_since</code> + <code>wait</code> for long-poll</span></li>
+        <li><span><code>POST /api/bots/chats/pending</code> — report an unknown chat (idempotent per chat)</span></li>
+        <li><span><code>GET /api/bots/deliveries</code> — outbox (AI job results); <code>wait</code> for long-poll</span></li>
+        <li><span><code>POST /api/bots/deliveries/ack</code> — confirm what was forwarded; unacked deliveries come back</span></li>
+      </ul>
+      <p class="muted" style="margin-top:.6rem">
+        MCP tools when this module is enabled: <code>bots_list</code>, <code>bots_chats</code>,
+        <code>bots_approve</code>, <code>bots_deny</code>. Readiness is in <code>takan_status</code>.
+        Full contract for daemon authors: <code>TAKAN_BOTS.md</code>.
+      </p>
+    </div>
+  </div>
+</section>
+{{end}}

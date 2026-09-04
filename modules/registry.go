@@ -9,6 +9,7 @@ import (
 	"github.com/kidandcat/takan/internal/agenthub"
 	"github.com/kidandcat/takan/internal/mcp"
 	"github.com/kidandcat/takan/internal/store"
+	botsmod "github.com/kidandcat/takan/modules/bots"
 	machinemod "github.com/kidandcat/takan/modules/machine"
 	tvmod "github.com/kidandcat/takan/modules/tv"
 )
@@ -25,6 +26,7 @@ var Catalog = []Info{
 	{ID: "machine", Name: "Machine", Description: "Remote shell + configurable AI task runners (Claude, Grok, free commands) via takan-agent."},
 	{ID: "display", Name: "Display", Description: "Remote kiosk screens: push static HTML to a takan-agent that serves it locally."},
 	{ID: "tv", Name: "TV", Description: "Samsung Tizen TV on the home LAN: status, apps, keys, volume, mute, power, now playing — via a takan-agent on the same WiFi."},
+	{ID: "bots", Name: "Bots", Description: "Telegram assistant bots on your machines: fleet registry + chat whitelist with approvals."},
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
@@ -52,6 +54,7 @@ type Provider struct {
 	Vault     ToolFactory
 	Display   ToolFactory
 	TV        ToolFactory
+	Bots      ToolFactory
 
 	// SIPHub optional: online device / call counts for takan_status.
 	SIPHub interface {
@@ -115,6 +118,10 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.TV != nil {
 				out = append(out, p.TV(ctx, userID)...)
 			}
+		case "bots":
+			if p.Bots != nil {
+				out = append(out, p.Bots(ctx, userID)...)
+			}
 		}
 	}
 	return out
@@ -125,7 +132,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, displays, TV, Mercadona linked, email domains, people, health, telegram, SIP, vault). " +
+				"(machines online, displays, TV, bots, Mercadona linked, email domains, people, health, telegram, SIP, vault). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -259,6 +266,43 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			detail += " (agent offline)"
 		}
 		return online, detail
+	case "bots":
+		list, err := p.Store.ListBots(ctx, userID)
+		if err != nil {
+			return false, "error listing bots"
+		}
+		online, pending, queued, daemons, legacy := 0, 0, 0, 0, 0
+		var names []string
+		for _, b := range list {
+			pending += b.PendingChats
+			queued += b.PendingDeliveries
+			if b.Legacy() {
+				legacy++
+				continue
+			}
+			daemons++
+			if botsmod.Online(b) {
+				online++
+				names = append(names, b.Name)
+			}
+		}
+		if daemons == 0 {
+			if legacy > 0 {
+				return false, fmt.Sprintf("no bot daemons (%d legacy owner placeholders)", legacy)
+			}
+			return false, "no bots registered"
+		}
+		detail = fmt.Sprintf("%d/%d online", online, daemons)
+		if len(names) > 0 && len(names) <= 4 {
+			detail += " (" + strings.Join(names, ", ") + ")"
+		}
+		if pending > 0 {
+			detail += fmt.Sprintf(" · %d chat(s) pending approval", pending)
+		}
+		if queued > 0 {
+			detail += fmt.Sprintf(" · %d queued delivery(ies)", queued)
+		}
+		return online > 0, detail
 	case "mercadona":
 		email, _, postal, ok, err := p.Store.GetMercadonaCreds(ctx, userID)
 		if err != nil {

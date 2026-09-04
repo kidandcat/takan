@@ -16,13 +16,13 @@ import (
 	"github.com/kidandcat/takan/internal/api"
 	"github.com/kidandcat/takan/internal/config"
 	"github.com/kidandcat/takan/internal/cryptox"
-	"github.com/kidandcat/takan/internal/jobwebhook"
 	"github.com/kidandcat/takan/internal/mcp"
 	"github.com/kidandcat/takan/internal/oauth"
 	"github.com/kidandcat/takan/internal/ratelimit"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/internal/web"
 	"github.com/kidandcat/takan/modules"
+	"github.com/kidandcat/takan/modules/bots"
 	"github.com/kidandcat/takan/modules/display"
 	"github.com/kidandcat/takan/modules/email"
 	"github.com/kidandcat/takan/modules/health"
@@ -144,6 +144,8 @@ func main() {
 		},
 	)
 
+	botWatch := bots.NewWatcher()
+
 	prov := &modules.Provider{
 		Store: st,
 		Hub:   hub,
@@ -160,6 +162,7 @@ func main() {
 		Vault:     vault.Factory(st, box),
 		Display:   display.Factory(st, hub),
 		TV:        tv.Factory(st, hub),
+		Bots:      bots.Factory(st, botWatch),
 		SIPHub:    sipHub,
 	}
 
@@ -168,6 +171,7 @@ func main() {
 		log.Fatalf("web: %v", err)
 	}
 	webSrv.SIPHub = sipHub
+	webSrv.BotWatch = botWatch
 	webSrv.AuthRateLimit = authLimit
 	webSrv.OnMercadonaSave = func(ctx context.Context, userID, emailAddr, password, postal string) error {
 		return mercadona.LinkAccount(ctx, st.DB(), mbox, userID, emailAddr, password, postal)
@@ -189,16 +193,12 @@ func main() {
 		},
 		ToolsFor: prov.ToolsFor,
 	}
-	grokBotHook := jobwebhook.Client{
-		URL:    cfg.GrokBotWebhookURL,
-		Secret: cfg.GrokBotWebhookSecret,
-	}
+	// Machine AI job results reach the owning bot through the bots outbox
+	// (the daemon pulls and acks them); MCP sessions keep their SSE notification.
+	jobDelivery := &bots.JobDelivery{Store: st, Watch: botWatch, Tail: bots.HubTail(hub)}
 	hub.OnJobEvent = func(userID, machineName string, job agenthub.AIJob) {
-		p := jobwebhook.PayloadFromJob(machineName, job)
-		mcpSrv.NotifyUser(userID, "notifications/takan/machine_ai_job", p)
-		if grokBotHook.URL != "" {
-			go grokBotHook.Notify(p) // best-effort; do not block the agent WS or fail the job
-		}
+		mcpSrv.NotifyUser(userID, "notifications/takan/machine_ai_job", machine.NotificationFromJob(machineName, job))
+		jobDelivery.OnJobEvent(userID, machineName, job)
 	}
 	webSrv.OnToolsChanged = mcpSrv.NotifyToolsChanged
 
@@ -207,6 +207,13 @@ func main() {
 		OnToolsChanged: mcpSrv.NotifyToolsChanged,
 		AuthRateLimit:  authLimit,
 		StatusJSON:     prov.StatusJSON,
+	}
+
+	// Bot daemons (Telegram assistants) authenticate with their own bot token.
+	botsSrv := &bots.Server{
+		Store:  st,
+		Watch:  botWatch,
+		Notify: telegram.Notifier(st, box),
 	}
 
 	oauthSrv := &oauth.Server{
@@ -228,6 +235,14 @@ func main() {
 			} else if n > 0 {
 				log.Printf("token gc: removed %d expired rows", n)
 			}
+			if n, err := st.PurgeAckedBotDeliveries(context.Background(), 7*24*time.Hour); err != nil {
+				log.Printf("bot delivery gc: %v", err)
+			} else if n > 0 {
+				log.Printf("bot delivery gc: removed %d acked rows", n)
+			}
+			if _, err := st.PurgeBotJobs(context.Background(), 30*24*time.Hour); err != nil {
+				log.Printf("bot job gc: %v", err)
+			}
 			rl.Cleanup(2 * time.Hour)
 		}
 	}()
@@ -236,6 +251,7 @@ func main() {
 	webSrv.Routes(mux)
 	oauthSrv.Routes(mux)
 	apiSrv.Routes(mux)
+	botsSrv.Routes(mux)
 	mux.HandleFunc("POST /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("GET /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("DELETE /mcp", mcpSrv.HandleHTTP)

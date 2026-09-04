@@ -17,6 +17,7 @@ Integrations live under `modules/` as subpackages:
 |--------|------|--------|--------|
 | **Machine** | `modules/machine` | `machine_list`, `machine_bash` (optional), `machine_ai_runners`, `machine_ai_run`, `machine_ai_status`, `machine_ai_watch`, `machine_ai_log`, `machine_ai_cancel`, `machine_ai_reply` | Install `takan-agent`; toggle bash / AI runners in panel |
 | **Display** | `modules/display` | `display_list`, `display_show` | Name a kiosk screen on a machine; agent serves HTML at `127.0.0.1:8787` |
+| **Bots** | `modules/bots` | `bots_list`, `bots_chats`, `bots_approve`, `bots_deny` | Telegram assistant bot daemons on your machines: fleet registry, chat whitelist with approvals, and a hub → bot outbox for AI job results. Contract: [TAKAN_BOTS.md](TAKAN_BOTS.md) |
 | **TV** | `modules/tv` | `tv_status`, `tv_app`, `tv_key`, `tv_text`, `tv_volume`, `tv_mute`, `tv_power`, `tv_now` | Samsung Tizen on the LAN; hub relays short curl / UPnP / samsungtvws / WOL commands to a takan-agent (panel: machine, host, token path, wifi MAC, app aliases) |
 | **Mercadona** | `modules/mercadona` | `mercadona_search`, `mercadona_add`, `mercadona_cart` | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get` | Resend API key; enable domains |
@@ -29,7 +30,7 @@ Integrations live under `modules/` as subpackages:
 
 When the tool set changes, Takan pushes `notifications/tools/list_changed` on open SSE streams (best-effort). Clients that ignore it keep the old tool list until reconnect; calls to disabled tools simply fail.
 
-`machine_ai_run` requires `owner` (the Grok Bot that launched the job: Minerva, Menta, TPVLINE, Gestor, Hardware, Games) and returns immediately with a `job_id`. Follow the job with `machine_ai_watch` (blocks until done/failed/cancelled or timeout), `machine_ai_status` (tail), `machine_ai_log` (full transcript), `machine_ai_cancel`, or `machine_ai_reply` (new job with parent context — inherits `owner` if omitted; runners are one-shot and cannot be interrupted in-process). Open SSE streams may also get `notifications/takan/machine_ai_job` when a job ends (includes `owner`). If `TAKAN_GROK_BOT_WEBHOOK_URL` is set, Takan also POSTs the same fields to that Grok Bot webhook routine (`TAKAN_GROK_BOT_WEBHOOK_SECRET` is the sender key).
+`machine_ai_run` requires `owner` (a bot instance from `bots_list`) and returns immediately with a `job_id`; optional `chat_id` records the Telegram chat that asked. Follow the job with `machine_ai_watch` (blocks until done/failed/cancelled or timeout), `machine_ai_status` (tail), `machine_ai_log` (full transcript), `machine_ai_cancel`, or `machine_ai_reply` (new job with parent context — inherits `owner` if omitted; runners are one-shot and cannot be interrupted in-process). Open SSE streams may also get `notifications/takan/machine_ai_job` when a job ends (includes `owner`). When the owner is a bot instance, the finished result is also queued in that bot's outbox and its daemon delivers it to Telegram — see [TAKAN_BOTS.md](TAKAN_BOTS.md). (This replaced the old `TAKAN_GROK_BOT_WEBHOOK_URL` outbound webhook, which is gone.)
 
 ## MCP
 

@@ -1,5 +1,11 @@
 # Takan MCP events vs Grok Bot wakeup
 
+> **Status update (2026-09):** the wakeup gap analysed below is now covered by the **Bots** module.
+> Machine AI job results are queued in a hub → bot outbox that a bot daemon pulls and acks
+> (`GET /api/bots/deliveries`), and the daemon delivers them on Telegram. See
+> [TAKAN_BOTS.md](TAKAN_BOTS.md). The short-lived outbound `TAKAN_GROK_BOT_WEBHOOK_URL` experiment
+> was removed in favour of that pull lane. The analysis below is kept as the original study.
+
 Follow-up to [TAKAN_OSS_SELFHOST.md](TAKAN_OSS_SELFHOST.md). Question: does Takan push events to an MCP client (Grok Bot), and can that client receive them and **start a new model turn** (so Minerva notices a finished `grok` job without Hairok asking “how is it going”)?
 
 **Date:** 2026-08-21  

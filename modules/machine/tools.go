@@ -146,6 +146,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 			descParts = append(descParts, fmt.Sprintf("%s (%s): %s", r.ID, r.Name, r.Command))
 		}
 		runnersBlurb := strings.Join(descParts, "; ")
+		ownersBlurb := ownerNamesBlurb(ctx, st, userID)
 
 		tools = append(tools,
 			mcp.RegisteredTool{
@@ -185,8 +186,9 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 				Tool: mcp.Tool{
 					Name: "machine_ai_run",
 					Description: "Launch an autonomous AI agent on a machine. Returns immediately with job_id " +
-						"(does not wait for the agent to finish). owner is required: the Grok Bot launching the job " +
-						"(Minerva, Menta, TPVLINE, Gestor, Hardware, Games). After launch, follow the job: " +
+						"(does not wait for the agent to finish). owner is required: the bot instance launching " +
+						"the job (" + ownersBlurb + " — see bots_list). When owner is a bot, the finished job " +
+						"result is queued in that bot's outbox and its daemon delivers it. After launch, follow the job: " +
 						"machine_ai_watch waits until it finishes; machine_ai_status is a quick status + log tail; " +
 						"machine_ai_log fetches the full transcript; machine_ai_cancel kills a running job; " +
 						"machine_ai_reply continues as a new job (runners are one-shot and cannot be interrupted in-process). " +
@@ -214,7 +216,12 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 							},
 							"owner": map[string]any{
 								"type":        "string",
-								"description": "Grok Bot that launched the job (Minerva, Menta, TPVLINE, Gestor, Hardware, Games)",
+								"description": "Bot instance that launched the job (" + ownersBlurb + ")",
+							},
+							"chat_id": map[string]any{
+								"type": "string",
+								"description": "Telegram chat that asked for this job (optional). Travels with the " +
+									"result delivery so the owning bot answers in the right chat.",
 							},
 						},
 						"required": []string{"machine", "runner", "prompt", "owner"},
@@ -237,16 +244,18 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if err != nil {
 						return "", err
 					}
+					delivery := attributeJob(ctx, st, userID, res.JobID, owner, strArg(args, "chat_id"), name)
 					out := map[string]any{
-						"machine": name,
-						"job_id":  res.JobID,
-						"runner":  r.ID,
-						"owner":   owner,
-						"name":    r.Name,
-						"command": r.Command,
-						"status":  res.Status,
-						"pid":     res.PID,
-						"hint":    followHint(),
+						"machine":  name,
+						"job_id":   res.JobID,
+						"runner":   r.ID,
+						"owner":    owner,
+						"name":     r.Name,
+						"command":  r.Command,
+						"status":   res.Status,
+						"pid":      res.PID,
+						"delivery": delivery,
+						"hint":     followHint(),
 					}
 					if res.Error != "" {
 						out["error"] = res.Error
@@ -452,7 +461,11 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 							},
 							"owner": map[string]any{
 								"type":        "string",
-								"description": "Override owner bot name (default: parent job's owner)",
+								"description": "Override owner bot instance (default: parent job's owner)",
+							},
+							"chat_id": map[string]any{
+								"type":        "string",
+								"description": "Telegram chat to answer in (optional; default: the parent job's chat)",
 							},
 						},
 						"required": []string{"machine", "job_id", "message"},
@@ -506,6 +519,13 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if err != nil {
 						return "", err
 					}
+					chatID := strArg(args, "chat_id")
+					if chatID == "" {
+						if link, err := st.BotJobByID(ctx, parent.JobID); err == nil && link != nil {
+							chatID = link.ChatID
+						}
+					}
+					delivery := attributeJob(ctx, st, userID, res.JobID, owner, chatID, name)
 					out := map[string]any{
 						"machine":       name,
 						"job_id":        res.JobID,
@@ -516,6 +536,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"command":       r.Command,
 						"status":        res.Status,
 						"pid":           res.PID,
+						"delivery":      delivery,
 						"hint":          followHint() + " This is a new job; the parent was not interrupted.",
 					}
 					if res.Error != "" {
@@ -575,6 +596,40 @@ func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[
 		return "", "", "", "", "", err
 	}
 	return name, runnerID, prompt, cwd, owner, nil
+}
+
+// ownerNamesBlurb lists the bot instances that can own a job, for tool descriptions.
+func ownerNamesBlurb(ctx context.Context, st *store.Store, userID string) string {
+	list, err := st.ListBots(ctx, userID)
+	if err != nil || len(list) == 0 {
+		return "create one in Takan panel → Bots"
+	}
+	names := make([]string, 0, len(list))
+	for _, b := range list {
+		names = append(names, b.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// attributeJob links a launched job to the owning bot instance so its result is
+// delivered when the job finishes. Returns a short human note for the tool
+// result; an owner that is not a registered bot is not an error (the job runs,
+// only the delivery is skipped).
+func attributeJob(ctx context.Context, st *store.Store, userID, jobID, owner, chatID, machine string) string {
+	if jobID == "" {
+		return "none (no job id)"
+	}
+	bot, err := st.BotByUserAndName(ctx, userID, owner)
+	if err != nil || bot == nil {
+		return fmt.Sprintf("none (owner %q is not a registered bot — call bots_list)", owner)
+	}
+	if err := st.RecordBotJob(ctx, jobID, bot.ID, userID, chatID, machine); err != nil {
+		return "none (" + err.Error() + ")"
+	}
+	if chatID != "" {
+		return fmt.Sprintf("queued to bot %s for chat %s when the job finishes", bot.Name, chatID)
+	}
+	return fmt.Sprintf("queued to bot %s when the job finishes", bot.Name)
 }
 
 // resolveOwner returns the explicit owner, or parentOwner if the arg is empty.

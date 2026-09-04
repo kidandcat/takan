@@ -20,6 +20,7 @@ import (
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/modules"
+	botsmod "github.com/kidandcat/takan/modules/bots"
 	emailmod "github.com/kidandcat/takan/modules/email"
 	machinemod "github.com/kidandcat/takan/modules/machine"
 	sipmod "github.com/kidandcat/takan/modules/sip"
@@ -49,7 +50,9 @@ type Server struct {
 	OnToolsChanged func(userID string)
 	// SIPHub optional: online gateways + active calls for the SIP module panel.
 	SIPHub *sipmod.Hub
-	tmpl   *template.Template
+	// BotWatch optional: wakes long-polling bot daemons after a panel decision.
+	BotWatch *botsmod.Watcher
+	tmpl     *template.Template
 }
 
 func New(st *store.Store, hub *agenthub.Hub, box *cryptox.Box, publicURL, dataDir string) (*Server, error) {
@@ -74,6 +77,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
 	mux.HandleFunc("GET /dashboard/display", s.dashDisplay)
 	mux.HandleFunc("GET /dashboard/tv", s.dashTV)
+	mux.HandleFunc("GET /dashboard/bots", s.dashBots)
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
 	mux.HandleFunc("GET /dashboard/telegram", s.dashTelegram)
@@ -106,6 +110,12 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/display/{id}/delete", s.deleteDisplay)
 	mux.HandleFunc("POST /dashboard/display/{id}/default", s.defaultDisplay)
 	mux.HandleFunc("POST /dashboard/tv", s.saveTV)
+	mux.HandleFunc("POST /dashboard/bots", s.createBot)
+	mux.HandleFunc("POST /dashboard/bots/{id}/delete", s.deleteBot)
+	mux.HandleFunc("POST /dashboard/bots/{id}/token", s.issueBotToken)
+	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/approve", s.approveBotChat)
+	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/deny", s.denyBotChat)
+	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/forget", s.forgetBotChat)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
 	mux.HandleFunc("POST /dashboard/mercadona/clear", s.clearMercadona)
 	mux.HandleFunc("POST /dashboard/email", s.saveEmail)
@@ -214,6 +224,14 @@ type pageData struct {
 	TVClientName string
 	TVWifiMAC    string
 	TVAppsText   string
+	// Bots module (Telegram assistant daemons on machines)
+	Bots            []botView
+	BotsOnline      int
+	BotsPending     int
+	BotsDeliveries  int
+	BotPendingChats []botChatView
+	BotToken        string // flash: bot token shown once after create/reissue
+	BotInstallHint  string // flash: one-line hint with the API base URL
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
 	// NeedsSetup is true when this instance has no owner yet (first unlock sets the password).
@@ -286,6 +304,20 @@ type displayView struct {
 	ID, Name, MachineID, MachineName string
 	Online, IsDefault                bool
 	LastShown                        string
+}
+
+type botView struct {
+	ID, Name, Username, MachineName, Kind, Version string
+	Online, Legacy, HasToken                       bool
+	LastSeen                                       string
+	Pending, Approved, Deliveries                  int
+	Chats                                          []botChatView
+}
+
+type botChatView struct {
+	BotID, BotName, ChatID, Type, Label, Status, Snippet string
+	Reported                                             string
+	Pending, Approved                                    bool
 }
 
 type machineAIRunnerView struct {
@@ -510,6 +542,15 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 			http.SetCookie(w, &http.Cookie{Name: "takan_sip_token", Value: "", Path: "/", MaxAge: -1})
 		}
 	}
+	if nav == "bots" {
+		if c, err := r.Cookie("takan_bot_token"); err == nil && c.Value != "" {
+			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
+				data.BotToken = string(raw)
+				data.BotInstallHint = strings.TrimSuffix(s.PublicURL, "/") + "/api/bots"
+			}
+			http.SetCookie(w, &http.Cookie{Name: "takan_bot_token", Value: "", Path: "/", MaxAge: -1})
+		}
+	}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		data.Flash = f
 		lf := strings.ToLower(f)
@@ -539,6 +580,9 @@ func (s *Server) dashDisplay(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) dashTV(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "tv", "TV", "tv.html")
+}
+func (s *Server) dashBots(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "bots", "Bots", "bots.html")
 }
 func (s *Server) dashMercadona(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "mercadona", "Mercadona", "mercadona.html")
@@ -651,6 +695,36 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.Summary = tvc.Machine + " offline"
 			}
 			mv.Ready = m.Enabled && on
+		case "bots":
+			mv.Path = "/dashboard/bots"
+			list, _ := s.Store.ListBots(ctx, u.ID)
+			onlineN, pendingN, daemonN := 0, 0, 0
+			for _, b := range list {
+				pendingN += b.PendingChats
+				if b.Legacy() {
+					continue
+				}
+				daemonN++
+				kind := "offline"
+				if botsmod.Online(b) {
+					onlineN++
+					kind = "online"
+				}
+				label := b.Name
+				if b.MachineName != "" {
+					label += " · " + b.MachineName
+				}
+				mv.Facts = append(mv.Facts, modFact{Label: label, Kind: kind})
+			}
+			if daemonN == 0 {
+				mv.Summary = "No bot daemons registered"
+			} else {
+				mv.Summary = fmt.Sprintf("%d online · %d total", onlineN, daemonN)
+			}
+			if pendingN > 0 {
+				mv.DetailsLine = fmt.Sprintf("%d chat(s) pending approval", pendingN)
+			}
+			mv.Ready = m.Enabled && onlineN > 0
 		case "mercadona":
 			mv.Path = "/dashboard/mercadona"
 			em, _, postal, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
@@ -824,6 +898,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			})
 		}
 	}
+	s.fillBotsDashboard(ctx, u, &data)
 	tvc, _ := tvmod.LoadConfig(ctx, s.Store, u.ID)
 	data.TVMachine = tvc.Machine
 	data.TVHost = tvc.Host

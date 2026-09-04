@@ -142,3 +142,32 @@ func marshal(v any) (string, error) {
 	}
 	return string(b), nil
 }
+
+// Notifier returns a function that sends a plain-text message to the operator's
+// default Telegram chat. Other modules use it to surface things that need
+// attention (e.g. a bot chat waiting for approval) without importing the panel.
+// It is a no-op error when Telegram is not configured or the module is off.
+func Notifier(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID, text string) error {
+	return func(ctx context.Context, userID, text string) error {
+		on, err := st.ModuleEnabled(ctx, userID, "telegram")
+		if err != nil {
+			return err
+		}
+		if !on {
+			return fmt.Errorf("telegram module is disabled")
+		}
+		ts, token, err := loadSettings(ctx, st, box, userID)
+		if err != nil {
+			return err
+		}
+		chatID := strings.TrimSpace(ts.DefaultChatID)
+		if chatID == "" && len(ts.AllowedChats) > 0 {
+			chatID = ts.AllowedChats[0].ID
+		}
+		if chatID == "" {
+			return fmt.Errorf("no default telegram chat configured")
+		}
+		_, err = SendMessage(ctx, token, chatID, text, "")
+		return err
+	}
+}
