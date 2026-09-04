@@ -41,10 +41,23 @@ func (a *Assistant) handleSend(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
 	defer cancel()
 
+	// This endpoint is driven by the CLI agent, so both the target and the
+	// attachment are model-supplied and must be bounded.
+	target, err := a.ResolveChat(ctx, req.ChatID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	file, err := a.ResolveOutboundFile(req.File)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Emit is the one exit for outbound messages: it sends to Telegram and
 	// mirrors the owner's copy into the app history in the same step.
 	if _, err := a.Bot.Emit(ctx, Outbound{
-		ChatID: req.ChatID, Text: text, File: req.File, Source: SourceSend,
+		ChatID: target, Text: text, File: file, Source: SourceSend,
 	}); err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -116,6 +129,12 @@ func (a *Assistant) registerJobRoutes(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 			return
 		}
+		target, err := a.ResolveChat(r.Context(), job.ChatID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		job.ChatID = target
 		created, err := sched.Store().Add(&job, sched.Location())
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -179,8 +198,13 @@ func (a *Assistant) registerTaskRoutes(mux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 			return
 		}
+		target, err := a.ResolveChat(r.Context(), req.ChatID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// Returns as soon as the task is spawned; the result arrives by Telegram.
-		task, err := tasks.Run(req.Prompt, req.Title, req.ChatID)
+		task, err := tasks.Run(req.Prompt, req.Title, target)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

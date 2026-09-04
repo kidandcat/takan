@@ -235,13 +235,17 @@ func (a *Assistant) Notify(ctx context.Context, userID, text string) error {
 // everything else: a message another agent sends the operator belongs in his
 // app history too.
 func (a *Assistant) SendTelegram(ctx context.Context, chatID int64, text, parseMode string) (int64, error) {
+	target, err := a.ResolveChat(ctx, chatID)
+	if err != nil {
+		return 0, err
+	}
 	if strings.TrimSpace(parseMode) == "" {
 		// Explicitly plain, so Emit takes the single-message path and can report
 		// a message id back to the caller.
 		parseMode = "plain"
 	}
 	receipt, err := a.Bot.Emit(ctx, Outbound{
-		ChatID: chatID, Text: text, Source: SourceSend, ParseMode: parseMode,
+		ChatID: target, Text: text, Source: SourceSend, ParseMode: parseMode,
 	})
 	return receipt.MessageID, err
 }

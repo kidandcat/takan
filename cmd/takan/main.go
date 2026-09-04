@@ -73,6 +73,9 @@ func main() {
 	if cfg.SessionKey == "dev-insecure-change-me" {
 		log.Printf("WARNING: ATLAS_SESSION_KEY is the insecure default — set a random key before storing secrets")
 	}
+	if err := cfg.CheckLocalAddr(); err != nil {
+		log.Fatalf("config: %v", err)
+	}
 	var backup *store.BackupOpts
 	if cfg.BackupBucket != "" {
 		backup = &store.BackupOpts{

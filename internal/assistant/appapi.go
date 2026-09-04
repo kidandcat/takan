@@ -50,8 +50,8 @@ func (a *Assistant) requireAppAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "app channel is not configured")
 			return
 		}
-		got := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
-		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+		got, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -62,6 +62,18 @@ func (a *Assistant) requireAppAuth(next http.HandlerFunc) http.HandlerFunc {
 // handleAppList pages the conversation. after=<id> catches up forwards from a
 // known message, before=<id> scrolls back through older history; with neither,
 // it returns the newest window.
+// bearerToken extracts the credential from an Authorization header. The scheme
+// is case-insensitive per RFC 7235, but it is required: accepting a bare token
+// means any header value at all is treated as a credential.
+func bearerToken(header string) (string, bool) {
+	scheme, rest, found := strings.Cut(strings.TrimSpace(header), " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
+		return "", false
+	}
+	token := strings.TrimSpace(rest)
+	return token, token != ""
+}
+
 func (b *Bot) handleAppList(w http.ResponseWriter, r *http.Request) {
 	after := r.URL.Query().Get("after")
 	before := r.URL.Query().Get("before")
@@ -78,6 +90,24 @@ func (b *Bot) handleAppList(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
+	// An unknown cursor silently fell back to the newest or oldest window, so a
+	// client resuming from a message that has aged out of the log would jump
+	// somewhere else in the conversation and look like it had lost its place.
+	for _, cursor := range []string{after, before} {
+		if cursor == "" {
+			continue
+		}
+		known, err := b.history.Has(cursor)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not read the conversation")
+			return
+		}
+		if !known {
+			writeError(w, http.StatusNotFound, "unknown cursor")
+			return
+		}
+	}
+
 	messages := b.history.List(after, before, limit)
 	out := map[string]any{"messages": publicMessages(messages)}
 	// Tell the app whether scrolling further back is worth a round trip.

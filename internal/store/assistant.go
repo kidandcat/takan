@@ -407,6 +407,14 @@ ORDER BY seq ASC LIMIT ?`, userID, after, limit)
 	return out, rows.Err()
 }
 
+// HasAssistantMessage reports whether an id is still in the log.
+func (s *Store) HasAssistantMessage(ctx context.Context, userID, id string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM assistant_messages WHERE user_id = ? AND id = ?`, userID, id).Scan(&n)
+	return n > 0, err
+}
+
 // CountAssistantMessages reports how many turns are stored for a user.
 func (s *Store) CountAssistantMessages(ctx context.Context, userID string) (int, error) {
 	var n int

@@ -113,6 +113,15 @@ func (h *History) List(after, before string, limit int) []HistoryMessage {
 	return out
 }
 
+// Has reports whether a message id is still in the log. Cursors age out as the
+// log is trimmed, and a client must be told that rather than silently moved.
+func (h *History) Has(id string) (bool, error) {
+	if h == nil || id == "" {
+		return false, nil
+	}
+	return h.st.HasAssistantMessage(h.ctx, h.userID, id)
+}
+
 // newMessageID returns a 16-char hex identifier.
 func newMessageID() string {
 	buf := make([]byte, 8)

@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -104,6 +106,42 @@ func Load() Config {
 		c.AppURL = c.PublicURL
 	}
 	return c
+}
+
+// CheckLocalAddr rejects a non-loopback local API address.
+//
+// That listener has no authentication at all: it exposes /jobs, /tasks and
+// /internal/send, which can make the assistant run an agent or message the
+// operator. It is safe only because nothing off the host can reach it, so
+// binding it to a routable address must stop the process rather than quietly
+// publish an unauthenticated control surface.
+func (c Config) CheckLocalAddr() error {
+	host, port, err := net.SplitHostPort(c.LocalAddr)
+	if err != nil {
+		return fmt.Errorf("ATLAS_LOCAL_ADDR %q is not host:port: %w", c.LocalAddr, err)
+	}
+	if port == "" {
+		return fmt.Errorf("ATLAS_LOCAL_ADDR %q has no port", c.LocalAddr)
+	}
+	if host == "" {
+		return fmt.Errorf("ATLAS_LOCAL_ADDR %q binds every interface; "+
+			"it serves an unauthenticated control API and must be loopback-only", c.LocalAddr)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// A hostname can resolve anywhere, and to something different later.
+		return fmt.Errorf("ATLAS_LOCAL_ADDR host %q must be a loopback IP (127.0.0.1 or ::1), not a hostname", host)
+	}
+	if ip.IsUnspecified() {
+		// The most likely misconfiguration, and the worst one.
+		return fmt.Errorf("ATLAS_LOCAL_ADDR %q binds every interface; "+
+			"it serves an unauthenticated control API and must be loopback-only", c.LocalAddr)
+	}
+	if !ip.IsLoopback() {
+		return fmt.Errorf("ATLAS_LOCAL_ADDR host %q is not a loopback address; "+
+			"it serves an unauthenticated control API and would be reachable off this host", host)
+	}
+	return nil
 }
 
 // deprecatedOnce keeps the TAKAN_* fallback warning to one line per variable,

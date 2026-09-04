@@ -16,6 +16,10 @@ import (
 
 // Sender is the part of the assistant this module needs. Keeping it an
 // interface means the tools can be exercised without a live Telegram client.
+//
+// SendTelegram validates the target itself: a chat id reaching this tool comes
+// from a model, and an invented one would deliver the operator's private
+// conversation to a stranger.
 type Sender interface {
 	SendTelegram(ctx context.Context, chatID int64, text, parseMode string) (int64, error)
 }
@@ -34,7 +38,7 @@ func Factory(a Sender) func(ctx context.Context, userID string) []mcp.Registered
 					Name: "telegram_send",
 					Description: "Send a Telegram message as " + asst.InstanceName + ", the operator's assistant bot. " +
 						"With no chat_id it lands in the operator's own chat, which is what you almost always want. " +
-						"Pass chat_id only to answer in a specific group or thread you were given. " +
+						"Pass chat_id only to answer in a chat the assistant already serves; an unknown id is rejected. " +
 						"parse_mode: empty (plain), HTML, Markdown, or MarkdownV2. Max 4096 characters.",
 					InputSchema: map[string]any{
 						"type": "object",
@@ -45,7 +49,7 @@ func Factory(a Sender) func(ctx context.Context, userID string) []mcp.Registered
 							},
 							"chat_id": map[string]any{
 								"type":        "string",
-								"description": "Destination chat id (optional; default: the operator's own chat)",
+								"description": "Destination chat id, which must be a chat the assistant already serves (optional; default: the operator's own chat)",
 							},
 							"parse_mode": map[string]any{
 								"type":        "string",
