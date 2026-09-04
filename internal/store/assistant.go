@@ -9,8 +9,10 @@ import (
 )
 
 // AssistantHistoryCap is how many conversation messages stay in the database.
-// Older ones are dropped on append, matching the app's paging window.
-const AssistantHistoryCap = 2000
+// Older ones are dropped on append. It is deliberately generous: the app pages
+// backwards through this log, so a small cap would silently cut off history the
+// user can still see in Telegram.
+const AssistantHistoryCap = 5000
 
 // Assistant meta keys.
 const (
@@ -353,28 +355,39 @@ DELETE FROM assistant_messages WHERE user_id = ? AND seq NOT IN (
 	return err
 }
 
-// ListAssistantMessages returns messages after the given id (exclusive), oldest
-// first. An empty after returns the last limit messages.
-func (s *Store) ListAssistantMessages(ctx context.Context, userID, after string, limit int) ([]AssistantMessage, error) {
+// ListAssistantMessages returns a window of the conversation, always oldest
+// first.
+//
+//   - after != "": the messages that follow that id, for catching up forwards.
+//   - before != "": the messages that precede it, for scrolling back through
+//     older history.
+//   - neither: the newest `limit` messages.
+func (s *Store) ListAssistantMessages(ctx context.Context, userID, after, before string, limit int) ([]AssistantMessage, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	if limit > 500 {
 		limit = 500
 	}
+	const cols = `SELECT seq, id, role, text, files, source, created_at`
 	var rows *sql.Rows
 	var err error
-	if after == "" {
-		rows, err = s.db.QueryContext(ctx, `
-SELECT seq, id, role, text, files, source, created_at FROM (
-  SELECT seq, id, role, text, files, source, created_at FROM assistant_messages
-  WHERE user_id = ? ORDER BY seq DESC LIMIT ?
-) ORDER BY seq ASC`, userID, limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `
-SELECT seq, id, role, text, files, source, created_at FROM assistant_messages
+	switch {
+	case after != "":
+		rows, err = s.db.QueryContext(ctx, cols+` FROM assistant_messages
 WHERE user_id = ? AND seq > COALESCE((SELECT seq FROM assistant_messages WHERE id = ?), 0)
 ORDER BY seq ASC LIMIT ?`, userID, after, limit)
+	case before != "":
+		// Take the newest rows below the cursor, then flip them back to
+		// chronological order so the caller always sees oldest first.
+		rows, err = s.db.QueryContext(ctx, cols+` FROM (`+cols+` FROM assistant_messages
+  WHERE user_id = ? AND seq < COALESCE((SELECT seq FROM assistant_messages WHERE id = ?), 9223372036854775807)
+  ORDER BY seq DESC LIMIT ?
+) ORDER BY seq ASC`, userID, before, limit)
+	default:
+		rows, err = s.db.QueryContext(ctx, cols+` FROM (`+cols+` FROM assistant_messages
+  WHERE user_id = ? ORDER BY seq DESC LIMIT ?
+) ORDER BY seq ASC`, userID, limit)
 	}
 	if err != nil {
 		return nil, err

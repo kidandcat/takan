@@ -12,8 +12,13 @@ import (
 	"syscall"
 	"time"
 
+	// tzdata is embedded so Europe/Madrid resolves on a host without it, which
+	// is what the scheduler interprets every reminder in.
+	_ "time/tzdata"
+
 	"github.com/kidandcat/takan/internal/agenthub"
 	"github.com/kidandcat/takan/internal/api"
+	"github.com/kidandcat/takan/internal/assistant"
 	"github.com/kidandcat/takan/internal/config"
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/mcp"
@@ -22,33 +27,51 @@ import (
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/internal/web"
 	"github.com/kidandcat/takan/modules"
-	"github.com/kidandcat/takan/modules/bots"
+	assistantmod "github.com/kidandcat/takan/modules/assistant"
 	"github.com/kidandcat/takan/modules/display"
 	"github.com/kidandcat/takan/modules/email"
 	"github.com/kidandcat/takan/modules/health"
 	"github.com/kidandcat/takan/modules/machine"
 	"github.com/kidandcat/takan/modules/mercadona"
 	"github.com/kidandcat/takan/modules/people"
-	"github.com/kidandcat/takan/modules/sip"
-	"github.com/kidandcat/takan/modules/telegram"
 	"github.com/kidandcat/takan/modules/tv"
 	"github.com/kidandcat/takan/modules/vault"
 )
 
 func main() {
-	// Subcommands are operator tools run on the hub host, not server modes.
+	// atlas-send / atlas-sched / atlas-task are the helper binaries the CLI
+	// agent calls. They are symlinks to this binary, so dispatch on the invoked
+	// name and also accept the equivalent subcommands.
+	switch filepath.Base(os.Args[0]) {
+	case "atlas-send":
+		runSend(os.Args[1:])
+		return
+	case "atlas-sched":
+		runSched(os.Args[1:])
+		return
+	case "atlas-task":
+		runTask(os.Args[1:])
+		return
+	}
 	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		switch os.Args[1] {
-		case "bundle":
-			os.Exit(runBundleCLI(os.Args[2:]))
+		case "send":
+			runSend(os.Args[2:])
+			return
+		case "sched":
+			runSched(os.Args[2:])
+			return
+		case "task":
+			runTask(os.Args[2:])
+			return
 		default:
-			log.Fatalf("unknown command %q (known: bundle)", os.Args[1])
+			log.Fatalf("unknown command %q (known: send, sched, task)", os.Args[1])
 		}
 	}
 
 	cfg := config.Load()
 	if cfg.SessionKey == "dev-insecure-change-me" {
-		log.Printf("WARNING: TAKAN_SESSION_KEY is the insecure default — set a random key before storing secrets")
+		log.Printf("WARNING: ATLAS_SESSION_KEY is the insecure default — set a random key before storing secrets")
 	}
 	var backup *store.BackupOpts
 	if cfg.BackupBucket != "" {
@@ -77,6 +100,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("crypto: %v", err)
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	hub := agenthub.New(
 		func(ctx context.Context, token string) (machineID, userID, name string, err error) {
@@ -127,60 +153,9 @@ func main() {
 	st.SetOwnerHint(cfg.OwnerEmail)
 	sendLoginCode := email.LoginCodeFactory(st, box, cfg.ResendAPIKey, cfg.AuthEmailFrom)
 
-	sipHub := sip.NewHub(
-		func(ctx context.Context, token string) (*store.SIPDevice, error) {
-			return st.SIPDeviceByToken(ctx, token)
-		},
-		func(ctx context.Context, deviceID string) {
-			_ = st.TouchSIPDevice(ctx, deviceID)
-		},
-		func(ctx context.Context, userID string) (sip.BridgeConfig, error) {
-			settings, ok, err := st.GetSIPSettings(ctx, userID)
-			if err != nil {
-				return sip.BridgeConfig{}, err
-			}
-			cfgOut := sip.BridgeConfig{
-				Voice:        "eve",
-				Instructions: "You are a helpful phone assistant. Speak concisely. Match the caller's language.",
-				AutoAnswer:   true,
-				AudioRate:    16000,
-				BridgeMode:   "realtime",
-			}
-			if !ok {
-				return cfgOut, nil
-			}
-			cfgOut.Voice = settings.Voice
-			if settings.Instructions != "" {
-				cfgOut.Instructions = settings.Instructions
-			}
-			cfgOut.AutoAnswer = settings.AutoAnswer
-			cfgOut.AudioRate = settings.AudioRate
-			cfgOut.BridgeMode = settings.BridgeMode
-			if settings.XAIAPIKeyEnc != "" {
-				key, err := box.Open(settings.XAIAPIKeyEnc)
-				if err != nil {
-					return cfgOut, fmt.Errorf("decrypt xAI key: %w", err)
-				}
-				cfgOut.APIKey = key
-			}
-			return cfgOut, nil
-		},
-	)
-
-	botWatch := bots.NewWatcher()
-	// Telegram channels own every bot credential; the notifier and the bots
-	// module both resolve theirs through channel attachments.
-	tgSvc := &telegram.Service{Store: st, Box: box}
-	// Zero-touch provisioning rides the agent's existing bash transport, so no
-	// agent update is needed on machines already in the field.
-	provisioner := &bots.Provisioner{
-		Store:     st,
-		Hub:       hub,
-		PublicURL: cfg.PublicURL,
-		Token:     tgSvc.Token,
-		Notify:    tgSvc.Notifier(),
-		Box:       box,
-	}
+	// The assistant needs an owner row to hang its data off. On a fresh instance
+	// there is none yet, so it starts on the next boot, after the first sign-in.
+	asst := startAssistant(ctx, st, box, hub, cfg)
 
 	prov := &modules.Provider{
 		Store: st,
@@ -193,27 +168,28 @@ func main() {
 		Email:     email.Factory(st, box),
 		People:    people.Factory(st),
 		Health:    health.Factory(st),
-		Telegram:  telegram.Factory(st, box),
-		SIP:       sip.Factory(st, sipHub),
 		Vault:     vault.Factory(st, box),
 		Display:   display.Factory(st, hub),
 		TV:        tv.Factory(st, hub),
-		Bots:      bots.Factory(st, botWatch, provisioner),
-		SIPHub:    sipHub,
+	}
+	if asst != nil {
+		prov.Assistant = assistantmod.Factory(asst)
+		prov.AssistantStatus = func(ctx context.Context) (bool, string) {
+			return assistantReadiness(asst.Status(ctx))
+		}
 	}
 
 	webSrv, err := web.New(st, hub, box, cfg.PublicURL, cfg.DataDir)
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}
-	webSrv.SIPHub = sipHub
-	webSrv.BotWatch = botWatch
-	webSrv.Telegram = tgSvc
-	webSrv.Provision = provisioner
 	webSrv.AuthRateLimit = authLimit
 	webSrv.SendLoginCode = sendLoginCode
 	webSrv.OwnerEmail = cfg.OwnerEmail
 	webSrv.LoginCodeRateLimit = loginCodeLimit
+	if asst != nil {
+		webSrv.Assistant = asst
+	}
 	webSrv.OnMercadonaSave = func(ctx context.Context, userID, emailAddr, password, postal string) error {
 		return mercadona.LinkAccount(ctx, st.DB(), mbox, userID, emailAddr, password, postal)
 	}
@@ -234,12 +210,13 @@ func main() {
 		},
 		ToolsFor: prov.ToolsFor,
 	}
-	// Machine AI job results reach the owning bot through the bots outbox
-	// (the daemon pulls and acks them); MCP sessions keep their SSE notification.
-	jobDelivery := &bots.JobDelivery{Store: st, Watch: botWatch, Tail: bots.HubTail(hub)}
+	// A finished machine_ai_run wakes other agents over MCP SSE and lands in the
+	// Telegram chat that asked for it.
 	hub.OnJobEvent = func(userID, machineName string, job agenthub.AIJob) {
 		mcpSrv.NotifyUser(userID, "notifications/takan/machine_ai_job", machine.NotificationFromJob(machineName, job))
-		jobDelivery.OnJobEvent(userID, machineName, job)
+		if asst != nil {
+			asst.OnJobEvent(userID, machineName, job)
+		}
 	}
 	webSrv.OnToolsChanged = mcpSrv.NotifyToolsChanged
 
@@ -254,15 +231,6 @@ func main() {
 		LoginCodeRateLimit: loginCodeLimit,
 	}
 
-	// Bot daemons (Telegram assistants) authenticate with their own bot token.
-	botsSrv := &bots.Server{
-		Store:     st,
-		Watch:     botWatch,
-		Notify:    tgSvc.Notifier(),
-		PublicURL: cfg.PublicURL,
-		Provision: provisioner,
-	}
-
 	oauthSrv := &oauth.Server{
 		Store:            st,
 		PublicURL:        cfg.PublicURL,
@@ -272,7 +240,7 @@ func main() {
 		SetSessionCookie: webSrv.SetSessionCookie,
 	}
 
-	// Periodic GC for expired tokens/sessions.
+	// Periodic GC for expired tokens/sessions and delivered job routing rows.
 	go func() {
 		t := time.NewTicker(6 * time.Hour)
 		defer t.Stop()
@@ -282,16 +250,8 @@ func main() {
 			} else if n > 0 {
 				log.Printf("token gc: removed %d expired rows", n)
 			}
-			if n, err := st.PurgeAckedBotDeliveries(context.Background(), 7*24*time.Hour); err != nil {
-				log.Printf("bot delivery gc: %v", err)
-			} else if n > 0 {
-				log.Printf("bot delivery gc: removed %d acked rows", n)
-			}
-			if _, err := st.PurgeBotJobs(context.Background(), 30*24*time.Hour); err != nil {
-				log.Printf("bot job gc: %v", err)
-			}
-			if _, err := st.PurgeProvisionTickets(context.Background()); err != nil {
-				log.Printf("provision ticket gc: %v", err)
+			if _, err := st.PurgeJobChats(context.Background(), 30*24*time.Hour); err != nil {
+				log.Printf("job chat gc: %v", err)
 			}
 			if _, err := st.PurgeLoginCodes(context.Background(), time.Hour); err != nil {
 				log.Printf("login code gc: %v", err)
@@ -304,13 +264,15 @@ func main() {
 	webSrv.Routes(mux)
 	oauthSrv.Routes(mux)
 	apiSrv.Routes(mux)
-	botsSrv.Routes(mux)
+	if asst != nil {
+		// The phone app talks to the app host, which proxies only /v1/*.
+		asst.AppRoutes(mux)
+	}
 	mux.HandleFunc("POST /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("GET /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("DELETE /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("OPTIONS /mcp", mcpSrv.HandleHTTP)
 	mux.HandleFunc("GET /agent/ws", hub.HandleWS)
-	mux.HandleFunc("GET /sip/ws", sipHub.HandleWS)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
@@ -323,243 +285,117 @@ func main() {
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
+	// The loopback server carries /health, /jobs, /tasks and /internal/*: the
+	// surface the assistant CLIs and Gatus use, never reverse-proxied.
+	var localSrv *http.Server
+	if asst != nil {
+		localMux := http.NewServeMux()
+		asst.LocalRoutes(localMux)
+		localSrv = &http.Server{
+			Addr:              cfg.LocalAddr,
+			Handler:           localMux,
+			ReadHeaderTimeout: 15 * time.Second,
+		}
+		go func() {
+			log.Printf("assistant local API on %s", cfg.LocalAddr)
+			if err := localSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("local API error: %v", err)
+			}
+		}()
+		go func() {
+			if err := asst.Run(ctx); err != nil {
+				log.Printf("assistant stopped: %v", err)
+			}
+		}()
+	}
+
 	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-		<-sig
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		_ = httpSrv.Shutdown(ctx)
+		_ = httpSrv.Shutdown(shutdown)
+		if localSrv != nil {
+			_ = localSrv.Shutdown(shutdown)
+		}
 	}()
 
 	if cfg.OwnerEmail == "" {
-		log.Printf("warning: TAKAN_OWNER_EMAIL is not set — panel login falls back to the owner row address")
+		log.Printf("warning: ATLAS_OWNER_EMAIL is not set — panel login falls back to the owner row address")
 	}
-	log.Printf("takan listening on %s public=%s (single operator)", cfg.Listen, cfg.PublicURL)
+	log.Printf("takan listening on %s public=%s app=%s data=%s (single operator)",
+		cfg.Listen, cfg.PublicURL, cfg.AppURL, cfg.DataDir)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+// startAssistant builds the in-process assistant, or returns nil with a clear
+// log line. A missing credential must not take the panel down: the hub is still
+// useful without the Telegram side, and the panel is where it gets configured.
+func startAssistant(ctx context.Context, st *store.Store, box *cryptox.Box,
+	hub *agenthub.Hub, cfg config.Config) *assistant.Assistant {
+	owner, err := st.Owner(ctx)
+	if err != nil || owner == nil {
+		log.Printf("assistant: not started — this instance has no owner yet; sign in to the panel first")
+		return nil
+	}
+	a, err := assistant.New(ctx, st, box, hub, assistant.Config{
+		OwnerID:                owner.ID,
+		OwnerTelegram:          cfg.OwnerTelegramID,
+		DataDir:                cfg.DataDir,
+		AgentHome:              cfg.AgentHome,
+		TelegramBotToken:       cfg.TelegramBotToken,
+		GroqAPIKey:             cfg.GroqAPIKey,
+		AppToken:               cfg.AppToken,
+		FirebaseServiceAccount: cfg.FirebaseServiceAccount,
+		LegacyDir:              cfg.LegacyDir,
+	})
+	if err != nil {
+		log.Printf("assistant: not started — %v", err)
+		return nil
+	}
+	return a
+}
+
+// assistantReadiness renders the module status row for takan_status.
+func assistantReadiness(s assistant.Status) (bool, string) {
+	bot := s.BotUsername
+	if bot == "" {
+		bot = "connecting"
+	} else {
+		bot = "@" + bot
+	}
+	detail := fmt.Sprintf("%s · owner %d · %d chat(s) · %d task(s) running · %d job(s) scheduled",
+		bot, s.OwnerTelegram, s.KnownChats, s.RunningTasks, s.ScheduledJobs)
+	if !s.Enabled {
+		return false, detail + " · disabled in the panel"
+	}
+	if !s.PollHealthy {
+		reason := s.LastPollError
+		if reason == "" {
+			reason = "no successful poll yet"
+		}
+		return false, detail + " · not receiving updates: " + reason
+	}
+	return true, detail
 }
 
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		if r.URL.Path != "/healthz" {
+		if r.URL.Path != "/healthz" && r.URL.Path != "/v1/health" {
 			log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
 		}
 	})
 }
 
 func agentBinDir() string {
+	if d := os.Getenv("ATLAS_AGENT_BIN_DIR"); d != "" {
+		return d
+	}
 	if d := os.Getenv("TAKAN_AGENT_BIN_DIR"); d != "" {
 		return d
 	}
 	return "/opt/takan/agents"
-}
-
-func serveInstallSh(publicURL string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		script := `#!/usr/bin/env bash
-set -euo pipefail
-# Takan agent installer — only the agent token is required.
-#   curl -fsSL ` + publicURL + `/install.sh | bash -s -- <token>
-# Prefers a system (root) service when root/sudo is available; falls back to user.
-TOKEN="${TAKAN_AGENT_TOKEN:-}"
-NAME="${TAKAN_AGENT_NAME:-}"
-URL="${TAKAN_URL:-` + publicURL + `}"
-# Positional: bash -s -- <token> [--name mac]
-if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
-  TOKEN="$1"
-  shift
-fi
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --token) TOKEN="$2"; shift 2 ;;
-    --name) NAME="$2"; shift 2 ;;
-    --url) URL="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-if [ -z "$NAME" ]; then
-  NAME="$(hostname -s 2>/dev/null || echo machine)"
-fi
-if [ -z "$TOKEN" ]; then
-  echo "usage: curl -fsSL $URL/install.sh | bash -s -- <agent-token>" >&2
-  exit 1
-fi
-
-# Root helper: identity, passwordless sudo, or interactive sudo when a TTY is available.
-AS_ROOT=()
-if [ "$(id -u)" -eq 0 ]; then
-  AS_ROOT=()
-  USE_SYSTEM=1
-elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-  AS_ROOT=(sudo)
-  USE_SYSTEM=1
-elif [ -t 0 ] && command -v sudo >/dev/null 2>&1 && sudo -v 2>/dev/null; then
-  AS_ROOT=(sudo)
-  USE_SYSTEM=1
-else
-  USE_SYSTEM=0
-fi
-
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
-case "$ARCH" in
-  x86_64|amd64) ARCH=amd64 ;;
-  aarch64|arm64) ARCH=arm64 ;;
-esac
-TMP=$(mktemp)
-curl -fsSL "$URL/download/takan-agent-${OS}-${ARCH}" -o "$TMP" || {
-  echo "download failed — cannot fetch takan-agent-${OS}-${ARCH}" >&2
-  exit 1
-}
-chmod +x "$TMP"
-
-if [ "$(uname -s)" = "Darwin" ]; then
-  if [ "$USE_SYSTEM" = "1" ]; then
-    BIN_DIR=/usr/local/bin
-    PLIST=/Library/LaunchDaemons/com.takan.agent.plist
-    LOG_DIR=/var/log/takan
-    "${AS_ROOT[@]}" mkdir -p "$BIN_DIR" "$LOG_DIR"
-    "${AS_ROOT[@]}" mv "$TMP" "$BIN_DIR/takan-agent"
-    "${AS_ROOT[@]}" chmod 755 "$BIN_DIR/takan-agent"
-    launchctl bootout "gui/$(id -u)/com.takan.agent" 2>/dev/null || true
-    launchctl unload "$HOME/Library/LaunchAgents/com.takan.agent.plist" 2>/dev/null || true
-    rm -f "$HOME/Library/LaunchAgents/com.takan.agent.plist" 2>/dev/null || true
-    "${AS_ROOT[@]}" tee "$PLIST" >/dev/null <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.takan.agent</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$BIN_DIR/takan-agent</string>
-    <string>--url</string><string>$URL</string>
-    <string>--token</string><string>$TOKEN</string>
-    <string>--name</string><string>$NAME</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$LOG_DIR/agent.log</string>
-  <key>StandardErrorPath</key><string>$LOG_DIR/agent.log</string>
-</dict></plist>
-EOF
-    "${AS_ROOT[@]}" launchctl bootout system/com.takan.agent 2>/dev/null || true
-    "${AS_ROOT[@]}" launchctl unload "$PLIST" 2>/dev/null || true
-    "${AS_ROOT[@]}" launchctl load "$PLIST" 2>/dev/null || "${AS_ROOT[@]}" launchctl bootstrap system "$PLIST"
-    echo "takan-agent loaded (launchd system). log: $LOG_DIR/agent.log"
-  else
-    BIN_DIR="${HOME}/.local/bin"
-    mkdir -p "$BIN_DIR" "$HOME/.takan"
-    mv "$TMP" "$BIN_DIR/takan-agent"
-    PLIST="$HOME/Library/LaunchAgents/com.takan.agent.plist"
-    mkdir -p "$(dirname "$PLIST")"
-    cat > "$PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.takan.agent</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$BIN_DIR/takan-agent</string>
-    <string>--url</string><string>$URL</string>
-    <string>--token</string><string>$TOKEN</string>
-    <string>--name</string><string>$NAME</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$HOME/.takan/agent.log</string>
-  <key>StandardErrorPath</key><string>$HOME/.takan/agent.log</string>
-</dict></plist>
-EOF
-    launchctl unload "$PLIST" 2>/dev/null || true
-    launchctl load "$PLIST"
-    echo "takan-agent loaded (launchd user). log: ~/.takan/agent.log"
-  fi
-else
-  if [ "$USE_SYSTEM" = "1" ]; then
-    BIN_DIR=/usr/local/bin
-    ENV_DIR=/etc/takan
-    UNIT=/etc/systemd/system/takan-agent.service
-    "${AS_ROOT[@]}" mkdir -p "$BIN_DIR" "$ENV_DIR"
-    "${AS_ROOT[@]}" mv "$TMP" "$BIN_DIR/takan-agent"
-    "${AS_ROOT[@]}" chmod 755 "$BIN_DIR/takan-agent"
-    "${AS_ROOT[@]}" tee "$ENV_DIR/agent.env" >/dev/null <<EOF
-TAKAN_URL=$URL
-TAKAN_AGENT_TOKEN=$TOKEN
-TAKAN_AGENT_NAME=$NAME
-EOF
-    "${AS_ROOT[@]}" chmod 600 "$ENV_DIR/agent.env"
-    "${AS_ROOT[@]}" tee "$UNIT" >/dev/null <<'EOF'
-[Unit]
-Description=Takan machine agent
-After=network-online.target
-Wants=network-online.target
-[Service]
-Type=simple
-EnvironmentFile=/etc/takan/agent.env
-ExecStart=/usr/local/bin/takan-agent --url ${TAKAN_URL} --token ${TAKAN_AGENT_TOKEN} --name ${TAKAN_AGENT_NAME}
-Restart=always
-RestartSec=5
-TimeoutStopSec=10
-KillMode=mixed
-[Install]
-WantedBy=multi-user.target
-EOF
-    if systemctl --user is-active takan-agent >/dev/null 2>&1; then
-      systemctl --user kill -s SIGKILL takan-agent 2>/dev/null || true
-      timeout 3 systemctl --user stop takan-agent 2>/dev/null || true
-    fi
-    systemctl --user disable takan-agent 2>/dev/null || true
-    rm -f "$HOME/.config/systemd/user/takan-agent.service" 2>/dev/null || true
-    systemctl --user daemon-reload 2>/dev/null || true
-    "${AS_ROOT[@]}" systemctl stop takan-agent 2>/dev/null || true
-    pkill -9 -x takan-agent 2>/dev/null || true
-    "${AS_ROOT[@]}" systemctl daemon-reload
-    "${AS_ROOT[@]}" systemctl enable --now takan-agent
-    echo "takan-agent started (systemd system)"
-  else
-    BIN_DIR="${HOME}/.local/bin"
-    mkdir -p "$BIN_DIR" "$HOME/.config/takan" "$HOME/.config/systemd/user"
-    mv "$TMP" "$BIN_DIR/takan-agent"
-    cat > "$HOME/.config/takan/agent.env" <<EOF
-TAKAN_URL=$URL
-TAKAN_AGENT_TOKEN=$TOKEN
-TAKAN_AGENT_NAME=$NAME
-EOF
-    chmod 600 "$HOME/.config/takan/agent.env"
-    cat > "$HOME/.config/systemd/user/takan-agent.service" <<EOF
-[Unit]
-Description=Takan machine agent
-After=network-online.target
-[Service]
-EnvironmentFile=%h/.config/takan/agent.env
-ExecStart=%h/.local/bin/takan-agent --url \${TAKAN_URL} --token \${TAKAN_AGENT_TOKEN} --name \${TAKAN_AGENT_NAME}
-Restart=always
-RestartSec=5
-TimeoutStopSec=10
-KillMode=mixed
-[Install]
-WantedBy=default.target
-EOF
-    systemctl --user daemon-reload
-    systemctl --user enable --now takan-agent
-    if command -v loginctl >/dev/null 2>&1; then
-      if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" != "yes" ]; then
-        if command -v sudo >/dev/null 2>&1 && sudo -n loginctl enable-linger "$(id -un)" 2>/dev/null; then
-          echo "enabled systemd linger for $(id -un)"
-        else
-          echo "note: enable linger so the agent survives logout: sudo loginctl enable-linger $(id -un)" >&2
-        fi
-      fi
-    fi
-    echo "takan-agent started (systemd user)"
-  fi
-fi
-`
-		_, _ = w.Write([]byte(strings.ReplaceAll(script, "\r\n", "\n")))
-	}
 }

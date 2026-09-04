@@ -9,7 +9,6 @@ import (
 	"github.com/kidandcat/takan/internal/agenthub"
 	"github.com/kidandcat/takan/internal/mcp"
 	"github.com/kidandcat/takan/internal/store"
-	botsmod "github.com/kidandcat/takan/modules/bots"
 	machinemod "github.com/kidandcat/takan/modules/machine"
 	tvmod "github.com/kidandcat/takan/modules/tv"
 )
@@ -23,16 +22,14 @@ type Info struct {
 
 // All known modules (static catalog). Keep IDs in sync with store.defaultModuleIDs.
 var Catalog = []Info{
+	{ID: "assistant", Name: "Assistant", Description: "Your personal assistant: one Telegram bot, the phone app channel, background tasks and scheduled routines, driven by a CLI coding agent."},
 	{ID: "machine", Name: "Machine", Description: "Remote shell + configurable AI task runners (Claude, Grok, free commands) via takan-agent."},
 	{ID: "display", Name: "Display", Description: "Remote kiosk screens: push static HTML to a takan-agent that serves it locally."},
 	{ID: "tv", Name: "TV", Description: "Samsung Tizen TV on the home LAN: status, apps, keys, volume, mute, power, now playing — via a takan-agent on the same WiFi."},
-	{ID: "bots", Name: "Bots", Description: "Telegram assistant bots on your machines: fleet registry, chat whitelist with approvals, and zero-touch install over takan-agent."},
 	{ID: "mercadona", Name: "Mercadona", Description: "Shopping cart tools for Mercadona (credentials in panel)."},
 	{ID: "email", Name: "Email", Description: "Resend: send & read mail; enable domains from your account."},
 	{ID: "people", Name: "People", Description: "People you know: relationships, context, notes (personal CRM)."},
 	{ID: "health", Name: "Health", Description: "Personal health: profile, daily diary, injuries and conditions."},
-	{ID: "telegram", Name: "Telegram", Description: "Send messages via your Telegram bot (token + allowed chats in panel)."},
-	{ID: "sip", Name: "SIP", Description: "Android SIM gateways → Grok Voice. Central proxy; phones connect outbound only."},
 	{ID: "vault", Name: "Vault", Description: "Password manager: encrypted logins + agent secret grants (approve in panel / mobile)."},
 }
 
@@ -44,23 +41,18 @@ type Provider struct {
 	// MercadonaLinked optional: whether Mercadona session tokens exist for user.
 	MercadonaLinked func(ctx context.Context, userID string) bool
 
+	Assistant ToolFactory
 	Machine   ToolFactory
 	Mercadona ToolFactory
 	Email     ToolFactory
 	People    ToolFactory
 	Health    ToolFactory
-	Telegram  ToolFactory
-	SIP       ToolFactory
 	Vault     ToolFactory
 	Display   ToolFactory
 	TV        ToolFactory
-	Bots      ToolFactory
 
-	// SIPHub optional: online device / call counts for takan_status.
-	SIPHub interface {
-		OnlineCount(userID string) int
-		CallsSnapshot(userID string) []map[string]any
-	}
+	// AssistantStatus optional: readiness detail for the assistant module.
+	AssistantStatus func(ctx context.Context) (ready bool, detail string)
 }
 
 // ToolFactory produces tools when the module is enabled.
@@ -78,6 +70,10 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			continue
 		}
 		switch m.ModuleID {
+		case "assistant":
+			if p.Assistant != nil {
+				out = append(out, p.Assistant(ctx, userID)...)
+			}
 		case "machine":
 			if p.Machine != nil {
 				out = append(out, p.Machine(ctx, userID)...)
@@ -98,14 +94,6 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.Health != nil {
 				out = append(out, p.Health(ctx, userID)...)
 			}
-		case "telegram":
-			if p.Telegram != nil {
-				out = append(out, p.Telegram(ctx, userID)...)
-			}
-		case "sip":
-			if p.SIP != nil {
-				out = append(out, p.SIP(ctx, userID)...)
-			}
 		case "vault":
 			if p.Vault != nil {
 				out = append(out, p.Vault(ctx, userID)...)
@@ -118,10 +106,6 @@ func (p *Provider) ToolsFor(ctx context.Context, userID string) []mcp.Registered
 			if p.TV != nil {
 				out = append(out, p.TV(ctx, userID)...)
 			}
-		case "bots":
-			if p.Bots != nil {
-				out = append(out, p.Bots(ctx, userID)...)
-			}
 		}
 	}
 	return out
@@ -132,7 +116,7 @@ func metaTools(p *Provider) []mcp.RegisteredTool {
 		Tool: mcp.Tool{
 			Name: "takan_status",
 			Description: "Overview of all Takan modules for this account: enabled/off and readiness " +
-				"(machines online, displays, TV, bots, Mercadona linked, email domains, people, health, telegram, SIP, vault). " +
+				"(assistant, machines online, displays, TV, Mercadona linked, email domains, people, health, vault). " +
 				"Use this instead of per-module status tools.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		},
@@ -191,6 +175,11 @@ func (p *Provider) statusJSON(ctx context.Context, userID string) (string, error
 
 func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string) (ready bool, detail string) {
 	switch moduleID {
+	case "assistant":
+		if p.AssistantStatus == nil {
+			return false, "assistant not running (check TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_ID)"
+		}
+		return p.AssistantStatus(ctx)
 	case "machine":
 		ms, err := p.Store.ListMachines(ctx, userID)
 		if err != nil {
@@ -266,43 +255,6 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 			detail += " (agent offline)"
 		}
 		return online, detail
-	case "bots":
-		list, err := p.Store.ListBots(ctx, userID)
-		if err != nil {
-			return false, "error listing bots"
-		}
-		online, pending, queued, daemons, legacy := 0, 0, 0, 0, 0
-		var names []string
-		for _, b := range list {
-			pending += b.PendingChats
-			queued += b.PendingDeliveries
-			if b.Legacy() {
-				legacy++
-				continue
-			}
-			daemons++
-			if botsmod.Online(b) {
-				online++
-				names = append(names, b.Name)
-			}
-		}
-		if daemons == 0 {
-			if legacy > 0 {
-				return false, fmt.Sprintf("no bot daemons (%d legacy owner placeholders)", legacy)
-			}
-			return false, "no bots registered"
-		}
-		detail = fmt.Sprintf("%d/%d online", online, daemons)
-		if len(names) > 0 && len(names) <= 4 {
-			detail += " (" + strings.Join(names, ", ") + ")"
-		}
-		if pending > 0 {
-			detail += fmt.Sprintf(" · %d chat(s) pending approval", pending)
-		}
-		if queued > 0 {
-			detail += fmt.Sprintf(" · %d queued delivery(ies)", queued)
-		}
-		return online > 0, detail
 	case "mercadona":
 		email, _, postal, ok, err := p.Store.GetMercadonaCreds(ctx, userID)
 		if err != nil {
@@ -360,53 +312,6 @@ func (p *Provider) moduleReadiness(ctx context.Context, userID, moduleID string)
 		}
 		bits = append(bits, fmt.Sprintf("%d log days", nLog), fmt.Sprintf("%d open issues", open))
 		return true, strings.Join(bits, " · ")
-	case "telegram":
-		ts, ok, err := p.Store.GetTelegramSettings(ctx, userID)
-		if err != nil {
-			return false, "error reading telegram settings"
-		}
-		if !ok {
-			return false, "not configured (panel → Telegram)"
-		}
-		bot := strings.TrimPrefix(ts.BotUsername, "@")
-		if bot == "" {
-			bot = "bot"
-		}
-		if strings.TrimSpace(ts.DefaultChatID) == "" && len(ts.AllowedChats) == 0 {
-			return false, fmt.Sprintf("@%s · no chats", bot)
-		}
-		n := len(ts.AllowedChats)
-		if n == 0 && ts.DefaultChatID != "" {
-			n = 1
-		}
-		detail := fmt.Sprintf("@%s · %d chat(s)", bot, n)
-		if ts.DefaultChatID != "" {
-			detail += " · default " + ts.DefaultChatID
-		}
-		return true, detail
-	case "sip":
-		settings, ok, err := p.Store.GetSIPSettings(ctx, userID)
-		if err != nil {
-			return false, "error reading sip settings"
-		}
-		nDev, _ := p.Store.CountSIPDevices(ctx, userID)
-		if !ok || !settings.HasKey {
-			return false, "not configured (panel → SIP: xAI API key)"
-		}
-		if nDev == 0 {
-			return false, "API key set · no phone gateways"
-		}
-		online := 0
-		nCalls := 0
-		if p.SIPHub != nil {
-			online = p.SIPHub.OnlineCount(userID)
-			nCalls = len(p.SIPHub.CallsSnapshot(userID))
-		}
-		detail := fmt.Sprintf("%d/%d online · voice %s", online, nDev, settings.Voice)
-		if nCalls > 0 {
-			detail += fmt.Sprintf(" · %d call(s)", nCalls)
-		}
-		return online > 0 || nDev > 0, detail
 	case "vault":
 		n, err := p.Store.CountVaultItems(ctx, userID)
 		if err != nil {

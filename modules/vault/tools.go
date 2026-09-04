@@ -305,7 +305,7 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"length":         map[string]any{"type": "integer", "description": "Default 20, min 8, max 128"},
+							"length":          map[string]any{"type": "integer", "description": "Default 20, min 8, max 128"},
 							"include_symbols": map[string]any{"type": "boolean", "description": "Default true"},
 						},
 					},
@@ -357,14 +357,14 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 
 func itemMeta(it store.VaultItem) map[string]any {
 	return map[string]any{
-		"id":         it.ID,
-		"name":       it.Name,
-		"username":   it.Username,
-		"urls":       it.URLs,
-		"folder":     it.Folder,
-		"tags":       it.Tags,
-		"favorite":   it.Favorite,
-		"updated_at": it.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		"id":           it.ID,
+		"name":         it.Name,
+		"username":     it.Username,
+		"urls":         it.URLs,
+		"folder":       it.Folder,
+		"tags":         it.Tags,
+		"favorite":     it.Favorite,
+		"updated_at":   it.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		"has_password": it.PasswordEnc != "",
 		"has_totp":     it.TOTPEnc != "",
 		"has_notes":    it.NotesEnc != "",

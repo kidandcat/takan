@@ -146,7 +146,6 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 			descParts = append(descParts, fmt.Sprintf("%s (%s): %s", r.ID, r.Name, r.Command))
 		}
 		runnersBlurb := strings.Join(descParts, "; ")
-		ownersBlurb := ownerNamesBlurb(ctx, st, userID)
 
 		tools = append(tools,
 			mcp.RegisteredTool{
@@ -186,9 +185,8 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 				Tool: mcp.Tool{
 					Name: "machine_ai_run",
 					Description: "Launch an autonomous AI agent on a machine. Returns immediately with job_id " +
-						"(does not wait for the agent to finish). owner is required: the bot instance launching " +
-						"the job (" + ownersBlurb + " — see bots_list). When owner is a bot, the finished job " +
-						"result is queued in that bot's outbox and its daemon delivers it. After launch, follow the job: " +
+						"(does not wait for the agent to finish). When the job ends its result is delivered to the " +
+						"operator's Telegram chat, or to chat_id when you name one. After launch, follow the job: " +
 						"machine_ai_watch waits until it finishes; machine_ai_status is a quick status + log tail; " +
 						"machine_ai_log fetches the full transcript; machine_ai_cancel kills a running job; " +
 						"machine_ai_reply continues as a new job (runners are one-shot and cannot be interrupted in-process). " +
@@ -214,21 +212,16 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 								"type":        "string",
 								"description": "Working directory on the machine (optional)",
 							},
-							"owner": map[string]any{
-								"type":        "string",
-								"description": "Bot instance that launched the job (" + ownersBlurb + ")",
-							},
 							"chat_id": map[string]any{
-								"type": "string",
-								"description": "Telegram chat that asked for this job (optional). Travels with the " +
-									"result delivery so the owning bot answers in the right chat.",
+								"type":        "string",
+								"description": "Telegram chat that gets the result (optional; default: the operator's own chat)",
 							},
 						},
-						"required": []string{"machine", "runner", "prompt", "owner"},
+						"required": []string{"machine", "runner", "prompt"},
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-					name, runnerID, prompt, cwd, owner, err := parseRunArgs(ctx, st, userID, args)
+					name, runnerID, prompt, cwd, err := parseRunArgs(ctx, st, userID, args)
 					if err != nil {
 						return "", err
 					}
@@ -240,16 +233,15 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if err != nil {
 						return "", err
 					}
-					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, "", owner)
+					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, "", "")
 					if err != nil {
 						return "", err
 					}
-					delivery := attributeJob(ctx, st, userID, res.JobID, owner, strArg(args, "chat_id"), name)
+					delivery := recordJobChat(ctx, st, userID, res.JobID, strArg(args, "chat_id"), name)
 					out := map[string]any{
 						"machine":  name,
 						"job_id":   res.JobID,
 						"runner":   r.ID,
-						"owner":    owner,
 						"name":     r.Name,
 						"command":  r.Command,
 						"status":   res.Status,
@@ -440,7 +432,7 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 						"the new job stores parent_job_id. " +
 						"Limitation: typical runners (e.g. grok --always-approve -p, claude -p) are one-shot with no live stdin session — " +
 						"this cannot attach to or interrupt a running process. To stop the parent first, call machine_ai_cancel. " +
-						"Defaults to the parent job's runner, cwd, and owner.",
+						"Defaults to the parent job's runner, cwd and delivery chat.",
 					InputSchema: map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -458,10 +450,6 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 							"cwd": map[string]any{
 								"type":        "string",
 								"description": "Override working directory (default: parent job's cwd)",
-							},
-							"owner": map[string]any{
-								"type":        "string",
-								"description": "Override owner bot instance (default: parent job's owner)",
 							},
 							"chat_id": map[string]any{
 								"type":        "string",
@@ -510,28 +498,23 @@ func Factory(st *store.Store, hub *agenthub.Hub, limit BashLimiter) func(ctx con
 					if cwd == "" {
 						cwd = strings.TrimSpace(parent.Cwd)
 					}
-					owner, err := resolveOwner(strArg(args, "owner"), parent.Owner)
-					if err != nil {
-						return "", err
-					}
 					prompt := BuildContinuePrompt(parent.Prompt, parent.Output, message)
-					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, parent.JobID, owner)
+					res, err := hub.StartAI(ctx, userID, name, r.ID, r.Command, prompt, cwd, parent.JobID, "")
 					if err != nil {
 						return "", err
 					}
 					chatID := strArg(args, "chat_id")
 					if chatID == "" {
-						if link, err := st.BotJobByID(ctx, parent.JobID); err == nil && link != nil {
+						if link, err := st.JobChatByID(ctx, parent.JobID); err == nil && link != nil {
 							chatID = link.ChatID
 						}
 					}
-					delivery := attributeJob(ctx, st, userID, res.JobID, owner, chatID, name)
+					delivery := recordJobChat(ctx, st, userID, res.JobID, chatID, name)
 					out := map[string]any{
 						"machine":       name,
 						"job_id":        res.JobID,
 						"parent_job_id": parent.JobID,
 						"runner":        r.ID,
-						"owner":         owner,
 						"name":          r.Name,
 						"command":       r.Command,
 						"status":        res.Status,
@@ -573,9 +556,11 @@ func requireMachine(ctx context.Context, st *store.Store, userID, name string) (
 	return name, nil
 }
 
-func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[string]any) (name, runnerID, prompt, cwd, owner string, err error) {
+// parseRunArgs validates a machine_ai_run call. An "owner" key sent by an older
+// client is accepted and ignored: results are routed by chat_id now.
+func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[string]any) (name, runnerID, prompt, cwd string, err error) {
 	if err = requireAI(ctx, st, userID); err != nil {
-		return "", "", "", "", "", err
+		return "", "", "", "", err
 	}
 	name = strArg(args, "machine")
 	runnerID = strArg(args, "runner")
@@ -584,64 +569,30 @@ func parseRunArgs(ctx context.Context, st *store.Store, userID string, args map[
 	}
 	prompt = strArg(args, "prompt")
 	cwd = strArg(args, "cwd")
-	owner, err = resolveOwner(strArg(args, "owner"), "")
-	if err != nil {
-		return "", "", "", "", "", err
-	}
 	if name == "" || runnerID == "" || prompt == "" {
-		return "", "", "", "", "", fmt.Errorf("machine, runner and prompt required")
+		return "", "", "", "", fmt.Errorf("machine, runner and prompt required")
 	}
 	name, err = requireMachine(ctx, st, userID, name)
 	if err != nil {
-		return "", "", "", "", "", err
+		return "", "", "", "", err
 	}
-	return name, runnerID, prompt, cwd, owner, nil
+	return name, runnerID, prompt, cwd, nil
 }
 
-// ownerNamesBlurb lists the bot instances that can own a job, for tool descriptions.
-func ownerNamesBlurb(ctx context.Context, st *store.Store, userID string) string {
-	list, err := st.ListBots(ctx, userID)
-	if err != nil || len(list) == 0 {
-		return "create one in Takan panel → Bots"
-	}
-	names := make([]string, 0, len(list))
-	for _, b := range list {
-		names = append(names, b.Name)
-	}
-	return strings.Join(names, ", ")
-}
-
-// attributeJob links a launched job to the owning bot instance so its result is
-// delivered when the job finishes. Returns a short human note for the tool
-// result; an owner that is not a registered bot is not an error (the job runs,
-// only the delivery is skipped).
-func attributeJob(ctx context.Context, st *store.Store, userID, jobID, owner, chatID, machine string) string {
+// recordJobChat remembers where a launched job's result must be delivered, and
+// returns a short human note for the tool result. An empty chat means the
+// operator's own chat.
+func recordJobChat(ctx context.Context, st *store.Store, userID, jobID, chatID, machine string) string {
 	if jobID == "" {
 		return "none (no job id)"
 	}
-	bot, err := st.BotByUserAndName(ctx, userID, owner)
-	if err != nil || bot == nil {
-		return fmt.Sprintf("none (owner %q is not a registered bot — call bots_list)", owner)
-	}
-	if err := st.RecordBotJob(ctx, jobID, bot.ID, userID, chatID, machine); err != nil {
+	if err := st.RecordJobChat(ctx, jobID, userID, chatID, machine); err != nil {
 		return "none (" + err.Error() + ")"
 	}
 	if chatID != "" {
-		return fmt.Sprintf("queued to bot %s for chat %s when the job finishes", bot.Name, chatID)
+		return "the result will be sent to chat " + chatID + " when the job finishes"
 	}
-	return fmt.Sprintf("queued to bot %s when the job finishes", bot.Name)
-}
-
-// resolveOwner returns the explicit owner, or parentOwner if the arg is empty.
-func resolveOwner(arg, parentOwner string) (string, error) {
-	owner := strings.TrimSpace(arg)
-	if owner == "" {
-		owner = strings.TrimSpace(parentOwner)
-	}
-	if owner == "" {
-		return "", fmt.Errorf("owner required")
-	}
-	return owner, nil
+	return "the result will be sent to the operator's chat when the job finishes"
 }
 
 func enabledRunner(cfg Config, runnerID string) (Runner, error) {
@@ -721,7 +672,6 @@ func formatJob(machine string, job *agenthub.AIJob, extra map[string]any) string
 		"machine":     machine,
 		"job_id":      job.JobID,
 		"runner":      runnerOf(*job),
-		"owner":       job.Owner,
 		"status":      job.Status,
 		"exit_code":   job.ExitCode,
 		"pid":         job.PID,
@@ -732,6 +682,10 @@ func formatJob(machine string, job *agenthub.AIJob, extra map[string]any) string
 	}
 	if job.ParentJobID != "" {
 		out["parent_job_id"] = job.ParentJobID
+	}
+	// Older jobs carry the retired bot owner; surface it only when set.
+	if job.Owner != "" {
+		out["owner"] = job.Owner
 	}
 	if job.Error != "" {
 		out["error"] = job.Error

@@ -570,9 +570,8 @@
     .mod-icon.email { color: #7a5c3a; background: rgba(166, 124, 26, 0.10); border-color: rgba(166, 124, 26, 0.18); }
     .mod-icon.people { color: #3a6b7a; background: var(--accent-soft); border-color: rgba(58, 107, 122, 0.16); }
     .mod-icon.health { color: #8a3a4a; background: rgba(180, 60, 80, 0.08); border-color: rgba(180, 60, 80, 0.16); }
-    .mod-icon.telegram { color: #2a7aa8; background: rgba(42, 122, 168, 0.10); border-color: rgba(42, 122, 168, 0.18); }
     .mod-icon.tv { color: #3a4a7a; background: rgba(58, 74, 122, 0.10); border-color: rgba(58, 74, 122, 0.18); }
-    .mod-icon.bots { color: #5c4a7a; background: rgba(92, 74, 122, 0.10); border-color: rgba(92, 74, 122, 0.18); }
+    .mod-icon.assistant { color: #5c4a7a; background: rgba(92, 74, 122, 0.10); border-color: rgba(92, 74, 122, 0.18); }
     .mod-icon.connect { color: var(--primary-dark); background: var(--accent-soft); }
     .mod-body h3 { font-size: 1.05rem; }
     .mod-body p { margin-top: 0.35rem; color: var(--text-secondary); font-size: 0.86rem; line-height: 1.45; }
@@ -1589,35 +1588,23 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>
           Browse integrations
         </a>
-        <div class="nav-label">Modules</div>
-        {{range .Modules}}
+        {{if .Modules}}
+        <div class="nav-label">Channels</div>
+        {{range .Modules}}{{if eq .ID "assistant" "email"}}
         <a class="nav-item{{if eq $.ActiveNav .ID}} active{{end}}" href="{{.Path}}" onclick="closeNav()">
-          {{if eq .ID "machine"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
-          {{else if eq .ID "display"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-          {{else if eq .ID "tv"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8M12 18v3"/></svg>
-          {{else if eq .ID "bots"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4.5v3.5"/><circle cx="12" cy="3.3" r="1.3"/><path d="M9 13h.01M15 13h.01"/></svg>
-          {{else if eq .ID "mercadona"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg>
-          {{else if eq .ID "telegram"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 5 2 12.5l6.5 2L17 8l-6 7.5 7 4L21 5z"/><path d="m8.5 14.5.5 5 2.5-3.5"/></svg>
-          {{else if eq .ID "sip"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3.1-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.6a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.5-1.2a2 2 0 0 1 2.1-.4c.9.3 1.7.5 2.6.7A2 2 0 0 1 22 16.9z"/></svg>
-          {{else if eq .ID "vault"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15" r="1.2"/></svg>
-          {{else if eq .ID "health"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/></svg>
-          {{else if eq .ID "people"}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          {{else}}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6"/></svg>
-          {{end}}
+          {{template "modicon" .}}
           {{.Name}}
           {{if .Enabled}}<span class="pill on" style="margin-left:auto;font-size:.62rem;padding:.1rem .4rem">On</span>{{end}}
         </a>
+        {{end}}{{end}}
+        <div class="nav-label">Capabilities</div>
+        {{range .Modules}}{{if not (eq .ID "assistant" "email")}}
+        <a class="nav-item{{if eq $.ActiveNav .ID}} active{{end}}" href="{{.Path}}" onclick="closeNav()">
+          {{template "modicon" .}}
+          {{.Name}}
+          {{if .Enabled}}<span class="pill on" style="margin-left:auto;font-size:.62rem;padding:.1rem .4rem">On</span>{{end}}
+        </a>
+        {{end}}{{end}}
         {{end}}
         <div class="nav-label">Instance</div>
         <a class="nav-item{{if eq .ActiveNav "instance"}} active{{end}}" href="/dashboard/instance" onclick="closeNav()">
@@ -1723,4 +1710,28 @@
   </script>
 </body>
 </html>
+{{end}}
+
+{{define "modicon"}}
+  {{if eq .ID "assistant"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4.5v3.5"/><circle cx="12" cy="3.3" r="1.3"/><path d="M9 13h.01M15 13h.01"/></svg>
+  {{else if eq .ID "machine"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+  {{else if eq .ID "display"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+  {{else if eq .ID "tv"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8M12 18v3"/></svg>
+  {{else if eq .ID "mercadona"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 7h12l-1 12H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/></svg>
+  {{else if eq .ID "email"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+  {{else if eq .ID "vault"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15" r="1.2"/></svg>
+  {{else if eq .ID "health"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 11c0 5.6-7 10-7 10z"/></svg>
+  {{else if eq .ID "people"}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+  {{else}}
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 12h6"/></svg>
+  {{end}}
 {{end}}

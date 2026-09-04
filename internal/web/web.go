@@ -21,11 +21,8 @@ import (
 	"github.com/kidandcat/takan/internal/cryptox"
 	"github.com/kidandcat/takan/internal/store"
 	"github.com/kidandcat/takan/modules"
-	botsmod "github.com/kidandcat/takan/modules/bots"
 	emailmod "github.com/kidandcat/takan/modules/email"
 	machinemod "github.com/kidandcat/takan/modules/machine"
-	sipmod "github.com/kidandcat/takan/modules/sip"
-	telegrammod "github.com/kidandcat/takan/modules/telegram"
 	tvmod "github.com/kidandcat/takan/modules/tv"
 	"github.com/kidandcat/takan/modules/vault"
 )
@@ -49,14 +46,8 @@ type Server struct {
 	OnMercadonaClear func(ctx context.Context, userID string) error
 	// OnToolsChanged notifies MCP clients (tools/list_changed) after module changes.
 	OnToolsChanged func(userID string)
-	// SIPHub optional: online gateways + active calls for the SIP module panel.
-	SIPHub *sipmod.Hub
-	// BotWatch optional: wakes long-polling bot daemons after a panel decision.
-	BotWatch *botsmod.Watcher
-	// Telegram optional: channel CRUD (sealing, getMe validation) for the panel.
-	Telegram *telegrammod.Service
-	// Provision optional: zero-touch bot installs onto machines.
-	Provision *botsmod.Provisioner
+	// Assistant optional: the in-process personal assistant, for its panel page.
+	Assistant AssistantView
 	// SendLoginCode delivers a one-time login code by email. Required for login.
 	SendLoginCode func(ctx context.Context, to, code string, ttl time.Duration) (string, error)
 	// OwnerEmail is TAKAN_OWNER_EMAIL; it wins over the address stored in the DB.
@@ -86,20 +77,24 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /logout", s.logout)
 	mux.HandleFunc("GET /dashboard", s.dashOverview)
 	mux.HandleFunc("GET /dashboard/integrations", s.dashIntegrations)
+	mux.HandleFunc("GET /dashboard/assistant", s.dashAssistant)
 	mux.HandleFunc("GET /dashboard/machines", s.dashMachines)
 	mux.HandleFunc("GET /dashboard/display", s.dashDisplay)
 	mux.HandleFunc("GET /dashboard/tv", s.dashTV)
-	mux.HandleFunc("GET /dashboard/bots", s.dashBots)
 	mux.HandleFunc("GET /dashboard/mercadona", s.dashMercadona)
 	mux.HandleFunc("GET /dashboard/email", s.dashEmail)
-	mux.HandleFunc("GET /dashboard/telegram", s.dashTelegram)
-	mux.HandleFunc("GET /dashboard/sip", s.dashSIP)
 	mux.HandleFunc("GET /dashboard/people", s.dashPeople)
 	mux.HandleFunc("GET /dashboard/health", s.dashHealth)
 	mux.HandleFunc("GET /dashboard/vault", s.dashVault)
 	mux.HandleFunc("GET /dashboard/instance", s.dashInstance)
 	mux.HandleFunc("GET /dashboard/invites", gone)
 	mux.HandleFunc("GET /dashboard/admin", gone)
+	// The bot fleet and the Telegram channel layer became one assistant.
+	mux.HandleFunc("GET /dashboard/bots", gone)
+	mux.HandleFunc("GET /dashboard/sip", gone)
+	mux.HandleFunc("GET /dashboard/telegram", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/dashboard/assistant", http.StatusFound)
+	})
 	// Old routes → overview / integrations
 	mux.HandleFunc("GET /dashboard/connect", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -121,35 +116,18 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/display/{id}/delete", s.deleteDisplay)
 	mux.HandleFunc("POST /dashboard/display/{id}/default", s.defaultDisplay)
 	mux.HandleFunc("POST /dashboard/tv", s.saveTV)
-	mux.HandleFunc("POST /dashboard/bots", s.createBot)
-	mux.HandleFunc("POST /dashboard/bots/{id}/delete", s.deleteBot)
-	mux.HandleFunc("POST /dashboard/bots/{id}/token", s.issueBotToken)
-	mux.HandleFunc("POST /dashboard/bots/{id}/provision", s.provisionBot)
-	mux.HandleFunc("POST /dashboard/telegram/channels", s.createChannel)
-	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/delete", s.deleteChannel)
-	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/default", s.defaultChannel)
-	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/chats", s.addChannelChat)
-	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/chats/{chat}/remove", s.removeChannelChat)
-	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/discover", s.discoverChannelChats)
-	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/attach", s.attachChannel)
-	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/detach", s.detachChannel)
-	mux.HandleFunc("POST /dashboard/bots/{id}/target", s.saveBotTarget)
-	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/approve", s.approveBotChat)
-	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/deny", s.denyBotChat)
-	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/forget", s.forgetBotChat)
+	mux.HandleFunc("POST /dashboard/assistant", s.saveAssistant)
+	mux.HandleFunc("POST /dashboard/assistant/chats/{chat}/forget", s.forgetAssistantChat)
+	mux.HandleFunc("POST /dashboard/assistant/jobs/{id}/delete", s.deleteAssistantJob)
+	mux.HandleFunc("POST /dashboard/assistant/jobs/{id}/run", s.runAssistantJob)
+	mux.HandleFunc("POST /dashboard/assistant/tasks/{id}/kill", s.killAssistantTask)
+	mux.HandleFunc("POST /dashboard/assistant/devices/{token}/delete", s.deleteAssistantDevice)
 	mux.HandleFunc("POST /dashboard/mercadona", s.saveMercadona)
 	mux.HandleFunc("POST /dashboard/mercadona/clear", s.clearMercadona)
 	mux.HandleFunc("POST /dashboard/email", s.saveEmail)
 	mux.HandleFunc("POST /dashboard/email/refresh", s.refreshEmail)
 	mux.HandleFunc("POST /dashboard/email/clear", s.clearEmail)
 	mux.HandleFunc("POST /dashboard/email/domains/toggle", s.toggleEmailDomain)
-	mux.HandleFunc("POST /dashboard/telegram", s.saveTelegram)
-	mux.HandleFunc("POST /dashboard/telegram/discover", s.discoverTelegram)
-	mux.HandleFunc("POST /dashboard/telegram/clear", s.clearTelegram)
-	mux.HandleFunc("POST /dashboard/sip", s.saveSIP)
-	mux.HandleFunc("POST /dashboard/sip/clear", s.clearSIP)
-	mux.HandleFunc("POST /dashboard/sip/devices", s.createSIPDevice)
-	mux.HandleFunc("POST /dashboard/sip/devices/{id}/delete", s.deleteSIPDevice)
 	mux.HandleFunc("POST /dashboard/people", s.createPerson)
 	mux.HandleFunc("POST /dashboard/people/{id}", s.updatePerson)
 	mux.HandleFunc("POST /dashboard/people/{id}/delete", s.deletePerson)
@@ -197,27 +175,8 @@ type pageData struct {
 	EmailConfigured     bool
 	EmailDomainRows     []emailDomainView
 	EmailKeySet         bool
-	// Telegram module
-	TelegramConfigured  bool
-	TelegramBotUsername string
-	TelegramDefaultChat string
-	TelegramChatsText   string // textarea: one "id" or "id|label" per line
-	// SIP module (phone gateways → Grok Voice)
-	SIPConfigured    bool
-	SIPHasKey        bool
-	SIPVoice         string
-	SIPInstructions  string
-	SIPAutoAnswer    bool
-	SIPAudioRate     int
-	SIPBridgeMode    string
-	SIPDevices       []sipDeviceView
-	SIPOnlineCount   int
-	SIPCalls         []map[string]any
-	SIPWSURL         string
-	SIPDeviceToken   string // flash: token shown once after create
-	SIPDeviceConnect string // flash: full wss connect URL
-	People           []personView
-	PeopleCount      int
+	People              []personView
+	PeopleCount         int
 	// Health module
 	HealthProfile    healthProfileView
 	HealthLog        []healthLogView
@@ -245,22 +204,8 @@ type pageData struct {
 	TVClientName string
 	TVWifiMAC    string
 	TVAppsText   string
-	// Bots module (Telegram assistant daemons on machines).
-	// Bots holds the real daemons; LegacyBots holds the seeded owner
-	// placeholders, which are listed compactly so they cannot bury the fleet.
-	Bots            []botView
-	LegacyBots      []botView
-	BotsOnline      int
-	BotsPending     int
-	BotsDeliveries  int
-	BotPendingChats []botChatView
-	Channels        []channelView
-	BotChannels     []channelView
-	BotToken        string // flash: bot token shown once after create/reissue
-	BotInstallHint  string // flash: one-line hint with the API base URL
-	// RuntimeBundle describes the sealed brain handed to provisioned bots.
-	// It is metadata only: no secret ever reaches this struct.
-	RuntimeBundle bundleView
+	// Assistant module (the personal assistant: bot identity, chats, tasks, jobs)
+	Assistant assistantView
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
 	ActiveNav string
 	// NeedsSetup is true when this instance has no owner yet (the first emailed
@@ -307,12 +252,6 @@ type healthIssueView struct {
 	ID, Title, Status, StartedOn, EndedOn, BodyPart, Diagnosis, Treatment, Notes string
 }
 
-type sipDeviceView struct {
-	ID, Name, SimE164 string
-	Online            bool
-	LastSeen          string
-}
-
 type modView struct {
 	ID, Name, Description string
 	Enabled, Ready        bool
@@ -342,35 +281,6 @@ type displayView struct {
 	ID, Name, MachineID, MachineName string
 	Online, IsDefault                bool
 	LastShown                        string
-}
-
-type botView struct {
-	ID, Name, Username, MachineName, Kind, Version string
-	Instance, Channel, ChannelChat                 string
-	ProvisionStatus, ProvisionError, ProvisionAt   string
-	Online, Legacy, HasToken                       bool
-	LastSeen                                       string
-	Pending, Approved, Deliveries                  int
-	Chats                                          []botChatView
-}
-
-// bundleView is the panel's read-only view of the runtime bundle. There is no
-// upload form and no way to read a component back: the bundle is imported by a
-// CLI on the hub host and only ever leaves over a provision ticket.
-type bundleView struct {
-	Present     bool
-	Source      string
-	GrokVersion string
-	Updated     string
-	Components  []store.BundleComponent
-	// ImportHint is the exact command an operator runs on the hub host.
-	ImportHint string
-}
-
-type botChatView struct {
-	BotID, BotName, ChatID, Type, Label, Status, Snippet string
-	Reported                                             string
-	Pending, Approved                                    bool
 }
 
 type machineAIRunnerView struct {
@@ -690,27 +600,6 @@ func (s *Server) dashPage(w http.ResponseWriter, r *http.Request, nav, title, tm
 			data.AITabActive = true
 		}
 	}
-	if nav == "sip" {
-		if c, err := r.Cookie("takan_sip_token"); err == nil && c.Value != "" {
-			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
-				data.SIPDeviceToken = string(raw)
-				wsBase := strings.TrimSuffix(s.PublicURL, "/")
-				wsBase = strings.Replace(wsBase, "https://", "wss://", 1)
-				wsBase = strings.Replace(wsBase, "http://", "ws://", 1)
-				data.SIPDeviceConnect = wsBase + "/sip/ws?token=" + string(raw)
-			}
-			http.SetCookie(w, &http.Cookie{Name: "takan_sip_token", Value: "", Path: "/", MaxAge: -1})
-		}
-	}
-	if nav == "bots" {
-		if c, err := r.Cookie("takan_bot_token"); err == nil && c.Value != "" {
-			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil {
-				data.BotToken = string(raw)
-				data.BotInstallHint = strings.TrimSuffix(s.PublicURL, "/") + "/api/bots"
-			}
-			http.SetCookie(w, &http.Cookie{Name: "takan_bot_token", Value: "", Path: "/", MaxAge: -1})
-		}
-	}
 	if f := r.URL.Query().Get("flash"); f != "" {
 		data.Flash = f
 		lf := strings.ToLower(f)
@@ -732,6 +621,9 @@ func (s *Server) dashOverview(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashIntegrations(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "integrations", "Integrations", "integrations.html")
 }
+func (s *Server) dashAssistant(w http.ResponseWriter, r *http.Request) {
+	s.dashPage(w, r, "assistant", "Assistant", "assistant.html")
+}
 func (s *Server) dashMachines(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "machine", "Machines", "machines.html")
 }
@@ -741,20 +633,11 @@ func (s *Server) dashDisplay(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dashTV(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "tv", "TV", "tv.html")
 }
-func (s *Server) dashBots(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "bots", "Bots", "bots.html")
-}
 func (s *Server) dashMercadona(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "mercadona", "Mercadona", "mercadona.html")
 }
 func (s *Server) dashEmail(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "email", "Email", "email.html")
-}
-func (s *Server) dashTelegram(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "telegram", "Telegram", "telegram.html")
-}
-func (s *Server) dashSIP(w http.ResponseWriter, r *http.Request) {
-	s.dashPage(w, r, "sip", "SIP", "sip.html")
 }
 func (s *Server) dashPeople(w http.ResponseWriter, r *http.Request) {
 	s.dashPage(w, r, "people", "People", "people.html")
@@ -856,36 +739,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.Summary = tvc.Machine + " offline"
 			}
 			mv.Ready = m.Enabled && on
-		case "bots":
-			mv.Path = "/dashboard/bots"
-			list, _ := s.Store.ListBots(ctx, u.ID)
-			onlineN, pendingN, daemonN := 0, 0, 0
-			for _, b := range list {
-				pendingN += b.PendingChats
-				if b.Legacy() {
-					continue
-				}
-				daemonN++
-				kind := "offline"
-				if botsmod.Online(b) {
-					onlineN++
-					kind = "online"
-				}
-				label := b.Name
-				if b.MachineName != "" {
-					label += " · " + b.MachineName
-				}
-				mv.Facts = append(mv.Facts, modFact{Label: label, Kind: kind})
-			}
-			if daemonN == 0 {
-				mv.Summary = "No bot daemons registered"
-			} else {
-				mv.Summary = fmt.Sprintf("%d online · %d total", onlineN, daemonN)
-			}
-			if pendingN > 0 {
-				mv.DetailsLine = fmt.Sprintf("%d chat(s) pending approval", pendingN)
-			}
-			mv.Ready = m.Enabled && onlineN > 0
 		case "mercadona":
 			mv.Path = "/dashboard/mercadona"
 			em, _, postal, ok, _ := s.Store.GetMercadonaCreds(ctx, u.ID)
@@ -955,55 +808,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				mv.DetailsLine = strings.Join(bits, " · ")
 			}
 			mv.Ready = m.Enabled
-		case "telegram":
-			mv.Path = "/dashboard/telegram"
-			ts, ok, _ := s.Store.GetTelegramSettings(ctx, u.ID)
-			if !ok {
-				mv.Summary = "No bot token"
-			} else {
-				bot := strings.TrimPrefix(ts.BotUsername, "@")
-				if bot == "" {
-					bot = "bot"
-				}
-				n := len(ts.AllowedChats)
-				if n == 0 && ts.DefaultChatID != "" {
-					n = 1
-				}
-				mv.Summary = fmt.Sprintf("@%s · %d chat(s)", bot, n)
-				if ts.DefaultChatID != "" {
-					mv.DetailsLine = "default " + ts.DefaultChatID
-				} else {
-					mv.DetailsLine = "no default chat"
-				}
-			}
-			mv.Ready = m.Enabled && ok && (ts.DefaultChatID != "" || len(ts.AllowedChats) > 0)
-		case "sip":
-			mv.Path = "/dashboard/sip"
-			settings, sok, _ := s.Store.GetSIPSettings(ctx, u.ID)
-			devs, _ := s.Store.ListSIPDevices(ctx, u.ID)
-			onlineN := 0
-			for _, d := range devs {
-				on := s.SIPHub != nil && s.SIPHub.Online(d.ID)
-				kind := "offline"
-				if on {
-					onlineN++
-					kind = "online"
-				}
-				label := d.Name
-				if d.SimE164 != "" {
-					label += " " + d.SimE164
-				}
-				mv.Facts = append(mv.Facts, modFact{Label: label, Kind: kind})
-			}
-			if !sok || !settings.HasKey {
-				mv.Summary = "No xAI key"
-			} else if len(devs) == 0 {
-				mv.Summary = "Key set · no phones"
-			} else {
-				mv.Summary = fmt.Sprintf("%d online · %d total", onlineN, len(devs))
-				mv.DetailsLine = "voice " + settings.Voice
-			}
-			mv.Ready = m.Enabled && sok && settings.HasKey && len(devs) > 0
 		case "vault":
 			mv.Path = "/dashboard/vault"
 			n, _ := s.Store.CountVaultItems(ctx, u.ID)
@@ -1059,8 +863,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			})
 		}
 	}
-	s.fillChannels(ctx, u, &data)
-	s.fillBotsDashboard(ctx, u, &data)
+	s.fillAssistant(ctx, u, &data)
 	tvc, _ := tvmod.LoadConfig(ctx, s.Store, u.ID)
 	data.TVMachine = tvc.Machine
 	data.TVHost = tvc.Host
@@ -1080,59 +883,6 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 				Name: d.Name, Status: d.Status, Sending: d.Sending, Receiving: d.Receiving, Enabled: d.Enabled,
 			})
 		}
-	}
-	if ts, tok, _ := s.Store.GetTelegramSettings(ctx, u.ID); tok {
-		data.TelegramConfigured = true
-		data.TelegramBotUsername = strings.TrimPrefix(ts.BotUsername, "@")
-		data.TelegramDefaultChat = ts.DefaultChatID
-		var lines []string
-		for _, c := range ts.AllowedChats {
-			if c.Label != "" && c.Label != "default" {
-				lines = append(lines, c.ID+"|"+c.Label)
-			} else {
-				lines = append(lines, c.ID)
-			}
-		}
-		data.TelegramChatsText = strings.Join(lines, "\n")
-	}
-	// SIP module panel data
-	wsBase := strings.TrimSuffix(s.PublicURL, "/")
-	wsBase = strings.Replace(wsBase, "https://", "wss://", 1)
-	wsBase = strings.Replace(wsBase, "http://", "ws://", 1)
-	data.SIPWSURL = wsBase + "/sip/ws"
-	data.SIPVoice = "eve"
-	data.SIPAutoAnswer = true
-	data.SIPAudioRate = 16000
-	data.SIPBridgeMode = "realtime"
-	data.SIPInstructions = "You are a helpful phone assistant. Speak concisely. Match the caller's language."
-	if ss, sok, _ := s.Store.GetSIPSettings(ctx, u.ID); sok {
-		data.SIPConfigured = true
-		data.SIPHasKey = ss.HasKey
-		data.SIPVoice = ss.Voice
-		data.SIPAutoAnswer = ss.AutoAnswer
-		data.SIPAudioRate = ss.AudioRate
-		data.SIPBridgeMode = ss.BridgeMode
-		if ss.Instructions != "" {
-			data.SIPInstructions = ss.Instructions
-		}
-	}
-	if sipDevs, err := s.Store.ListSIPDevices(ctx, u.ID); err == nil {
-		for _, d := range sipDevs {
-			on := s.SIPHub != nil && s.SIPHub.Online(d.ID)
-			if on {
-				data.SIPOnlineCount++
-			}
-			ls := ""
-			if d.LastSeen != nil {
-				ls = d.LastSeen.UTC().Format("2006-01-02 15:04")
-			}
-			data.SIPDevices = append(data.SIPDevices, sipDeviceView{
-				ID: d.ID, Name: d.Name, SimE164: d.SimE164, Online: on, LastSeen: ls,
-			})
-		}
-	}
-	if s.SIPHub != nil {
-		data.SIPCalls = s.SIPHub.Calls().Snapshot(u.ID)
 	}
 	if plist, err := s.Store.ListPeople(ctx, u.ID, "", 100); err == nil {
 		data.PeopleCount = len(plist)
@@ -1665,265 +1415,6 @@ func (s *Server) clearEmail(w http.ResponseWriter, r *http.Request) {
 		s.OnToolsChanged(u.ID)
 	}
 	http.Redirect(w, r, "/dashboard/email", http.StatusFound)
-}
-
-func parseTelegramChatsText(raw string) []store.TelegramChat {
-	var out []store.TelegramChat
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		id, label := line, ""
-		if i := strings.IndexByte(line, '|'); i >= 0 {
-			id = strings.TrimSpace(line[:i])
-			label = strings.TrimSpace(line[i+1:])
-		} else if i := strings.IndexByte(line, ' '); i >= 0 {
-			// "id label with spaces"
-			id = strings.TrimSpace(line[:i])
-			label = strings.TrimSpace(line[i+1:])
-		}
-		if id == "" {
-			continue
-		}
-		out = append(out, store.TelegramChat{ID: id, Label: label})
-	}
-	return out
-}
-
-func (s *Server) saveTelegram(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	_ = r.ParseForm()
-	tokenIn := strings.TrimSpace(r.FormValue("bot_token"))
-	defaultChat := strings.TrimSpace(r.FormValue("default_chat_id"))
-	chats := parseTelegramChatsText(r.FormValue("allowed_chats"))
-
-	var plainToken string
-	var enc string
-	var botUsername string
-	if tokenIn == "" {
-		prev, ok, _ := s.Store.GetTelegramSettings(r.Context(), u.ID)
-		if !ok {
-			http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("bot token required"), http.StatusFound)
-			return
-		}
-		var err error
-		plainToken, err = s.Box.Open(prev.BotTokenEnc)
-		if err != nil {
-			http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("re-enter bot token"), http.StatusFound)
-			return
-		}
-		enc = prev.BotTokenEnc
-		botUsername = prev.BotUsername
-		// Keep previous chats if textarea empty and default not changing wholesale
-		if strings.TrimSpace(r.FormValue("allowed_chats")) == "" && len(chats) == 0 {
-			chats = prev.AllowedChats
-		}
-		if defaultChat == "" {
-			defaultChat = prev.DefaultChatID
-		}
-	} else {
-		plainToken = tokenIn
-		var err error
-		enc, err = s.Box.Seal(tokenIn)
-		if err != nil {
-			http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(err.Error()), http.StatusFound)
-			return
-		}
-	}
-
-	me, err := telegrammod.GetMe(r.Context(), plainToken)
-	if err != nil {
-		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("token invalid: "+err.Error()), http.StatusFound)
-		return
-	}
-	botUsername = me.Username
-	defaultChat, chats = store.NormalizeTelegramChats(defaultChat, chats)
-
-	if err := s.Store.SaveTelegramSettings(r.Context(), u.ID, enc, botUsername, defaultChat, chats); err != nil {
-		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "telegram", true)
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	flash := "Telegram saved"
-	if botUsername != "" {
-		flash = "Telegram saved (@" + botUsername + ")"
-	}
-	http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(flash), http.StatusFound)
-}
-
-func (s *Server) discoverTelegram(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	prev, ok, _ := s.Store.GetTelegramSettings(r.Context(), u.ID)
-	if !ok {
-		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("save bot token first"), http.StatusFound)
-		return
-	}
-	token, err := s.Box.Open(prev.BotTokenEnc)
-	if err != nil {
-		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("decrypt token failed"), http.StatusFound)
-		return
-	}
-	found, err := telegrammod.DiscoverChats(r.Context(), token)
-	if err != nil {
-		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	if len(found) == 0 {
-		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery("no chats found — open the bot in Telegram and send /start, then Discover again"), http.StatusFound)
-		return
-	}
-	// Merge discovered chats into allowlist; set default if empty.
-	chats := append([]store.TelegramChat{}, prev.AllowedChats...)
-	for _, c := range found {
-		chats = append(chats, store.TelegramChat{ID: c.ID, Label: telegrammod.FormatChatLabel(c)})
-	}
-	def := prev.DefaultChatID
-	if def == "" && len(found) > 0 {
-		def = found[0].ID
-	}
-	def, chats = store.NormalizeTelegramChats(def, chats)
-	if err := s.Store.UpdateTelegramMeta(r.Context(), u.ID, prev.BotUsername, def, chats); err != nil {
-		http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	http.Redirect(w, r, "/dashboard/telegram?flash="+urlQuery(fmt.Sprintf("Discovered %d chat(s)", len(found))), http.StatusFound)
-}
-
-func (s *Server) clearTelegram(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	_ = s.Store.DeleteTelegramSettings(r.Context(), u.ID)
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	http.Redirect(w, r, "/dashboard/telegram", http.StatusFound)
-}
-
-func (s *Server) saveSIP(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	_ = r.ParseForm()
-	keyIn := strings.TrimSpace(r.FormValue("xai_api_key"))
-	voice := strings.TrimSpace(r.FormValue("voice"))
-	if voice == "" {
-		voice = "eve"
-	}
-	instructions := strings.TrimSpace(r.FormValue("instructions"))
-	autoAnswer := r.FormValue("auto_answer") == "1" || r.FormValue("auto_answer") == "on"
-	// checkbox: if form always posts, use presence; allow hidden field
-	if r.FormValue("auto_answer_present") == "1" {
-		autoAnswer = r.FormValue("auto_answer") == "1"
-	}
-	audioRate, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("audio_rate")))
-	if audioRate != 8000 && audioRate != 16000 && audioRate != 24000 {
-		audioRate = 16000
-	}
-	bridgeMode := strings.TrimSpace(r.FormValue("bridge_mode"))
-	if bridgeMode != "sip" {
-		bridgeMode = "realtime"
-	}
-
-	enc := ""
-	if keyIn != "" {
-		var err error
-		enc, err = s.Box.Seal(keyIn)
-		if err != nil {
-			http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery(err.Error()), http.StatusFound)
-			return
-		}
-	} else {
-		// Keep existing key: SaveSIPSettings preserves empty enc on update.
-		prev, ok, _ := s.Store.GetSIPSettings(r.Context(), u.ID)
-		if !ok || !prev.HasKey {
-			http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("xAI API key required"), http.StatusFound)
-			return
-		}
-	}
-
-	if err := s.Store.SaveSIPSettings(r.Context(), u.ID, enc, voice, instructions, bridgeMode, autoAnswer, audioRate); err != nil {
-		http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "sip", true)
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("SIP settings saved"), http.StatusFound)
-}
-
-func (s *Server) clearSIP(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	_ = s.Store.ClearSIPSettings(r.Context(), u.ID)
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("SIP API key cleared"), http.StatusFound)
-}
-
-func (s *Server) createSIPDevice(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	_ = r.ParseForm()
-	name := strings.TrimSpace(r.FormValue("name"))
-	sim := strings.TrimSpace(r.FormValue("sim_e164"))
-	dev, token, err := s.Store.CreateSIPDevice(r.Context(), u.ID, name, sim)
-	if err != nil {
-		http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "sip", true)
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	// Show token once via short-lived cookie (same pattern as machine install).
-	http.SetCookie(w, &http.Cookie{
-		Name:     "takan_sip_token",
-		Value:    base64.RawURLEncoding.EncodeToString([]byte(token)),
-		Path:     "/",
-		MaxAge:   120,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-	_ = dev
-	http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("Device created — copy the token now"), http.StatusFound)
-}
-
-func (s *Server) deleteSIPDevice(w http.ResponseWriter, r *http.Request) {
-	u := s.requireUser(w, r)
-	if u == nil {
-		return
-	}
-	id := r.PathValue("id")
-	if err := s.Store.DeleteSIPDevice(r.Context(), u.ID, id); err != nil {
-		http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery(err.Error()), http.StatusFound)
-		return
-	}
-	if s.OnToolsChanged != nil {
-		s.OnToolsChanged(u.ID)
-	}
-	http.Redirect(w, r, "/dashboard/sip?flash="+urlQuery("Device removed"), http.StatusFound)
 }
 
 func parseOptionalFloat(s string) (*float64, error) {

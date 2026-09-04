@@ -79,7 +79,7 @@ func TestOwnerScopedData(t *testing.T) {
 func TestDroppedTablesAreGone(t *testing.T) {
 	st, _, _ := newOwner(t)
 	for _, table := range []string{
-		"bots", "bot_chats", "bot_deliveries", "bot_jobs", "bot_provision_tickets",
+		"bots", "bot_chats", "bot_deliveries", "bot_jobs", "bot_provision_tickets", "sip_devices", "sip_settings",
 		"telegram_channels", "telegram_channel_chats", "telegram_attachments",
 		"telegram_settings", "runtime_bundles", "invites", "mcp_tokens",
 	} {
@@ -110,7 +110,7 @@ func TestDefaultModulesMatchTheCatalog(t *testing.T) {
 			t.Fatalf("module %s missing from %v", want, seen)
 		}
 	}
-	for _, gone := range []string{"bots", "telegram"} {
+	for _, gone := range []string{"bots", "telegram", "sip"} {
 		if seen[gone] {
 			t.Fatalf("module %s should be retired", gone)
 		}

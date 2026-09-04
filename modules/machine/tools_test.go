@@ -60,7 +60,9 @@ func TestFactoryAIToolWiring(t *testing.T) {
 		t.Fatal("reply must label the one-shot / no-interrupt limitation")
 	}
 
-	mustContain(t, required["machine_ai_run"], "machine", "runner", "prompt", "owner")
+	mustContain(t, required["machine_ai_run"], "machine", "runner", "prompt")
+	// owner belonged to the retired bot registry; results are routed by chat now.
+	mustNotContain(t, required["machine_ai_run"], "owner")
 	mustContain(t, required["machine_ai_watch"], "machine", "job_id")
 	mustContain(t, required["machine_ai_log"], "machine", "job_id")
 	mustContain(t, required["machine_ai_cancel"], "machine", "job_id")
@@ -114,45 +116,38 @@ func TestFactoryHandlersValidateMachineAndJob(t *testing.T) {
 		t.Fatalf("reply missing message: %v", err)
 	}
 	if _, err := handlers["machine_ai_run"](ctx, userID, map[string]any{
-		"machine": "mac", "runner": "grok", "prompt": "hi",
-	}); err == nil || !strings.Contains(err.Error(), "owner") {
-		t.Fatalf("run missing owner: %v", err)
+		"machine": "mac", "runner": "grok",
+	}); err == nil || !strings.Contains(err.Error(), "prompt") {
+		t.Fatalf("run missing prompt: %v", err)
 	}
 	// Online check happens after local validation — offline machine is an agent-hub error.
 	if _, err := handlers["machine_ai_run"](ctx, userID, map[string]any{
-		"machine": "mac", "runner": "grok", "prompt": "hi", "owner": "Minerva",
+		"machine": "mac", "runner": "grok", "prompt": "hi",
 	}); err == nil || !strings.Contains(err.Error(), "offline") {
 		t.Fatalf("run offline: %v", err)
 	}
-}
-
-func TestResolveOwner(t *testing.T) {
-	got, err := resolveOwner("Minerva", "Menta")
-	if err != nil || got != "Minerva" {
-		t.Fatalf("explicit: %q %v", got, err)
-	}
-	got, err = resolveOwner("", "Menta")
-	if err != nil || got != "Menta" {
-		t.Fatalf("inherit: %q %v", got, err)
-	}
-	got, err = resolveOwner("  ", "  Games  ")
-	if err != nil || got != "Games" {
-		t.Fatalf("trim inherit: %q %v", got, err)
-	}
-	if _, err := resolveOwner("", ""); err == nil || !strings.Contains(err.Error(), "owner required") {
-		t.Fatalf("empty: %v", err)
+	// An owner key from an older client is ignored, not rejected.
+	if _, err := handlers["machine_ai_run"](ctx, userID, map[string]any{
+		"machine": "mac", "runner": "grok", "prompt": "hi", "owner": "Minerva",
+	}); err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("legacy owner arg should be ignored: %v", err)
 	}
 }
 
-func TestFormatJobIncludesOwner(t *testing.T) {
-	job := &agenthub.AIJob{JobID: "j1", Runner: "grok", Owner: "TPVLINE", Status: "done"}
-	got := formatJob("mac", job, nil)
-	if !strings.Contains(got, `"owner": "TPVLINE"`) {
+// TestFormatJobOwnerOnlyWhenSet pins the compatibility rule: jobs recorded
+// before the bot registry was retired still carry an owner, and it is surfaced;
+// new ones have none and must not show an empty field.
+func TestFormatJobOwnerOnlyWhenSet(t *testing.T) {
+	legacy := &agenthub.AIJob{JobID: "j1", Runner: "grok", Owner: "TPVLINE", Status: "done"}
+	if got := formatJob("mac", legacy, nil); !strings.Contains(got, `"owner": "TPVLINE"`) {
 		t.Fatalf("formatJob: %s", got)
 	}
-	list := formatJobList("mac", []agenthub.AIJob{*job})
-	if !strings.Contains(list, `"owner": "TPVLINE"`) {
+	if list := formatJobList("mac", []agenthub.AIJob{*legacy}); !strings.Contains(list, `"owner": "TPVLINE"`) {
 		t.Fatalf("formatJobList: %s", list)
+	}
+	fresh := &agenthub.AIJob{JobID: "j2", Runner: "grok", Status: "done"}
+	if got := formatJob("mac", fresh, nil); strings.Contains(got, `"owner"`) {
+		t.Fatalf("a job with no owner must not report one: %s", got)
 	}
 }
 
@@ -214,6 +209,19 @@ func mustContain(t *testing.T, have []string, need ...string) {
 	for _, n := range need {
 		if !set[n] {
 			t.Fatalf("required %q not in %v", n, have)
+		}
+	}
+}
+
+func mustNotContain(t *testing.T, have []string, banned ...string) {
+	t.Helper()
+	set := map[string]bool{}
+	for _, s := range have {
+		set[s] = true
+	}
+	for _, b := range banned {
+		if set[b] {
+			t.Fatalf("required %q should be gone from %v", b, have)
 		}
 	}
 }

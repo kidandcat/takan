@@ -46,7 +46,7 @@ func (m *Module) tools() []mcp.RegisteredTool {
 	return []mcp.RegisteredTool{
 		{
 			Tool: mcp.Tool{
-				Name:        "mercadona_search",
+				Name: "mercadona_search",
 				Description: "Search Mercadona products by free text. Prefer mercadona_add to put items in the cart. " +
 					"If not linked, configure Mercadona in the Takan panel (see takan_status).",
 				InputSchema: map[string]any{

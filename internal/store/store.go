@@ -94,10 +94,6 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		_ = node.Close()
 		return nil, err
 	}
-	if err := s.migrateSIP(); err != nil {
-		_ = node.Close()
-		return nil, err
-	}
 	if err := s.migrateVault(); err != nil {
 		_ = node.Close()
 		return nil, err
@@ -265,13 +261,15 @@ func (s *Store) migrateDropBots() error {
 		"bot_provision_tickets", "bot_deliveries", "bot_jobs", "bot_chats", "bots",
 		"telegram_attachments", "telegram_channel_chats", "telegram_channels", "telegram_settings",
 		"runtime_bundles", "invites", "mcp_tokens",
+		// SIP was wired but never enabled in prod; it went with the same cut.
+		"sip_devices", "sip_settings",
 	} {
 		if _, err := s.db.Exec(`DROP TABLE IF EXISTS ` + table); err != nil {
 			return fmt.Errorf("drop %s: %w", table, err)
 		}
 	}
 	// Retire the two module ids that no longer exist.
-	if _, err := s.db.Exec(`DELETE FROM user_modules WHERE module_id IN ('bots','telegram')`); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM user_modules WHERE module_id IN ('bots','telegram','sip')`); err != nil {
 		return err
 	}
 	return nil
@@ -602,7 +600,7 @@ type ModuleState struct {
 }
 
 // defaultModuleIDs must stay in sync with modules.Catalog.
-var defaultModuleIDs = []string{"assistant", "machine", "display", "tv", "mercadona", "email", "people", "health", "sip", "vault"}
+var defaultModuleIDs = []string{"assistant", "machine", "display", "tv", "mercadona", "email", "people", "health", "vault"}
 
 func (s *Store) ListModules(ctx context.Context, userID string) ([]ModuleState, error) {
 	// ensure defaults exist

@@ -17,10 +17,10 @@ import (
 
 // totpParams holds RFC 6238 options (Google Authenticator defaults).
 type totpParams struct {
-	Secret  string // raw base32 secret (no spaces)
-	Digits  int
-	Period  int
-	Algo    string // sha1 | sha256 | sha512
+	Secret string // raw base32 secret (no spaces)
+	Digits int
+	Period int
+	Algo   string // sha1 | sha256 | sha512
 }
 
 // NormalizeTOTPForStore cleans a user-provided secret (base32 or otpauth URI) for storage.

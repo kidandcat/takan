@@ -81,7 +81,7 @@ func TestAssistantMessagesPagingAndCap(t *testing.T) {
 		}
 		ids = append(ids, id)
 	}
-	got, err := st.ListAssistantMessages(ctx, owner.ID, ids[1], 10)
+	got, err := st.ListAssistantMessages(ctx, owner.ID, ids[1], "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,12 +91,28 @@ func TestAssistantMessagesPagingAndCap(t *testing.T) {
 	if got[0].ID != ids[2] {
 		t.Fatalf("after must be exclusive, got %s want %s", got[0].ID, ids[2])
 	}
-	tail, err := st.ListAssistantMessages(ctx, owner.ID, "", 2)
+	tail, err := st.ListAssistantMessages(ctx, owner.ID, "", "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(tail) != 2 || tail[1].ID != ids[4] {
 		t.Fatalf("an empty cursor returns the newest window, got %+v", tail)
+	}
+
+	// Paging backwards is what lets the app scroll past the newest window.
+	older, err := st.ListAssistantMessages(ctx, owner.ID, "", ids[3], 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(older) != 2 || older[0].ID != ids[1] || older[1].ID != ids[2] {
+		t.Fatalf("before must return the two messages just above the cursor, got %+v", older)
+	}
+	first, err := st.ListAssistantMessages(ctx, owner.ID, "", ids[0], 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 0 {
+		t.Fatalf("nothing precedes the oldest message, got %d", len(first))
 	}
 }
 
