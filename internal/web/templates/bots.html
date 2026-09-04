@@ -86,10 +86,13 @@
         <h3>Bots</h3>
         <p class="muted">Name is what agents pass to <code>bots_approve</code>. Online means a heartbeat in the last 3 minutes.</p>
       </div>
-      <span class="pill {{if gt .BotsOnline 0}}on{{else}}neutral{{end}}">
-        {{if gt .BotsOnline 0}}<span class="live"></span>{{end}}
-        {{.BotsOnline}} online
-      </span>
+      <div class="row" style="gap:.4rem">
+        {{if gt .BotsDeliveries 0}}<span class="pill warn">{{.BotsDeliveries}} queued</span>{{end}}
+        <span class="pill {{if gt .BotsOnline 0}}on{{else}}neutral{{end}}">
+          {{if gt .BotsOnline 0}}<span class="live"></span>{{end}}
+          {{.BotsOnline}} online
+        </span>
+      </div>
     </div>
 
     {{if .Bots}}
