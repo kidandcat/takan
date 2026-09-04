@@ -200,6 +200,10 @@ type chatRunner struct {
 	// handle is the live agent process, once started. It is cleared when the
 	// turn ends, whether it completed or was promoted to a background task.
 	handle *RunHandle
+	// cancelledByUser distinguishes /cancel from the process shutting down.
+	// They produce the same cancelled result, but only one of them is something
+	// the operator already knows about.
+	cancelledByUser bool
 	// wake nudges the worker that new work arrived.
 	wake chan struct{}
 }
@@ -234,6 +238,7 @@ func (r *chatRunner) busy() (bool, time.Duration) {
 func (r *chatRunner) stop() bool {
 	r.mu.Lock()
 	handle, cancel, running := r.handle, r.cancel, r.running
+	r.cancelledByUser = true
 	r.mu.Unlock()
 
 	if handle != nil && !handle.Finished() {
@@ -244,7 +249,18 @@ func (r *chatRunner) stop() bool {
 		cancel()
 		return true
 	}
+
+	r.mu.Lock()
+	r.cancelledByUser = false
+	r.mu.Unlock()
 	return false
+}
+
+// userCancelled reports whether /cancel stopped the current run.
+func (r *chatRunner) userCancelled() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cancelledByUser
 }
 
 // Run polls Telegram until the context is cancelled.
@@ -369,9 +385,13 @@ func (b *Bot) dispatch(ctx context.Context, update *tg.Update) {
 	if err := b.state.See(msg.Chat.ID, tg.NormalizeChatType(msg.Chat.Type), msg.ChatLabel()); err != nil {
 		log.Printf("could not record chat %d: %v", msg.Chat.ID, err)
 	}
-	// Commands are answered inline, before the backlog, so they still work
-	// while an agent run is in flight.
-	if b.handleCommand(ctx, msg.Chat.ID, msg) {
+	// Commands are answered outside the backlog, so they still work while an
+	// agent run is in flight — but NOT on this goroutine. dispatch runs inline
+	// in the getUpdates loop, and a command answer makes network calls (and, for
+	// /usage, walks the whole session tree on disk). Blocking here stops the
+	// assistant receiving anything at all until it finishes.
+	if isCommand(msg) {
+		go b.handleCommand(context.WithoutCancel(ctx), msg.Chat.ID, msg)
 		return
 	}
 	b.enqueue(ctx, msg)
@@ -597,6 +617,10 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 		}
 	}()
 
+	r.mu.Lock()
+	r.cancelledByUser = false
+	r.mu.Unlock()
+
 	prompt := b.buildBatchPrompt(ctx, chatID, batch)
 	if strings.TrimSpace(prompt) == "" {
 		log.Printf("batch of %d message(s) produced an empty prompt, ignoring", len(batch))
@@ -653,7 +677,7 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 		}
 		b.processedRuns.Add(1)
 		b.noteRun()
-		b.finishConversationalRun(sendCtx, chatID, hasTG, spec, handle)
+		b.finishConversationalRun(sendCtx, chatID, hasTG, spec, handle, r)
 
 	case <-time.After(b.opts.SoftTimeout()):
 		// Over budget. Do NOT kill it: hand the live process to the task
@@ -661,7 +685,7 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 		if stopTyping != nil {
 			stopTyping()
 		}
-		b.promote(sendCtx, chatID, hasTG, spec, handle)
+		b.promote(sendCtx, chatID, hasTG, spec, handle, r)
 	}
 }
 
@@ -691,13 +715,20 @@ func todayKey() string {
 }
 
 // finishConversationalRun delivers a run that completed within the budget.
-func (b *Bot) finishConversationalRun(ctx context.Context, chatID int64, hasTG bool, spec RunSpec, handle *RunHandle) {
+func (b *Bot) finishConversationalRun(ctx context.Context, chatID int64, hasTG bool,
+	spec RunSpec, handle *RunHandle, r *chatRunner) {
 	res, err := handle.Result()
 
 	if err != nil {
 		if res != nil && res.Cancelled {
 			log.Printf("agent run cancelled after %s", res.Duration)
 			b.events.Broadcast(AppEvent{Type: "error", Error: "cancelled"})
+			// /cancel is something the operator just asked for and was already
+			// told about. A restart is not: without a word, his message simply
+			// vanished and he is left waiting for an answer that never comes.
+			if r != nil && !r.userCancelled() {
+				b.noticeInterrupted(chatID, hasTG)
+			}
 			return
 		}
 		if res != nil && res.RateLimited && b.tasks != nil {
@@ -727,14 +758,15 @@ func (b *Bot) finishConversationalRun(ctx context.Context, chatID int64, hasTG b
 }
 
 // promote moves an over-budget run to the background and says so.
-func (b *Bot) promote(ctx context.Context, chatID int64, hasTG bool, spec RunSpec, handle *RunHandle) {
+func (b *Bot) promote(ctx context.Context, chatID int64, hasTG bool,
+	spec RunSpec, handle *RunHandle, r *chatRunner) {
 	if b.tasks == nil {
 		// Without a task manager there is nowhere to hand it: keep waiting.
 		log.Printf("soft budget exceeded but the task manager is unavailable; waiting for the run")
 		<-handle.Done()
 		b.processedRuns.Add(1)
 		b.noteRun()
-		b.finishConversationalRun(ctx, chatID, hasTG, spec, handle)
+		b.finishConversationalRun(ctx, chatID, hasTG, spec, handle, r)
 		return
 	}
 
@@ -744,7 +776,7 @@ func (b *Bot) promote(ctx context.Context, chatID int64, hasTG bool, spec RunSpe
 		<-handle.Done()
 		b.processedRuns.Add(1)
 		b.noteRun()
-		b.finishConversationalRun(ctx, chatID, hasTG, spec, handle)
+		b.finishConversationalRun(ctx, chatID, hasTG, spec, handle, r)
 		return
 	}
 
@@ -762,6 +794,27 @@ func (b *Bot) promote(ctx context.Context, chatID int64, hasTG bool, spec RunSpe
 		"⏳ Esto está tardando; lo paso a background (tarea %s). Te aviso con el resultado — puedes seguir escribiéndome.",
 		task.ID)
 	b.deliverNotice(ctx, chatID, hasTG, notice)
+}
+
+// interruptedNotice is what the operator sees when a reply died with the
+// process rather than being cancelled on purpose.
+const interruptedNotice = "♻️ Me he reiniciado a mitad de respuesta; repíteme lo último."
+
+// noticeInterrupted tells the chat its answer was lost to a restart.
+//
+// The send runs on a detached context with a short deadline: by the time this
+// fires the run context is already cancelled, and during an actual shutdown the
+// process may exit first. Best-effort is the right bar — the alternative is
+// saying nothing at all.
+func (b *Bot) noticeInterrupted(chatID int64, hasTG bool) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(b.background()), 5*time.Second)
+	defer cancel()
+	if _, err := b.Emit(ctx, Outbound{
+		ChatID: chatID, Text: interruptedNotice, Source: SourceApp,
+		Event: EventError, SkipTelegram: !hasTG,
+	}); err != nil {
+		log.Printf("could not report the interrupted run: %v", err)
+	}
 }
 
 // deliverNotice sends an informational message on every active channel.
@@ -945,6 +998,11 @@ func (b *Bot) buildBatchPrompt(ctx context.Context, chatID int64, batch []*queue
 	return sb.String()
 }
 
+// isCommand reports whether a message is a slash command.
+func isCommand(msg *tg.Message) bool {
+	return strings.HasPrefix(strings.TrimSpace(msg.Text), "/")
+}
+
 // handleCommand implements the small set of Telegram slash commands and reports
 // whether the message was consumed.
 func (b *Bot) handleCommand(ctx context.Context, chatID int64, msg *tg.Message) bool {
@@ -974,7 +1032,7 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, msg *tg.Message) 
 		}
 		// Nothing inline: what he means is almost certainly the run that was
 		// just promoted to the background, so cancel that instead.
-		if task, ok := b.cancelLatestPromoted(); ok {
+		if task, ok := b.cancelLatestPromoted(chatID); ok {
 			b.say(ctx, chatID, fmt.Sprintf("🛑 He cancelado la tarea %s (%s).", task.ID, task.Title))
 			return true
 		}
@@ -982,10 +1040,16 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, msg *tg.Message) 
 		return true
 
 	case "/tasks":
-		b.say(ctx, chatID, b.tasksSummary())
+		b.say(ctx, chatID, b.tasksSummary(chatID))
 		return true
 
 	case "/usage":
+		// Consumption is account-wide and names what the operator has been
+		// working on, so it is only ever answered in his own chat.
+		if !b.isOwnerChat(chatID) {
+			b.say(ctx, chatID, "El consumo solo lo consulto en nuestro chat privado.")
+			return true
+		}
 		b.say(ctx, chatID, b.UsageSummary())
 		return true
 
@@ -1022,7 +1086,13 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, msg *tg.Message) 
 			lines = append(lines, "en ejecución: no")
 		}
 		if b.tasks != nil {
-			lines = append(lines, fmt.Sprintf("tareas en background: %d", countRunningTasks(b.tasks)))
+			running := 0
+			for _, t := range b.tasksFor(chatID) {
+				if t.Running() {
+					running++
+				}
+			}
+			lines = append(lines, fmt.Sprintf("tareas en background: %d", running))
 		}
 		b.say(ctx, chatID, strings.Join(lines, "\n"))
 		return true
@@ -1049,14 +1119,16 @@ func shortSession(id string) string {
 	return id
 }
 
-// cancelLatestPromoted kills the most recent still-running promoted task.
-func (b *Bot) cancelLatestPromoted() (Task, bool) {
+// cancelLatestPromoted kills the most recent still-running promoted task that
+// belongs to this chat. A /cancel in a group must not reach into the operator's
+// private conversation and stop work he started there.
+func (b *Bot) cancelLatestPromoted(chatID int64) (Task, bool) {
 	if b.tasks == nil {
 		return Task{}, false
 	}
 	// List is newest first, so the first running promoted task is the one the
 	// user just saw the promotion notice for.
-	for _, t := range b.tasks.List() {
+	for _, t := range b.tasksFor(chatID) {
 		if t.Running() && t.Promoted {
 			if killed, err := b.tasks.Kill(t.ID); err != nil || !killed {
 				log.Printf("could not kill promoted task %s: killed=%t err=%v", t.ID, killed, err)
@@ -1068,12 +1140,35 @@ func (b *Bot) cancelLatestPromoted() (Task, bool) {
 	return Task{}, false
 }
 
-// tasksSummary renders the background task list for /tasks.
-func (b *Bot) tasksSummary() string {
+// tasksFor returns the tasks belonging to one chat, newest first. A task with
+// no chat id was started from the operator's own conversation.
+//
+// Task titles and prompts are the operator's own words, so a group must only
+// ever see what was started in that group.
+func (b *Bot) tasksFor(chatID int64) []Task {
+	if b.tasks == nil {
+		return nil
+	}
+	var out []Task
+	for _, t := range b.tasks.List() {
+		owner := t.ChatID
+		if owner == 0 {
+			owner = b.ownerTelegram
+		}
+		if owner == chatID {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// tasksSummary renders the background task list for /tasks, scoped to the chat
+// that asked.
+func (b *Bot) tasksSummary(chatID int64) string {
 	if b.tasks == nil {
 		return "El subsistema de tareas no está disponible."
 	}
-	tasks := b.tasks.List()
+	tasks := b.tasksFor(chatID)
 	if len(tasks) == 0 {
 		return "No hay tareas en background."
 	}
