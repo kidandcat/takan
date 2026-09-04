@@ -38,6 +38,21 @@ AGENT_CMD=$(ssh "$HOST" "sqlite3 /opt/takan/data/default.db \"$AGENT_QUERY\" 2>/
 AGENT_CMD=${AGENT_CMD:-grok}
 echo "==> Agent command: $AGENT_CMD"
 
+# Likewise the hub's port: it is an env-file setting, not a constant (vps2 runs
+# on 8096), so a hardcoded health check fails a deploy that actually worked.
+# Read it from the target's env file with the same precedence as the binary —
+# ATLAS_LISTEN wins over the deprecated TAKAN_LISTEN.
+LISTEN_LINES=$(ssh "$HOST" "sudo grep -hE '^[[:space:]]*(ATLAS|TAKAN)_LISTEN=' /etc/takan/takan.env 2>/dev/null" || true)
+HUB_LISTEN=$(printf '%s\n' "$LISTEN_LINES" | grep -E '^[[:space:]]*ATLAS_LISTEN=' | tail -1 | cut -d= -f2- || true)
+if [ -z "$HUB_LISTEN" ]; then
+  HUB_LISTEN=$(printf '%s\n' "$LISTEN_LINES" | grep -E '^[[:space:]]*TAKAN_LISTEN=' | tail -1 | cut -d= -f2- || true)
+fi
+# Strip the host and any quoting; what is left must be a bare port number.
+HUB_PORT=${HUB_LISTEN##*:}
+HUB_PORT=${HUB_PORT//[^0-9]/}
+HUB_PORT=${HUB_PORT:-8090}
+echo "==> Hub port: $HUB_PORT"
+
 echo "==> Installing on $HOST"
 ssh "$HOST" AGENT_CMD="$AGENT_CMD" bash -s <<'EOF'
 set -euo pipefail
@@ -113,15 +128,16 @@ EOF
 
 echo "==> Waiting for the service to come up"
 sleep 4
-ssh "$HOST" bash -s <<'EOF'
+ssh "$HOST" HUB_PORT="$HUB_PORT" bash -s <<'EOF'
 set -euo pipefail
+HUB_PORT=${HUB_PORT:-8090}
 systemctl is-active takan.service
 echo "--- panel ---"
-curl -fsS localhost:8090/healthz
+curl -fsS "localhost:$HUB_PORT/healthz"
 echo "--- assistant (loopback) ---"
 curl -fsS localhost:8099/health && echo
 echo "--- app channel ---"
-curl -fsS localhost:8090/v1/health && echo
+curl -fsS "localhost:$HUB_PORT/v1/health" && echo
 echo "--- memory cap (must be >= 2G) ---"
 systemctl show -p MemoryMax --value takan.service
 EOF

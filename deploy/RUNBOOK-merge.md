@@ -28,13 +28,22 @@ Dry-run on a copy first and check the counts at the bottom of
 `deploy/migrate-prod.sql` — particularly `vault_items`, which proves the users
 collapse kept the right row.
 
+Copy `default.db*`, not `default.db`: in WAL mode the most recent commits live
+in `-wal` until a checkpoint, so a dry run on the bare file tests data that is
+already out of date.
+
 ```bash
 scp deploy/migrate-prod.sql vps2:/tmp/
-ssh vps2 'cp /opt/takan/data/default.db /tmp/dryrun.db && sqlite3 -bail /tmp/dryrun.db < /tmp/migrate-prod.sql'
-ssh vps2 'sqlite3 /tmp/dryrun.db "SELECT COUNT(*) FROM users; SELECT COUNT(*) FROM vault_items; PRAGMA foreign_key_check;"'
+ssh vps2 'sudo rm -rf /tmp/dryrun && sudo mkdir -p /tmp/dryrun && sudo cp -a /opt/takan/data/default.db* /tmp/dryrun/'
+ssh vps2 'sudo sqlite3 -bail /tmp/dryrun/default.db < /tmp/migrate-prod.sql'
+ssh vps2 'sudo sqlite3 /tmp/dryrun/default.db "SELECT COUNT(*) FROM users; SELECT COUNT(*) FROM vault_items; SELECT module_id, enabled FROM user_modules ORDER BY 1; PRAGMA foreign_key_check;"'
 # only when that looks right:
 ssh vps2 'sudo sqlite3 -bail /opt/takan/data/default.db < /tmp/migrate-prod.sql'
 ```
+
+The migration also flips `user_modules.assistant` to `enabled = 1`. Without that
+row the merged binary runs but the panel hides the Assistant page and `tools/list`
+omits its tools.
 
 ## 2. Merge the environment
 
@@ -46,11 +55,20 @@ TELEGRAM_BOT_TOKEN=…            # the one bot; sealed into the DB on first boo
 OWNER_TELEGRAM_ID=282611642     # was ALLOWED_CHAT_ID
 GROQ_API_KEY=…
 ATLAS_APP_TOKEN=…
-FIREBASE_SERVICE_ACCOUNT_JSON=…
+FIREBASE_SERVICE_ACCOUNT_JSON=…   # or FIREBASE_SERVICE_ACCOUNT_FILE=/path/to/sa.json
 ATLAS_LOCAL_ADDR=127.0.0.1:8099
 ATLAS_APP_URL=https://atlas.jairo.cloud
 ATLAS_LEGACY_DIR=/home/debian/atlas-data
 ```
+
+Push accepts either spelling: `FIREBASE_SERVICE_ACCOUNT_JSON` with the service
+account inline, or `FIREBASE_SERVICE_ACCOUNT_FILE` naming a file to read. The
+inline value wins when both are set; an unreadable path logs one line and leaves
+push off, so check the boot log rather than assuming push works.
+
+`ATLAS_LISTEN` is **not** rewritten by the merge — whatever port the hub already
+listens on stays (vps2: `127.0.0.1:8096`). Note it here, because Caddy in step 5
+and the health checks both need it.
 
 `ATLAS_SESSION_KEY` **does not change**. Everything sealed with it — the vault,
 the Mercadona and email credentials — becomes unreadable under a different key.
@@ -84,12 +102,19 @@ deploy/deploy.sh vps2
 
 The script removes the old `memory.conf` drop-in (512M would OOM-kill every
 agent run now that they share the hub's cgroup), waits for any in-flight
-conversation before restarting, and health-checks all three listeners.
+conversation before restarting, and health-checks all three listeners. It reads
+the hub's port out of `/etc/takan/takan.env` on the target, so a non-default
+`ATLAS_LISTEN` does not fail the health check.
 
 ## 5. Caddy
 
-Point the app host's `/v1/*` at the hub's port (`127.0.0.1:8090`) instead of the
-old daemon's `8099`; see `deploy/Caddyfile.snippet`. The panel host is unchanged.
+Point the app host's `/v1/*` at the hub's `TAKAN_LISTEN` port (8096 on vps2)
+instead of the old daemon's `8099`; see `deploy/Caddyfile.snippet`. The panel
+host is unchanged.
+
+The port comes from `/etc/takan/takan.env`, not from the snippet's default —
+`grep -E '^(ATLAS|TAKAN)_LISTEN=' /etc/takan/takan.env` before editing the
+Caddyfile.
 
 ```bash
 ssh vps2 'sudo systemctl reload caddy'
@@ -110,6 +135,7 @@ ssh vps2 'sudo systemctl reload caddy'
 Panel / auth
 
 - [ ] `curl -fsS https://<panel host>/healthz` → `ok`
+- [ ] `user_modules` has `assistant` enabled (panel Modules page) — otherwise nav and `tools/list` hide it
 - [ ] Sign in with an emailed code
 - [ ] Nav shows Assistant under Channels; no Bots, no Telegram, no SIP
 - [ ] `/dashboard/bots` and `/dashboard/sip` → 404; `/dashboard/telegram` → redirects to Assistant

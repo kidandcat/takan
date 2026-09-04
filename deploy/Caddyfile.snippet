@@ -7,8 +7,14 @@
 #
 # Replace the placeholders with your own hosts. Nothing in the binary knows a
 # domain; both come from ATLAS_PUBLIC_URL and ATLAS_APP_URL.
+#
+# Both upstreams below must be the hub's ATLAS_LISTEN / TAKAN_LISTEN port from
+# /etc/takan/takan.env — 8090 here is only this file's default, and vps2 runs on
+# 8096. Check the env file before pasting; a stale port here is a 502 on every
+# request while the service itself looks perfectly healthy.
 
 takan.example.com {
+	# The hub's TAKAN_LISTEN port (8096 on vps2).
 	reverse_proxy 127.0.0.1:8090
 }
 
@@ -17,6 +23,7 @@ app.example.com {
 		max_size 32MB
 	}
 	handle /v1/* {
+		# The hub's TAKAN_LISTEN port (8096 on vps2).
 		reverse_proxy 127.0.0.1:8090 {
 			# The app holds an SSE stream: no buffering, no read deadline.
 			flush_interval -1

@@ -52,8 +52,10 @@ type Config struct {
 	GroqAPIKey string
 	// AppToken is the phone app's bearer token for /v1/*. Optional.
 	AppToken string
-	// FirebaseServiceAccount is the FCM service account JSON. Empty leaves push
-	// off; the app still works over SSE in the foreground.
+	// FirebaseServiceAccount is the FCM service account JSON, from either
+	// FIREBASE_SERVICE_ACCOUNT_JSON or the file named by
+	// FIREBASE_SERVICE_ACCOUNT_FILE. Empty leaves push off; the app still works
+	// over SSE in the foreground.
 	FirebaseServiceAccount string
 	// AgentHome is where the CLI agent's home lives (~/.grok). Defaults to $HOME.
 	AgentHome string
@@ -89,7 +91,7 @@ func Load() Config {
 		OwnerTelegramID:        envInt64("OWNER_TELEGRAM_ID", 0),
 		GroqAPIKey:             strings.TrimSpace(os.Getenv("GROQ_API_KEY")),
 		AppToken:               strings.TrimSpace(env2("ATLAS_APP_TOKEN", "TAKAN_APP_TOKEN", "")),
-		FirebaseServiceAccount: strings.TrimSpace(os.Getenv("FIREBASE_SERVICE_ACCOUNT_JSON")),
+		FirebaseServiceAccount: firebaseServiceAccount(),
 		AgentHome:              strings.TrimSpace(env2("ATLAS_AGENT_HOME", "TAKAN_AGENT_HOME", os.Getenv("HOME"))),
 		LegacyDir:              strings.TrimSpace(env2("ATLAS_LEGACY_DIR", "TAKAN_LEGACY_DIR", "")),
 		BackupEndpoint:         env2("ATLAS_BACKUP_ENDPOINT", "TAKAN_BACKUP_ENDPOINT", ""),
@@ -142,6 +144,31 @@ func (c Config) CheckLocalAddr() error {
 			"it serves an unauthenticated control API and would be reachable off this host", host)
 	}
 	return nil
+}
+
+// firebaseServiceAccount returns the FCM service account JSON.
+//
+// Two spellings are accepted because prod predates this binary: the inline
+// FIREBASE_SERVICE_ACCOUNT_JSON, and FIREBASE_SERVICE_ACCOUNT_FILE naming a
+// file to read. The inline value wins; the path is read only when it is empty.
+//
+// An unreadable path is logged and leaves push off rather than taking the
+// process down: push is optional, and the app still works over SSE in the
+// foreground. The log line is what tells the operator the path is wrong.
+func firebaseServiceAccount() string {
+	if v := strings.TrimSpace(os.Getenv("FIREBASE_SERVICE_ACCOUNT_JSON")); v != "" {
+		return v
+	}
+	path := strings.TrimSpace(os.Getenv("FIREBASE_SERVICE_ACCOUNT_FILE"))
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("config: FIREBASE_SERVICE_ACCOUNT_FILE %q is unreadable (%v); push is disabled", path, err)
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // deprecatedOnce keeps the TAKAN_* fallback warning to one line per variable,

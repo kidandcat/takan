@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -43,6 +45,37 @@ func TestOwnerTelegramIDParsing(t *testing.T) {
 	t.Setenv("OWNER_TELEGRAM_ID", "not-a-number")
 	if got := Load().OwnerTelegramID; got != 0 {
 		t.Fatalf("expected 0 for a malformed id, got %d", got)
+	}
+}
+
+// TestFirebaseServiceAccountFromFile covers the shape prod was already using:
+// a path rather than the inline JSON. Push silently staying off because the
+// binary only read one of the two names is the bug this guards.
+func TestFirebaseServiceAccountFromFile(t *testing.T) {
+	const account = `{"project_id":"demo","type":"service_account"}`
+	path := filepath.Join(t.TempDir(), "sa.json")
+	if err := os.WriteFile(path, []byte(account+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+	t.Setenv("FIREBASE_SERVICE_ACCOUNT_FILE", path)
+	if got := Load().FirebaseServiceAccount; got != account {
+		t.Fatalf("file contents should be loaded, got %q", got)
+	}
+
+	// The inline value wins, so an env that carries both does not depend on a
+	// file that may not exist on this host.
+	t.Setenv("FIREBASE_SERVICE_ACCOUNT_JSON", `{"project_id":"inline"}`)
+	if got := Load().FirebaseServiceAccount; got != `{"project_id":"inline"}` {
+		t.Fatalf("inline JSON must win, got %q", got)
+	}
+
+	// A bad path leaves push off instead of killing the process.
+	t.Setenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+	t.Setenv("FIREBASE_SERVICE_ACCOUNT_FILE", filepath.Join(t.TempDir(), "missing.json"))
+	if got := Load().FirebaseServiceAccount; got != "" {
+		t.Fatalf("an unreadable path must yield an empty account, got %q", got)
 	}
 }
 

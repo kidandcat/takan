@@ -5,9 +5,10 @@
 --   sudo systemctl stop takan atlas
 --   sudo cp -a /opt/takan/data /opt/takan/data.bak.$(date +%s)
 --   # Copy the WAL and shared-memory files too: default.db alone can be missing
---   # the most recent commits, so a dry run on it tests the wrong data.
---   cp /opt/takan/data/default.db* /tmp/ && mv /tmp/default.db /tmp/dryrun.db
---   sqlite3 -bail /tmp/dryrun.db < deploy/migrate-prod.sql   # dry run, check counts
+--   # the most recent commits, so a dry run on it tests the wrong data. Copy
+--   # into a directory rather than renaming — a -wal is bound to its db's name.
+--   rm -rf /tmp/dryrun && mkdir /tmp/dryrun && cp -a /opt/takan/data/default.db* /tmp/dryrun/
+--   sqlite3 -bail /tmp/dryrun/default.db < deploy/migrate-prod.sql   # dry run, check counts
 --   sqlite3 -bail /opt/takan/data/default.db < deploy/migrate-prod.sql
 --
 -- Order matters: this must run BEFORE the new binary starts. The new migrate()
@@ -84,6 +85,18 @@ DROP TABLE IF EXISTS sip_settings;
 -- 3. Retire the module ids that no longer exist.
 DELETE FROM user_modules WHERE module_id IN ('bots','telegram','sip');
 
+-- 4. Turn the assistant module on for the owner: the panel nav entry and the
+-- assistant's MCP tools in tools/list are both gated on this row, so with
+-- enabled = 0 the merged binary runs but the surface is invisible.
+--
+-- Written as an upsert rather than a bare UPDATE because the row does not exist
+-- yet on a pre-merge database — the binary seeds user_modules (with enabled = 0)
+-- only on its first boot, which is after this file runs. The SELECT repeats the
+-- owner guard, so on the wrong database it inserts nothing.
+INSERT INTO user_modules (user_id, module_id, enabled)
+  SELECT id, 'assistant', 1 FROM users WHERE id = 'e824c2c7-27de-4ed0-875e-0bff55a093bf'
+  ON CONFLICT(user_id, module_id) DO UPDATE SET enabled = 1;
+
 DROP TABLE owner_guard;
 
 COMMIT;
@@ -97,7 +110,7 @@ VACUUM;
 --   SELECT COUNT(*) FROM vault_items;                        -- 452
 --   SELECT COUNT(*) FROM people;                             -- 44
 --   SELECT client_id, COUNT(*) FROM oauth_tokens GROUP BY 1; -- takan 3, claude-code 1
---   SELECT module_id, enabled FROM user_modules ORDER BY 1;
+--   SELECT module_id, enabled FROM user_modules ORDER BY 1; -- assistant must be 1
 --   PRAGMA foreign_key_check;                                -- no rows
 --
 -- The vault count is the one that matters most: it proves the collapse kept the
