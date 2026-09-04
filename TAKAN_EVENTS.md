@@ -1,10 +1,23 @@
 # Takan MCP events vs Grok Bot wakeup
 
-> **Status update (2026-09):** the wakeup gap analysed below is now covered by the **Bots** module.
-> Machine AI job results are queued in a hub → bot outbox that a bot daemon pulls and acks
-> (`GET /api/bots/deliveries`), and the daemon delivers them on Telegram. See
-> [TAKAN_BOTS.md](TAKAN_BOTS.md). The short-lived outbound `TAKAN_GROK_BOT_WEBHOOK_URL` experiment
-> was removed in favour of that pull lane. The analysis below is kept as the original study.
+> **Status update (2026-09):** the wakeup gap analysed below is closed, and the mechanism that
+> closed it has since been simplified twice.
+>
+> The first fix was a **Bots** module: a hub → bot outbox that a separate daemon pulled and acked
+> over `GET /api/bots/deliveries`. That daemon is now *inside* the hub, so there is no API between
+> them and no outbox to drain. A finished `machine_ai_run` writes one `job_chats` row naming the
+> chat that asked, and the in-process assistant delivers the result to Telegram and to the phone
+> app. Undelivered rows are retried every 60s for an hour; `delivered_at` is both the retry queue
+> and the dedupe guard against a duplicate `ai_done`.
+>
+> The MCP notification below is unchanged and still serves its original purpose: waking *other*
+> agents connected over MCP. What changed is that Jairo no longer depends on it — the assistant
+> tells him directly.
+>
+> Also gone: the short-lived outbound `TAKAN_GROK_BOT_WEBHOOK_URL` experiment, the bot registry,
+> the chat approval whitelist, and the Telegram channel layer.
+>
+> The analysis below is kept as the original study; read it as history, not as current API.
 
 Follow-up to [TAKAN_OSS_SELFHOST.md](TAKAN_OSS_SELFHOST.md). Question: does Takan push events to an MCP client (Grok Bot), and can that client receive them and **start a new model turn** (so Minerva notices a finished `grok` job without Hairok asking “how is it going”)?
 
@@ -27,8 +40,8 @@ Push path is always `SessionHub.Notify` → SSE `data:` frames on **GET `/mcp`**
 | **Method** | `notifications/takan/machine_ai_job` |
 | **When** | Agent WebSocket message `ai_done` (job reached **terminal** status: `done` / `failed` / `cancelled`). Wired in `cmd/takan/main.go` via `hub.OnJobEvent`. |
 | **Who emits** | `takan-agent` `jobManager.emit` → WS `{type:"ai_done", ...}` → hub `HandleWS` case `"ai_done"` → `OnJobEvent`. |
-| **Params** | `machine`, `job_id`, `status`, `exit_code`, `runner`, `parent_job_id`, `finished_at`, `owner`. **No log tail, no prompt.** |
-| **Not fired** | Job *start*; mid-run progress; `machine_ai_status` polls; email/telegram/mercadona/display/sip/vault. |
+| **Params** | `machine`, `job_id`, `status`, `exit_code`, `runner`, `parent_job_id`, `finished_at`, `owner`. **No log tail, no prompt.** (`owner` is now always empty: it named a bot instance, and that registry is gone.) |
+| **Not fired** | Job *start*; mid-run progress; `machine_ai_status` polls; email/mercadona/display/vault. |
 | **Lossy** | Best-effort. Missed if the agent is disconnected when the process exits (`JobEventHandler` comment). No queue, no replay. Slow SSE consumers are dropped (`broadcast` default branch). Hub log `mcp: notify user=… method=… streams=N` only when **N > 0**. |
 
 Tests: `internal/mcp/session_test.go`, `internal/agenthub/hub_test.go` (`expected OnJobEvent from ai_done`).
@@ -64,10 +77,10 @@ Live `takan.es` (this VPS, 14 days of journal, user `kidandcat@gmail.com` / `e82
 |---------|------------------------|--------------|
 | **AI job still running / after a missed `ai_done`** | `machine_ai_status` (snapshot + tail), `machine_ai_log` (full transcript), `machine_ai_watch` (block ≤300s). | Watch is **hub-side**: waiter on `ai_done` **plus** status poll every 1.5s. That unblocks the **in-flight `tools/call`**, not a new Grok turn. |
 | **Email inbound** | `email_list` / `email_get` against Resend. No Resend webhook into the hub. | No |
-| **Telegram inbound** | `getUpdates` is panel chat discovery (`DiscoverChats`), not a bot webhook and not MCP. Tools are `telegram_chats` / `telegram_send` (outbound). | No |
+| **Telegram inbound** | *(2026-09)* `getUpdates` is now a real long-poll loop inside the hub, feeding the assistant. It is still not MCP: an inbound Telegram message wakes the assistant's own agent, not a connected MCP client. The only outbound tool is `telegram_send`. | No |
 | **Mercadona** | Request/response tools. | No |
 | **Display** | Hub → agent WS `display` (kiosk HTML). Agent kiosk page has `EventSource('/events')` **on the machine**, not on MCP. | No |
-| **SIP / Grok Voice** | `OnEvent` only `log.Printf` (`session.created`, `response.done`, …). | No |
+| **SIP / Grok Voice** | *(2026-09)* removed — wired but never enabled in production. | n/a |
 | **Vault grants** | `secrets_request` then poll `secrets_status`. | No (`list_changed` may fire if vault settings change). |
 | **People / health** | CRUD tools. | No |
 
@@ -123,14 +136,14 @@ Desired loop: Minerva calls `machine_ai_run` → turn ends → minutes later the
 | **No durable inbox** | SSE is fire-and-forget. 15 min cap, reconnect races, agent offline → event vanished. Need a per-user event table + `events_list` / MCP resource. |
 | **No client mapping to a new turn** | Even a delivered `machine_ai_job` is ignored by Grok Build / Bot. Fix is on the **client** (treat as `session/prompt`) or an **out-of-band** trigger Grok already honors. |
 | **No Takan → Grok Automations webhook** | Documented Grok wake API. `OnJobEvent` could POST Standard Webhooks to a saved Minerva automation. Config + secret in the panel; do not hardcode grok.com. |
-| **No Takan → grokbot / Telegram nudge** | Household alternative: `telegram_send` or grokbot HTTP when `ai_done`. Still product work. |
-| **No events for mail / Mercadona / Telegram inbound** | Those modules are pull tools. Inbound mail will not poke Minerva either. |
+| ~~**No Takan → grokbot / Telegram nudge**~~ | *(2026-09, closed)* `ai_done` now reaches Jairo directly: the in-process assistant delivers the result to the requesting chat and to the phone app. |
+| **No events for mail / Mercadona** | Those capabilities are pull tools. Inbound mail will not poke Minerva either. |
 | **Watch timeout vs long groks** | 300s max per call. A long job needs chained watches **in the same turn**, or the webhook path. |
 
 Recommended order if we implement later (do **not** ship to `/opt/takan` without an explicit deploy):
 
 1. **P0 product:** document for Minerva “always `machine_ai_watch` until terminal” (already in tool descriptions; the model still drops it).
-2. **P0 wakeup:** `OnJobEvent` → optional Grok Automations webhook (BYO URL + `whsec_`) and/or Telegram. This is the only path that wakes hosted Grok Bot without xAI changing MCP.
+2. ~~**P0 wakeup:** `OnJobEvent` → optional Grok Automations webhook (BYO URL + `whsec_`) and/or Telegram.~~ *(2026-09, done via the assistant rather than a webhook: `OnJobEvent` → `job_chats` → Telegram + the phone app. A Grok Automations webhook is still the only path that would wake hosted Grok Bot itself, and remains unbuilt.)*
 3. **P1:** persist last N job events per user; add `machine_ai_events` or a resource so a heartbeat/cron can catch missed SSE.
 4. **P2:** do **not** expect `notifications/takan/*` to wake Grok until Grok documents it. Optional: also emit `notifications/tools/list_changed` on job end — Grok would refresh tools, **still** not start a turn.
 

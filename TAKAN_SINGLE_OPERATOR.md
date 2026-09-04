@@ -7,9 +7,23 @@
 > remains in the schema but is never read. Everything below that describes password unlock is the
 > pre-change design.
 
+> **Schema update (2026-09):** the collapse specified at the bottom of this document is no longer
+> hypothetical. The assistant merge executes it, in a narrowed form: rather than re-pointing every
+> extra user's rows at the owner, the three extra rows are simply deleted, because a survey of
+> production found they owned nothing but two `user_modules` rows each and some bot placeholders.
+> The SQL, the dry-run procedure and the row counts to verify are in
+> [`deploy/migrate-prod.sql`](deploy/migrate-prod.sql) and
+> [`deploy/RUNBOOK-merge.md`](deploy/RUNBOOK-merge.md).
+>
+> That merge also retired several tables listed below: `invites`, `mcp_tokens`,
+> `telegram_settings`, `sip_settings`, `sip_devices` and the whole bot registry. The invite helpers
+> are gone from the code; only the `users.invite_quota` / `invite_unlimited` / `is_admin` **columns**
+> remain, because dropping a column in SQLite rebuilds a table that twelve foreign keys cascade
+> from.
+
 Decision (Hairok / kidandcat, 2026-08-21): **takan.es is a personal self-host**, same as any other. It stays behind a strong instance secret. There are no accounts, invites, or viral signup.
 
-This document is the design. The code in this branch implements the **safe application-layer cut**. Schema collapse is specified here and **must not be executed on production SQLite** (`/opt/takan/data`).
+This document is the design. Read the collapse section as the plan that was eventually executed, not as pending work.
 
 ## Model
 
@@ -20,7 +34,8 @@ This document is the design. The code in this branch implements the **safe appli
 | Instance password | bcrypt hash on the **owner** row (`users.password_hash`) |
 | Panel unlock | `POST /login` with that password → `web_sessions` cookie (`takan_session`, httpOnly, SameSite=Lax, Secure on https) |
 | MCP / Grok | OAuth 2.1 + PKCE (`/oauth/authorize`, `/oauth/token`, DCR `POST /oauth/register`). Tokens keep a `user_id` column internally; that is not a product “account” |
-| Agents | `machines.agent_token_hash` / SIP device tokens — unchanged |
+| Agents | `machines.agent_token_hash` — unchanged |
+| Assistant | One Telegram bot, gated on `OWNER_TELEGRAM_ID` (the operator's Telegram *user* id). Not an account either: it is the same owner row reached over a different channel |
 
 There is **no** register, invite code, invite quota, admin-vs-user role, or `TAKAN_ALLOW_REGISTER` product switch. Env vars for those are ignored if still present.
 
@@ -41,7 +56,7 @@ Removed from the product surface (404):
 
 `TAKAN_ALLOW_REGISTER` and `TAKAN_DEFAULT_INVITE_QUOTA` are **not read**. Setting them true/5 does nothing.
 
-Store helpers in `internal/store/invites.go` and columns `users.invite_quota` / `invite_unlimited` / `is_admin` remain **in SQLite** so this binary can boot an existing database without `ALTER`/`DROP`. HTTP no longer calls them.
+*(2026-09)* `internal/store/invites.go` is deleted and the `invites` table is dropped. The columns `users.invite_quota` / `invite_unlimited` / `is_admin` remain in SQLite: dropping a column rebuilds the table, and twelve foreign keys cascade from `users`. `DefaultInviteQuota` survives as a constant purely to satisfy the historical column default.
 
 ## What stays
 
@@ -49,7 +64,8 @@ Store helpers in `internal/store/invites.go` and columns `users.invite_quota` / 
 - **Web session** — `web_sessions.token` → owner `user_id` only. A leftover session for a non-owner row is treated as logged out.
 - **MCP OAuth + DCR** — `oauth_codes`, `oauth_tokens`, `oauth_refresh`; public client id `takan`; PKCE S256; any parseable `redirect_uri` (see `internal/oauth/redirect.go`).
 - **Mobile API login** — `POST /api/v1/auth/login` with `{password}` (email field ignored if sent). Issues the same OAuth access/refresh rows (`client=takan-app`).
-- **Agent / SIP tokens** — hashed in `machines` / `sip_devices`.
+- **Agent tokens** — hashed in `machines`.
+- **Telegram bot token** — sealed with the session key in `assistant_meta`, never rendered.
 - **Module rows keyed by `user_id`** — still the isolation column in SQLite. The operator’s data is the **owner** id. Extra historical rows (if any) stay put until a future collapse.
 
 `mcp_tokens` is already unused (created in `migrate()` never written). Leave it.
@@ -104,7 +120,7 @@ From `internal/store` on master:
 | Table | Column | On delete | Collapse hazard |
 |-------|--------|-----------|-----------------|
 | `web_sessions` | `user_id` | CASCADE | Re-point or delete extras |
-| `mcp_tokens` | `user_id` | CASCADE | Unused; delete extras |
+| ~~`mcp_tokens`~~ | `user_id` | CASCADE | *(2026-09)* dropped — created and never written |
 | `user_modules` | `user_id` | CASCADE | PK `(user_id, module_id)` — `INSERT OR IGNORE` owner row, then delete extras |
 | `machines` | `user_id` | CASCADE | `UNIQUE(user_id, name)` — rename extras (`name || '-' || substr(old_id,1,8)`) before re-point |
 | `mercadona_creds` | `user_id` PK | CASCADE | Keep owner row; drop extras (or refuse if extra has data operator wants) |
@@ -112,9 +128,9 @@ From `internal/store` on master:
 | `oauth_tokens` | `user_id` | CASCADE | **Re-point to owner** — this is Grok/Claude/Cursor |
 | `oauth_refresh` | `user_id` | CASCADE | **Re-point to owner** |
 | `email_settings` | `user_id` PK | CASCADE | Keep owner |
-| `telegram_settings` | `user_id` PK | CASCADE | Keep owner |
+| ~~`telegram_settings`~~ | `user_id` PK | CASCADE | *(2026-09)* dropped — replaced by the single sealed credential in `assistant_meta` |
 | `people` | `user_id` | CASCADE | Re-point |
-| `invites` | `created_by`, `used_by` | CASCADE / SET NULL | Drop table |
+| ~~`invites`~~ | `created_by`, `used_by` | CASCADE / SET NULL | *(2026-09)* dropped |
 | `health_profile` | `user_id` PK | CASCADE | Keep owner |
 | `health_log` | `user_id` | CASCADE | `UNIQUE(user_id, day)` — merge or skip duplicate days |
 | `health_issues` | `user_id` | CASCADE | Re-point |
@@ -122,11 +138,11 @@ From `internal/store` on master:
 | `vault_grants` | `user_id` | CASCADE | Re-point |
 | `vault_devices` | `user_id` | CASCADE | `UNIQUE(user_id, name)` — rename |
 | `vault_audit` | `user_id` | CASCADE | Re-point |
-| `sip_settings` | `user_id` PK | CASCADE | Keep owner |
-| `sip_devices` | `user_id` | CASCADE | `UNIQUE(user_id, name)` — rename |
+| ~~`sip_settings`~~, ~~`sip_devices`~~ | `user_id` | CASCADE | *(2026-09)* dropped — SIP was wired but never enabled in production |
 | `displays` | `user_id` | CASCADE | `UNIQUE(user_id, name)` — rename |
 | `accounts` (Mercadona) | `id` **is** user id, **no FK** | n/a | `UPDATE accounts SET id = owner WHERE id = extra` will collide if both exist — keep owner, drop extra only after review |
 | `grocery_*` | `account_id` | n/a | Follow accounts |
+| `assistant_meta`, `assistant_chats`, `assistant_messages`, `assistant_jobs`, `assistant_tasks`, `push_devices`, `job_chats` | `user_id` | CASCADE | *(2026-09)* new; owner-only by construction |
 
 ### Procedure (manual, off-prod copy first)
 
@@ -141,7 +157,9 @@ From `internal/store` on master:
 9. Confirm `SELECT user_id, client_id, COUNT(*) FROM oauth_tokens GROUP BY 1,2` still has Grok’s client rows on `owner_id`.
 10. Restart hub, `curl /healthz`, Grok connector still lists tools.
 
-Until that happens, **this binary is correct on the live DB**: one unlock password (owner hash), extra rows inert for panel, tokens still valid.
+*(2026-09)* Steps 2, 6 and 7 are what [`deploy/migrate-prod.sql`](deploy/migrate-prod.sql) runs. Steps 4 and 5 turned out to be unnecessary: the extra rows owned no machines, displays, vault items or OAuth tokens, so there was nothing to rename or re-point. Step 8 stays deliberately undone — see the note above about rebuilding a table twelve FKs cascade from.
+
+The check in step 9 is the one that matters, and it is in the runbook: if the Grok/Claude connector still lists tools without re-authenticating, the collapse kept the right row.
 
 ## Tests (this branch)
 

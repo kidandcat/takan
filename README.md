@@ -4,6 +4,8 @@
 
 Connect Grok, Claude, or Cursor once to Takan. From the web panel, enable modules (Machine, Mercadona, Email, …) — tools appear and disappear without reconfiguring the AI client.
 
+It also runs your **assistant**: one Telegram bot and a phone app, answering only you, driven by a CLI coding agent. Same process, same database, same credentials.
+
 - **Stack:** Go · [Colmena](https://github.com/mentasystems/colmena) (SQLite + continuous backup) · HTMX  
 - **Self-host:** this repo — one process, your machine. See [Docker Compose](#self-hosting) below.  
 - **Hosted example:** [takan.es](https://takan.es) (Hairok’s personal instance — same model as any self-host)  
@@ -16,21 +18,21 @@ Integrations live under `modules/` as subpackages:
 | Module | Path | Tools | Setup |
 |--------|------|--------|--------|
 | **Machine** | `modules/machine` | `machine_list`, `machine_bash` (optional), `machine_ai_runners`, `machine_ai_run`, `machine_ai_status`, `machine_ai_watch`, `machine_ai_log`, `machine_ai_cancel`, `machine_ai_reply` | Install `takan-agent`; toggle bash / AI runners in panel |
+| **Assistant** | `modules/assistant` | `telegram_send` | Your personal assistant: one Telegram bot, the phone app channel, background tasks and scheduled routines. `TELEGRAM_BOT_TOKEN` + `OWNER_TELEGRAM_ID` in the env; the runner is configured in the panel |
 | **Display** | `modules/display` | `display_list`, `display_show` | Name a kiosk screen on a machine; agent serves HTML at `127.0.0.1:8787` |
-| **Bots** | `modules/bots` | `bots_list`, `bots_chats`, `bots_approve`, `bots_deny` | Telegram assistant bot daemons on your machines: fleet registry, chat whitelist with approvals, and a hub → bot outbox for AI job results. Contract: [TAKAN_BOTS.md](TAKAN_BOTS.md) |
 | **TV** | `modules/tv` | `tv_status`, `tv_app`, `tv_key`, `tv_text`, `tv_volume`, `tv_mute`, `tv_power`, `tv_now` | Samsung Tizen on the LAN; hub relays short curl / UPnP / samsungtvws / WOL commands to a takan-agent (panel: machine, host, token path, wifi MAC, app aliases) |
 | **Mercadona** | `modules/mercadona` | `mercadona_search`, `mercadona_add`, `mercadona_cart` | Credentials in panel |
 | **Email** | `modules/email` | `email_available_domains`, `email_send`, `email_list`, `email_get` | Resend API key; enable domains |
 | **People** | `modules/people` | `people_list` / `get` / `add` / `update` / `delete` | Personal CRM in panel |
 | **Health** | `modules/health` | `health_status`, `health_log`, `health_issue` | Profile + daily diary + injuries |
-| **Telegram** | `modules/telegram` | `telegram_chats`, `telegram_send` | Bot token + allowed chats in panel |
-| **SIP** | `modules/sip` | `sip_status`, `sip_devices`, `sip_calls`, `sip_hangup` | xAI key + Android gateways in panel; phones → `wss://…/sip/ws` |
 | **Vault** | `modules/vault` | `secrets_search`, `secrets_request`, `secrets_status`, `secrets_store`, `secrets_generate`, `secrets_delete` | Password manager; agent reads require panel approve by default (per-user toggle can auto-approve) |
 | **meta** | `modules` | `takan_status` | Always on — all modules + readiness |
 
 When the tool set changes, Takan pushes `notifications/tools/list_changed` on open SSE streams (best-effort). Clients that ignore it keep the old tool list until reconnect; calls to disabled tools simply fail.
 
-`machine_ai_run` requires `owner` (a bot instance from `bots_list`) and returns immediately with a `job_id`; optional `chat_id` records the Telegram chat that asked. Follow the job with `machine_ai_watch` (blocks until done/failed/cancelled or timeout), `machine_ai_status` (tail), `machine_ai_log` (full transcript), `machine_ai_cancel`, or `machine_ai_reply` (new job with parent context — inherits `owner` if omitted; runners are one-shot and cannot be interrupted in-process). Open SSE streams may also get `notifications/takan/machine_ai_job` when a job ends (includes `owner`). When the owner is a bot instance, the finished result is also queued in that bot's outbox and its daemon delivers it to Telegram — see [TAKAN_BOTS.md](TAKAN_BOTS.md). (This replaced the old `TAKAN_GROK_BOT_WEBHOOK_URL` outbound webhook, which is gone.)
+`machine_ai_run` returns immediately with a `job_id`; optional `chat_id` names the Telegram chat that gets the result (default: your own). Follow the job with `machine_ai_watch` (blocks until done/failed/cancelled or timeout), `machine_ai_status` (tail), `machine_ai_log` (full transcript), `machine_ai_cancel`, or `machine_ai_reply` (a new job with parent context — runners are one-shot and cannot be interrupted in-process). Open SSE streams may also get `notifications/takan/machine_ai_job` when a job ends.
+
+When a job finishes, the assistant delivers the result to that chat and to your phone app. Routing lives in one `job_chats` row per job; an undelivered result is retried every 60s for an hour. There is no bot registry and no outbox — `machine_ai_run` no longer takes an `owner`, and an `owner` sent by an older client is ignored.
 
 ## MCP
 
@@ -62,6 +64,36 @@ JSON REST for the Flutter app (`takan-app`). Bearer access tokens (same store as
 | GET | `/api/v1/health` | snapshot |
 
 Credential reads for agents still use vault grants (`secrets_request` → approve in app or panel, unless the operator turns off “Require approval” in Vault settings).
+
+## Assistant
+
+One bot, one operator, one conversation — reachable from Telegram and from the phone app, which share the same history and the same agent session.
+
+**Authorization is identity, not chat.** `OWNER_TELEGRAM_ID` is your Telegram *user* id. The assistant answers that id and nothing else: a stranger who DMs the bot gets silence, not a refusal, and in a group only your own messages are read — everyone else's are dropped before they can reach the prompt. Adding the bot to a group therefore needs no approval step. (Known limitation: a message posted *anonymously* as a group admin arrives from Telegram's `GroupAnonymousBot`, so it is ignored.)
+
+**Replies come from a CLI coding agent**, `grok` by default, configured in the panel. A reply still running after ~60s is not killed: it is promoted to a background task, the chat is freed, and the result arrives when it is ready. The agent inherits an environment *allowlist*, never the hub's own — it cannot see the session key, the mail key or the backup credentials.
+
+Telegram commands: `/new`, `/cancel`, `/tasks`, `/usage`, `/status`, `/help`.
+
+Three helper binaries (symlinks to the same binary, dispatching on `argv[0]`) let the agent reach you and own the clock:
+
+```bash
+atlas-send "the backup finished"
+atlas-send --file chart.png "monthly numbers"
+atlas-task run "build the release and report" --title "release build"
+atlas-sched add --type message --at "+90m" --text "take the bread out"
+atlas-sched add --type agent --cron "30 7 * * *" --name morning --text "check disk usage"
+```
+
+They talk to the loopback API (`ATLAS_LOCAL_ADDR`), so they carry no credentials of their own.
+
+Every message the assistant sends you goes through one exit point, so the phone app's conversation and Telegram never disagree — reminders, routine output, command answers and job results all land in both.
+
+## Future: browser capability
+
+The assistant can drive a browser, but through the agent rather than through Takan: [`mcp-chrome`](https://github.com/hangwin/mcp-chrome) is a Chrome extension plus an MCP server that exposes the *running* browser — your real profile, already logged in — to the agent. Add it to the agent's own MCP config (`~/.grok/config.toml`), not here.
+
+That is deliberately the whole design. Takan stores no browser cookies and owns no profile: the sessions stay in Chrome where they already are, so there is nothing extra to encrypt, expire, or leak. Nothing in this repo needs to change to enable it.
 
 ## Single operator
 
@@ -146,9 +178,12 @@ MCP URL for Grok / Claude / Cursor: `http://localhost:8090/mcp`.
    - `TAKAN_SESSION_KEY=` long random (`openssl rand -hex 32`) — **never** the dev default
    - `TAKAN_DATA_DIR=` writable path for Colmena/SQLite
    - `TAKAN_LISTEN=127.0.0.1:8090` (prefer reverse-proxy TLS)
+   - `TELEGRAM_BOT_TOKEN` + `OWNER_TELEGRAM_ID` to enable the assistant
    - Optional: rate limits, S3-compatible backup keys (`TAKAN_ALLOW_REGISTER` is ignored)
 
-3. **systemd** — [`deploy/takan.service`](deploy/takan.service) (dedicated `takan` user, `EnvironmentFile=…`).
+   Every `TAKAN_*` name is also accepted as `ATLAS_*`, which is the preferred spelling; the old name still works and logs a deprecation line once.
+
+3. **systemd** — [`deploy/takan.service`](deploy/takan.service). It runs as an ordinary login user with a real `HOME`: the CLI agent the assistant spawns needs its own credentials (`~/.grok/auth.json`), and running as that user is what makes them readable without copying anything. `MemoryMax=2G` covers the agent subprocesses, which share the cgroup.
 
 4. **TLS** — Caddy/nginx; snippet: [`deploy/Caddyfile.snippet`](deploy/Caddyfile.snippet).
 
