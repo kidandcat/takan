@@ -1,0 +1,26 @@
+[
+  {
+    "id": "51be991d",
+    "title": "PLACEHOLDER title",
+    "prompt": "PLACEHOLDER prompt body",
+    "state": "running",
+    "pid": 2147483000,
+    "dir": "/home/debian/atlas-data/workspace/tasks/51be991d",
+    "output_path": "/home/debian/atlas-data/workspace/tasks/51be991d/output.txt",
+    "started_at": "2026-09-04T16:00:00.000000000Z",
+    "session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "promoted": true,
+    "chat_id": 282611642
+  },
+  {
+    "id": "7c8d9e0f",
+    "title": "PLACEHOLDER finished",
+    "prompt": "PLACEHOLDER prompt body",
+    "state": "done",
+    "dir": "/home/debian/atlas-data/workspace/tasks/7c8d9e0f",
+    "output_path": "/home/debian/atlas-data/workspace/tasks/7c8d9e0f/output.txt",
+    "started_at": "2026-09-04T10:00:00.000000000Z",
+    "finished_at": "2026-09-04T10:04:00.000000000Z",
+    "session_id": "ffffffff-1111-4222-8333-444444444444"
+  }
+]

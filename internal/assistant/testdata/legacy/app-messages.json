@@ -1,0 +1,24 @@
+[
+  {
+    "id": "26c5ebb91d1cc73c",
+    "role": "user",
+    "text": "PLACEHOLDER user message",
+    "source": "app",
+    "created_at": "2026-09-04T09:43:24.892751756Z"
+  },
+  {
+    "id": "245b2f0aa2670c52",
+    "role": "assistant",
+    "text": "PLACEHOLDER assistant reply",
+    "source": "app",
+    "created_at": "2026-09-04T09:48:24.926786198Z"
+  },
+  {
+    "id": "f899ea3ff980e5f6",
+    "role": "assistant",
+    "text": "PLACEHOLDER reply with an attachment",
+    "files": [{"name": "chart.png", "kind": "image"}],
+    "source": "send",
+    "created_at": "2026-09-04T09:57:40.588600618Z"
+  }
+]

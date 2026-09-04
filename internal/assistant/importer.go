@@ -76,14 +76,19 @@ type legacyTask struct {
 	ChatID     int64     `json:"chat_id"`
 }
 
-// processAlive is a seam over kill(pid, 0), so the importer can be tested
-// without spawning processes.
-var processAlive = func(pid int) bool {
+// defaultProcessAlive reports whether a pid exists, via kill(pid, 0). EPERM
+// means the process is there but owned by someone else, which still counts.
+func defaultProcessAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	return syscall.Kill(pid, 0) == nil || errors.Is(syscall.Kill(pid, 0), syscall.EPERM)
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
+
+// processAlive is a seam over defaultProcessAlive so the importer can be tested
+// without spawning processes.
+var processAlive = defaultProcessAlive
 
 // ImportLegacyJSON moves the standalone daemon's JSON state into SQLite.
 //
