@@ -623,6 +623,11 @@ func (s *Store) CountBotChatsPending(ctx context.Context, userID string) (int, e
 // UpdateBotIdentity is the idempotent registration write: it refreshes what the
 // daemon announces (telegram username, machine, version) and touches last_seen.
 // Empty fields are left untouched. Renaming a bot is a panel action, not a daemon one.
+//
+// A daemon reports whatever it believes its machine is, which is usually the raw
+// hostname (vps-068ca265) rather than the machine name the operator configured
+// (vps2). The reported value is therefore only adopted when it resolves to a
+// machine of this account, or when the bot has no machine recorded yet.
 func (s *Store) UpdateBotIdentity(ctx context.Context, botID, botUsername, machineName, version string) error {
 	botUsername = strings.TrimPrefix(strings.TrimSpace(botUsername), "@")
 	machineName = strings.TrimSpace(machineName)
@@ -631,7 +636,12 @@ func (s *Store) UpdateBotIdentity(ctx context.Context, botID, botUsername, machi
 	res, err := s.db.ExecContext(ctx, `
 UPDATE bots SET
   bot_username = CASE WHEN ? = '' THEN bot_username ELSE ? END,
-  machine_name = CASE WHEN ? = '' THEN machine_name ELSE ? END,
+  machine_name = CASE
+    WHEN ? = '' THEN machine_name
+    WHEN EXISTS (SELECT 1 FROM machines m WHERE m.user_id = bots.user_id AND m.name = ?) THEN ?
+    WHEN machine_name = '' THEN ?
+    ELSE machine_name
+  END,
   machine_id = CASE
     WHEN ? = '' THEN machine_id
     ELSE COALESCE((SELECT id FROM machines WHERE user_id = bots.user_id AND name = ?), machine_id)
@@ -639,7 +649,9 @@ UPDATE bots SET
   version = CASE WHEN ? = '' THEN version ELSE ? END,
   last_seen_at = ?
 WHERE id = ?`,
-		botUsername, botUsername, machineName, machineName, machineName, machineName,
+		botUsername, botUsername,
+		machineName, machineName, machineName, machineName,
+		machineName, machineName,
 		version, version, now, botID)
 	if err != nil {
 		return err

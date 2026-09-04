@@ -346,3 +346,34 @@ Available while the module is enabled:
   stored or logged in clear and never echoed back by the API. The hub does not talk to Telegram on
   a bot's behalf (the pending-approval alert goes through the operator's own notifier attachment).
 - Chats default to **denied by omission**: a daemon must treat anything not `approved` as silent.
+
+## 9. Operating gotchas
+
+### Never let a root-run job write a service user's home
+
+`takan-agent` runs as **root** on the VPS boxes, so anything `machine_ai_run`
+launches runs as root too. On vps2 `/usr/local/bin/grok` is a wrapper that pins
+`HOME=/home/debian`, so a root-launched grok job rewrote
+`/home/debian/.grok/auth.json` as `root:root`. Atlas runs as `debian`, and its
+next turn failed with "Not signed in".
+
+Rules that follow:
+
+- The vps2 wrapper now drops back to `debian` (`runuser -u debian`) whenever it is
+  invoked as root, so agent jobs, cron and a stray `sudo grok` are all safe. Keep
+  that guard if the wrapper is ever regenerated.
+- **Never invoke `grok` as root on vps2.**
+- Anything that reads a service user's home (a future runtime-bundle import) must
+  read it **read-only**: plain `sudo cat` / `cp` of the files, never executing
+  `grok`, never triggering a token refresh, and never changing ownership or
+  permissions of anything under `/home/debian`.
+- After such an import, assert `~/.grok/auth.json` is still owned by the service
+  user and mode 0600. If it is not, the import re-owned it and the daemon is
+  about to fail with "Not signed in".
+
+### A daemon's reported machine name is only a hint
+
+Daemons report the host's raw hostname (`vps-068ca265`), not the machine name the
+operator configured (`vps2`). The hub adopts the reported value only when it
+resolves to a machine of that account, or when the bot has no machine recorded
+yet; otherwise the configured name wins.

@@ -395,3 +395,55 @@ func TestInstanceBackfilledOnUpgrade(t *testing.T) {
 		t.Fatalf("instance should be backfilled, got %q", got.Instance)
 	}
 }
+
+// A daemon reports its raw hostname, which must not clobber the machine name the
+// operator configured in the panel.
+func TestRegistrationKeepsConfiguredMachineName(t *testing.T) {
+	st, u, ctx := newBotsStore(t)
+	mac, _, err := st.CreateMachine(ctx, u.ID, "vps2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := st.CreateBot(ctx, u.ID, "Atlas", mac.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The daemon announces the host's hostname, not the configured name.
+	if err := st.UpdateBotIdentity(ctx, b.ID, "mavis_es_bot", "vps-068ca265", "0.3.1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.BotByID(ctx, u.ID, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MachineName != "vps2" {
+		t.Fatalf("hostname overwrote the configured machine name: %q", got.MachineName)
+	}
+	if got.MachineID != mac.ID {
+		t.Fatalf("machine link lost: %q", got.MachineID)
+	}
+	// A name that does resolve to one of this account's machines is adopted.
+	if _, _, err := st.CreateMachine(ctx, u.ID, "vps3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateBotIdentity(ctx, b.ID, "", "vps3", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = st.BotByID(ctx, u.ID, b.ID)
+	if got.MachineName != "vps3" {
+		t.Fatalf("a real machine name should be adopted: %q", got.MachineName)
+	}
+
+	// A bot with no machine yet still learns something useful.
+	fresh, _, err := st.CreateBot(ctx, u.ID, "Loose", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateBotIdentity(ctx, fresh.ID, "", "some-host", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = st.BotByID(ctx, u.ID, fresh.ID)
+	if got.MachineName != "some-host" {
+		t.Fatalf("an unconfigured bot should record what it reports: %q", got.MachineName)
+	}
+}
