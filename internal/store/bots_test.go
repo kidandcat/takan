@@ -356,3 +356,42 @@ func TestBotJobAttributionAndDeliveryRetry(t *testing.T) {
 		t.Fatal("bot_jobs row should cascade with the bot")
 	}
 }
+
+// A bot created before provisioning existed must get a unit name on upgrade,
+// otherwise it can never be provisioned without being recreated.
+func TestInstanceBackfilledOnUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	st, err := Open(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := st.CreateUserOpts(ctx, "backfill@example.com", "password1", CreateUserOpts{AllowOpen: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := st.CreateBot(ctx, u.ID, "Atlas", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the pre-provisioning row shape.
+	if _, err := st.db.ExecContext(ctx, `UPDATE bots SET instance = '' WHERE id = ?`, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err = Open(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	got, err := st.BotByID(ctx, u.ID, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Instance != "atlas" {
+		t.Fatalf("instance should be backfilled, got %q", got.Instance)
+	}
+}

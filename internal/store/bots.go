@@ -222,6 +222,35 @@ func (s *Store) migrateBotProvisionCols() error {
 			return fmt.Errorf("migrate bots.%s: %w", a.col, err)
 		}
 	}
+	// Bots created before provisioning existed have no unit name; derive one so
+	// they can be provisioned without being recreated.
+	rows, err := s.db.Query(`SELECT id, name FROM bots WHERE instance = ''`)
+	if err != nil {
+		return err
+	}
+	type row struct{ id, name string }
+	var pending []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.name); err != nil {
+			rows.Close()
+			return err
+		}
+		pending = append(pending, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, r := range pending {
+		inst := InstanceName(r.name)
+		if inst == "" {
+			continue
+		}
+		if _, err := s.db.Exec(`UPDATE bots SET instance = ? WHERE id = ?`, inst, r.id); err != nil {
+			return fmt.Errorf("backfill bots.instance: %w", err)
+		}
+	}
 	return nil
 }
 

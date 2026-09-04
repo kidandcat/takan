@@ -261,8 +261,16 @@ $SUDO systemctl enable "$INSTANCE.service" >/dev/null 2>&1 || true
 $SUDO systemctl restart "$INSTANCE.service"
 sleep 2
 $SUDO systemctl is-active "$INSTANCE.service" >/dev/null 2>&1 || {
-  echo "takan-provision: $INSTANCE.service did not stay active" >&2
-  $SUDO systemctl status "$INSTANCE.service" --no-pager -n 20 >&2 || true
+  # Dump context first, then the summary line: the hub surfaces the LAST stderr
+  # line in the panel, so it must be the explanation rather than status noise.
+  $SUDO journalctl -u "$INSTANCE.service" -n 20 --no-pager >&2 2>/dev/null || true
+  LASTLOG="$($SUDO journalctl -u "$INSTANCE.service" -n 20 --no-pager 2>/dev/null \
+    | grep -v '^-- ' | grep -oE '[a-z]+: (fatal|error):.*' | tail -1 || true)"
+  if [ -n "$LASTLOG" ]; then
+    echo "$INSTANCE.service installed but exited: $LASTLOG" >&2
+  else
+    echo "$INSTANCE.service installed but did not stay active" >&2
+  fi
   exit 1
 }
 echo "takan-provision: $INSTANCE.service installed and active on $(hostname -s 2>/dev/null || echo machine)"
