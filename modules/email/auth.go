@@ -32,11 +32,11 @@ func LoginCodeFactory(st *store.Store, box *cryptox.Box, envKey, from string) Lo
 		if to == "" {
 			return "", fmt.Errorf("no destination address")
 		}
-		apiKey, sender, err := authMailConfig(ctx, st, box, envKey, from)
+		apiKey, senders, err := authMailConfig(ctx, st, box, envKey, from)
 		if err != nil {
 			return "", err
 		}
-		return sendResend(ctx, apiKey, sender, to, "Takan login code", loginCodeBody(code, ttl), "")
+		return sendLoginMail(ctx, apiKey, senders, to, loginCodeBody(code, ttl))
 	}
 }
 
@@ -52,53 +52,107 @@ func loginCodeBody(code string, ttl time.Duration) string {
 			"If you did not ask to sign in, ignore this message.\n", code, mins)
 }
 
-// authMailConfig resolves the Resend key and the From address for auth mail:
-// environment first (works on a fresh instance), then the owner's saved Email
-// settings (ignoring the module toggle, which must never lock the panel).
-func authMailConfig(ctx context.Context, st *store.Store, box *cryptox.Box, envKey, from string) (apiKey, sender string, err error) {
+// sendLoginMail tries each candidate From until Resend accepts one.
+//
+// Takan caches domain status when the panel last refreshed it, so a domain can
+// be "verified" in the database and rejected by Resend today (DNS drifted, moved
+// registrar, …). Login is how the operator gets back in, so one stale domain
+// must not be a lockout: an unverified-sender rejection falls through to the
+// next candidate. A rejected send delivers nothing, so at most one mail arrives.
+func sendLoginMail(ctx context.Context, apiKey string, senders []string, to, body string) (string, error) {
+	const subject = "Takan login code"
+	var lastErr error
+	for _, sender := range senders {
+		id, err := sendResend(ctx, apiKey, sender, to, subject, body, "")
+		if err == nil {
+			return id, nil
+		}
+		lastErr = err
+		if !unverifiedSender(err) {
+			return "", err
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no sender address available")
+	}
+	return "", lastErr
+}
+
+// unverifiedSender reports whether Resend refused the From address itself
+// (as opposed to a transport, auth or quota failure, which retrying cannot fix).
+func unverifiedSender(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not verified") ||
+		strings.Contains(msg, "domain is not") ||
+		strings.Contains(msg, "invalid `from`")
+}
+
+// authMailConfig resolves the Resend key and the candidate From addresses for
+// auth mail: environment first (works on a fresh instance), then the owner's
+// saved Email settings (ignoring the module toggle, which must never lock the
+// panel). Candidates are ordered explicit-config-first.
+func authMailConfig(ctx context.Context, st *store.Store, box *cryptox.Box, envKey, from string) (apiKey string, senders []string, err error) {
 	apiKey = strings.TrimSpace(envKey)
-	sender = strings.TrimSpace(from)
 
 	var domains []store.EmailDomain
 	if owner, oerr := st.Owner(ctx); oerr == nil && owner != nil {
 		keyEnc, d, ok, gerr := st.GetEmailSettings(ctx, owner.ID)
 		if gerr != nil {
-			return "", "", gerr
+			return "", nil, gerr
 		}
 		domains = d
 		if apiKey == "" && ok && strings.TrimSpace(keyEnc) != "" {
 			if box == nil {
-				return "", "", fmt.Errorf("no encryption key available to read the stored Resend key")
+				return "", nil, fmt.Errorf("no encryption key available to read the stored Resend key")
 			}
 			apiKey, err = box.Open(keyEnc)
 			if err != nil {
-				return "", "", fmt.Errorf("decrypt api key: %w", err)
+				return "", nil, fmt.Errorf("decrypt api key: %w", err)
 			}
 		}
 	}
 	if apiKey == "" {
-		return "", "", fmt.Errorf("no Resend API key: set TAKAN_RESEND_API_KEY or save one in panel → Email")
+		return "", nil, fmt.Errorf("no Resend API key: set TAKAN_RESEND_API_KEY or save one in panel → Email")
 	}
-	if sender == "" {
-		domain := firstAuthDomain(domains)
-		if domain == "" {
-			return "", "", fmt.Errorf("no verified sender: set TAKAN_AUTH_EMAIL_FROM")
+
+	seen := map[string]bool{}
+	add := func(addr string) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" || seen[strings.ToLower(addr)] {
+			return
 		}
-		sender = authSenderLocalPart + "@" + domain
+		seen[strings.ToLower(addr)] = true
+		senders = append(senders, addr)
 	}
-	return apiKey, sender, nil
+	add(from)
+	for _, d := range authDomains(domains) {
+		add(authSenderLocalPart + "@" + d)
+	}
+	if len(senders) == 0 {
+		return "", nil, fmt.Errorf("no sender address: set TAKAN_AUTH_EMAIL_FROM")
+	}
+	return apiKey, senders, nil
 }
 
-// firstAuthDomain prefers an enabled domain, falling back to any configured one
-// (a disabled toggle must not lock the operator out of the panel).
-func firstAuthDomain(domains []store.EmailDomain) string {
-	if enabled := store.EnabledEmailDomains(domains); len(enabled) > 0 {
-		return enabled[0]
-	}
-	for _, d := range domains {
-		if n := normalizeDomain(d.Name); n != "" {
-			return n
+// authDomains lists candidate sending domains, enabled ones first (a disabled
+// toggle must not lock the operator out of the panel).
+func authDomains(domains []store.EmailDomain) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, d := range store.EnabledEmailDomains(domains) {
+		if n := normalizeDomain(d); n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
 		}
 	}
-	return ""
+	for _, d := range domains {
+		if n := normalizeDomain(d.Name); n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }
