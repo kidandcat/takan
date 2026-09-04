@@ -296,6 +296,15 @@ if [ "$MODE" = install ]; then
         GROKVER="$(tr -d '[:space:]' < "$BUNDLEDIR/grok-version")"
       fi
       INSTALLER="$BUNDLEDIR/grok-install.sh"
+      # The official installer also drops its own /usr/local/bin/grok symlink,
+      # clobbering whatever was there. That path is frequently a host wrapper
+      # (on the hub host it carries the root-drop guard of section 9), so it is
+      # saved byte for byte here and restored below.
+      HOSTGROK=""
+      if [ -e /usr/local/bin/grok ] || [ -L /usr/local/bin/grok ]; then
+        HOSTGROK="$BUNDLEDIR/host-grok"
+        $SUDO cp -a /usr/local/bin/grok "$HOSTGROK"
+      fi
       if curl -fsSL --max-time 120 https://x.ai/cli/install.sh -o "$INSTALLER"; then
         # Pinned version first (the same build the bundle came from), latest as
         # the fallback when that version is no longer published.
@@ -309,8 +318,12 @@ if [ "$MODE" = install ]; then
       else
         echo "takan-provision: could not download the grok installer" >&2
       fi
+      if [ -n "$HOSTGROK" ]; then
+        $SUDO rm -f /usr/local/bin/grok
+        $SUDO cp -a "$HOSTGROK" /usr/local/bin/grok
+      fi
     fi
-    if [ ! -e /usr/local/bin/grok ] && [ -x "$GROKHOME/bin/grok" ]; then
+    if [ ! -e /usr/local/bin/grok ] && [ ! -L /usr/local/bin/grok ] && [ -x "$GROKHOME/bin/grok" ]; then
       $SUDO tee /usr/local/bin/grok >/dev/null <<GROKEOF
 #!/bin/bash
 ` + UnitMarker + `

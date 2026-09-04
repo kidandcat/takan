@@ -419,11 +419,12 @@ func TestProvisionScriptBundleStepsFollowTheUnitGuard(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"$HUB/api/bots/provision/env?mode=$MODE",   // adoption tells the hub
-		`[ ! -x "$GROKHOME/bin/grok" ]`,            // the CLI is the service user's own
-		"[ ! -e /usr/local/bin/grok ]",             // never replace an existing wrapper
-		`Environment=HOME=$SVCHOME`,                // grok finds its own home
-		"$HUB/api/bots/binary?os=linux&arch=$ARCH", // unchanged
+		"$HUB/api/bots/provision/env?mode=$MODE",      // adoption tells the hub
+		`[ ! -x "$GROKHOME/bin/grok" ]`,               // the CLI is the service user's own
+		"[ ! -e /usr/local/bin/grok ]",                // never replace an existing wrapper
+		`$SUDO cp -a /usr/local/bin/grok "$HOSTGROK"`, // and restore it after the installer
+		`Environment=HOME=$SVCHOME`,                   // grok finds its own home
+		"$HUB/api/bots/binary?os=linux&arch=$ARCH",    // unchanged
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q", want)
@@ -436,6 +437,15 @@ func TestProvisionScriptBundleStepsFollowTheUnitGuard(t *testing.T) {
 	unitPath = unitPath[:strings.Index(unitPath, "\n")]
 	if !strings.HasPrefix(unitPath, "Environment=PATH=$GROKHOME/bin:") {
 		t.Fatalf("the service user's grok is not first on PATH: %s", unitPath)
+	}
+	// The x.ai installer drops its own /usr/local/bin/grok. Saving that path
+	// has to happen before the installer runs and restoring it after, or a
+	// host wrapper (and its root-drop guard) is silently replaced.
+	save := strings.Index(script, `$SUDO cp -a /usr/local/bin/grok "$HOSTGROK"`)
+	install := strings.Index(script, `bash "$INSTALLER"`)
+	restore := strings.Index(script, `$SUDO cp -a "$HOSTGROK" /usr/local/bin/grok`)
+	if save < 0 || install < 0 || restore < 0 || !(save < install && install < restore) {
+		t.Fatal("the host grok wrapper is not saved before and restored after the installer")
 	}
 	if strings.Contains(script, "gsk_") || strings.Contains(script, "auth.x.ai") {
 		t.Fatal("the script carries bundle secrets; they must travel in a response body")
