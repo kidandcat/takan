@@ -4,9 +4,11 @@
 --
 --   sudo systemctl stop takan atlas
 --   sudo cp -a /opt/takan/data /opt/takan/data.bak.$(date +%s)
---   cp /opt/takan/data/default.db /tmp/dryrun.db
---   sqlite3 /tmp/dryrun.db < deploy/migrate-prod.sql     # dry run, check counts
---   sqlite3 /opt/takan/data/default.db < deploy/migrate-prod.sql
+--   # Copy the WAL and shared-memory files too: default.db alone can be missing
+--   # the most recent commits, so a dry run on it tests the wrong data.
+--   cp /opt/takan/data/default.db* /tmp/ && mv /tmp/default.db /tmp/dryrun.db
+--   sqlite3 -bail /tmp/dryrun.db < deploy/migrate-prod.sql   # dry run, check counts
+--   sqlite3 -bail /opt/takan/data/default.db < deploy/migrate-prod.sql
 --
 -- Order matters: this must run BEFORE the new binary starts. The new migrate()
 -- no longer creates the dropped tables, and it seeds user_modules rows only for
@@ -17,8 +19,29 @@
 -- is written out in full so the operator can see exactly what changes, and so
 -- the row counts can be checked before anything starts.
 
+-- Stop at the first error. Without this the sqlite3 CLI reports a failed
+-- statement and CARRIES ON, which would run the DELETEs below even after the
+-- owner guard has already said this is the wrong database.
+.bail on
+
 PRAGMA foreign_keys = ON;
 BEGIN;
+
+-- 0. Refuse to run against the wrong database.
+--
+-- Everything below hinges on one hardcoded id. If it is absent — wrong host,
+-- wrong file, a typo — the DELETEs below would match EVERY row and empty the
+-- users table, taking the vault with it via CASCADE.
+--
+-- Two independent guards, because this is the one irreversible step:
+--
+--   1. This CHECK, which fails loudly. It needs `.bail on` (above) or
+--      `sqlite3 -bail` to stop the script.
+--   2. The same condition repeated inside each DELETE's WHERE clause, which
+--      needs nothing: on the wrong database they simply match no rows.
+CREATE TEMP TABLE owner_guard (n INTEGER CHECK (n = 1));
+INSERT INTO owner_guard (n)
+  SELECT COUNT(*) FROM users WHERE id = 'e824c2c7-27de-4ed0-875e-0bff55a093bf';
 
 -- 1. Collapse to one user.
 --
@@ -32,8 +55,12 @@ BEGIN;
 --
 --   SELECT id, email FROM users ORDER BY created_at;
 --
-DELETE FROM user_modules WHERE user_id <> 'e824c2c7-27de-4ed0-875e-0bff55a093bf';
-DELETE FROM users        WHERE id      <> 'e824c2c7-27de-4ed0-875e-0bff55a093bf';
+DELETE FROM user_modules
+ WHERE user_id <> 'e824c2c7-27de-4ed0-875e-0bff55a093bf'
+   AND (SELECT COUNT(*) FROM users WHERE id = 'e824c2c7-27de-4ed0-875e-0bff55a093bf') = 1;
+DELETE FROM users
+ WHERE id <> 'e824c2c7-27de-4ed0-875e-0bff55a093bf'
+   AND (SELECT COUNT(*) FROM users WHERE id = 'e824c2c7-27de-4ed0-875e-0bff55a093bf') = 1;
 
 -- 2. Drop the retired product surface.
 --
@@ -56,6 +83,8 @@ DROP TABLE IF EXISTS sip_settings;
 
 -- 3. Retire the module ids that no longer exist.
 DELETE FROM user_modules WHERE module_id IN ('bots','telegram','sip');
+
+DROP TABLE owner_guard;
 
 COMMIT;
 VACUUM;

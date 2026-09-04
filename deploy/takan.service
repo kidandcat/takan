@@ -39,6 +39,10 @@ RestartSec=5
 MemoryMax=2G
 # Swap thrashing on this box is worse than an OOM kill.
 MemorySwapMax=0
+# When the cgroup goes over, kill the offending process, not the unit. A runaway
+# agent run must cost one answer, not the panel, the MCP endpoint and every
+# machine agent connection.
+OOMPolicy=continue
 LimitNOFILE=65535
 
 NoNewPrivileges=true

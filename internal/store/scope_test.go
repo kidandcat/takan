@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -147,5 +148,40 @@ func TestOAuthRefreshRotation(t *testing.T) {
 	}
 	if _, _, _, err := st.ConsumeRefreshToken(ctx, raw); err == nil {
 		t.Fatal("old refresh should be gone")
+	}
+}
+
+// TestForeignKeysAreEnforcedOnEveryWrite pins the guarantee the schema is built
+// on. foreign_keys is a per-connection pragma, so it can be lost silently if the
+// write connection is ever recycled — and then deletes would leave orphans
+// behind with no error at all.
+func TestForeignKeysAreEnforcedOnEveryWrite(t *testing.T) {
+	st, owner, ctx := newOwner(t)
+
+	// Repeat across many statements so a recycled connection would show up.
+	for i := 0; i < 25; i++ {
+		_, err := st.DB().ExecContext(ctx,
+			`INSERT INTO web_sessions (token, user_id, expires_at) VALUES (?,?,?)`,
+			fmt.Sprintf("orphan-%d", i), "no-such-user", "2030-01-01T00:00:00Z")
+		if err == nil {
+			t.Fatalf("write %d accepted an orphan row: foreign keys are not enforced", i)
+		}
+	}
+
+	// And the cascade itself, which the migration depends on.
+	if _, err := st.DB().ExecContext(ctx,
+		`INSERT INTO web_sessions (token, user_id, expires_at) VALUES (?,?,?)`,
+		"real", owner.ID, "2030-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `DELETE FROM users WHERE id = ?`, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := st.DB().QueryRowContext(ctx, `SELECT COUNT(1) FROM web_sessions`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("deleting the owner must cascade, got %d session(s) left behind", n)
 	}
 }

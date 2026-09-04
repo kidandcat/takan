@@ -158,6 +158,11 @@ default one:
 `
 
 // WriteAgentsGuide installs AGENTS.md into the agent workspace.
+//
+// The file is generated, not operator-owned, but it lives in a directory the
+// operator works in. Rewriting it unconditionally on every boot churns its
+// mtime, which shows up in backups and makes a genuine change invisible in an
+// `ls -lt`. It is only written when the content actually differs.
 func WriteAgentsGuide(workdir, inboxDir string) error {
 	if workdir == "" {
 		return fmt.Errorf("empty workdir")
@@ -167,5 +172,10 @@ func WriteAgentsGuide(workdir, inboxDir string) error {
 	}
 	guide := strings.ReplaceAll(agentsGuide, "__NAME__", InstanceName)
 	guide = strings.ReplaceAll(guide, "__INBOX__", inboxDir)
-	return os.WriteFile(filepath.Join(workdir, "AGENTS.md"), []byte(guide), 0o644)
+
+	path := filepath.Join(workdir, "AGENTS.md")
+	if current, err := os.ReadFile(path); err == nil && string(current) == guide {
+		return nil
+	}
+	return os.WriteFile(path, []byte(guide), 0o644)
 }

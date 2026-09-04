@@ -196,6 +196,7 @@ OSS packaging notes (what is in / out of a hosted SaaS): [TAKAN_OSS_SELFHOST.md]
 ## Security
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities and a short threat model.
+Known gaps, with the reasoning for leaving them open: [docs/FOLLOWUPS.md](docs/FOLLOWUPS.md).
 
 ## Contributing
 

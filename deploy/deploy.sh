@@ -30,9 +30,18 @@ scp -q /tmp/takan-linux-amd64 "$HOST:/tmp/takan"
 scp -q /tmp/takan-agent-linux-amd64 "$HOST:/tmp/takan-agent-linux-amd64"
 scp -q deploy/takan.service "$HOST:/tmp/takan.service"
 
+# The in-flight check has to recognise the agent process, and the command is a
+# panel setting rather than a constant. Read it from the hub's database; fall
+# back to the default when the assistant has never been configured.
+AGENT_QUERY="SELECT COALESCE(json_extract(config_json, '\$.agent.command'), '') FROM user_modules WHERE module_id = 'assistant' LIMIT 1;"
+AGENT_CMD=$(ssh "$HOST" "sqlite3 /opt/takan/data/default.db \"$AGENT_QUERY\" 2>/dev/null" || true)
+AGENT_CMD=${AGENT_CMD:-grok}
+echo "==> Agent command: $AGENT_CMD"
+
 echo "==> Installing on $HOST"
-ssh "$HOST" bash -s <<'EOF'
+ssh "$HOST" AGENT_CMD="$AGENT_CMD" bash -s <<'EOF'
 set -euo pipefail
+AGENT_CMD=${AGENT_CMD:-grok}
 
 BIN_PATH=/opt/takan/takan
 AGENT_DIR=/opt/takan/agents
@@ -79,7 +88,7 @@ conversation_agent_running() {
     [[ -z "$pid" ]] && continue
     comm=$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')
     cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
-    if [[ "$comm" == grok* && "$cwd" != *"/tasks/"* && "$cwd" != *"/routines/"* ]]; then
+    if [[ "$comm" == "$AGENT_CMD"* && "$cwd" != *"/tasks/"* && "$cwd" != *"/routines/"* ]]; then
       return 0
     fi
   done < <(descendants "$hub_pid")

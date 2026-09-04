@@ -30,10 +30,10 @@ collapse kept the right row.
 
 ```bash
 scp deploy/migrate-prod.sql vps2:/tmp/
-ssh vps2 'cp /opt/takan/data/default.db /tmp/dryrun.db && sqlite3 /tmp/dryrun.db < /tmp/migrate-prod.sql'
+ssh vps2 'cp /opt/takan/data/default.db /tmp/dryrun.db && sqlite3 -bail /tmp/dryrun.db < /tmp/migrate-prod.sql'
 ssh vps2 'sqlite3 /tmp/dryrun.db "SELECT COUNT(*) FROM users; SELECT COUNT(*) FROM vault_items; PRAGMA foreign_key_check;"'
 # only when that looks right:
-ssh vps2 'sudo sqlite3 /opt/takan/data/default.db < /tmp/migrate-prod.sql'
+ssh vps2 'sudo sqlite3 -bail /opt/takan/data/default.db < /tmp/migrate-prod.sql'
 ```
 
 ## 2. Merge the environment

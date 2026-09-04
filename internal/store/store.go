@@ -61,10 +61,20 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		return nil, fmt.Errorf("colmena: %w", err)
 	}
 	s := &Store{node: node, db: node.DB()}
-	// Enforce FK on the writer connection (CASCADE, RESTRICT). Per-connection pragma.
+	// foreign_keys is a PER-CONNECTION pragma. Colmena routes every write and
+	// every transaction through a single writer connection, so setting it once
+	// covers the write path — but only for as long as that connection lives.
 	if _, err := s.db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		_ = node.Close()
 		return nil, fmt.Errorf("pragma foreign_keys: %w", err)
+	}
+	// Do not take that on trust. Every ON DELETE CASCADE in this schema — and
+	// the users collapse the assistant migration performs — depends on it, and
+	// if the pragma were ever lost the failure would be silent: orphan rows,
+	// deletes that leave their children behind, and no error anywhere.
+	if err := s.verifyForeignKeys(); err != nil {
+		_ = node.Close()
+		return nil, err
 	}
 	if err := s.migrate(); err != nil {
 		_ = node.Close()
@@ -115,6 +125,25 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// verifyForeignKeys proves constraints are actually enforced on the write path,
+// by attempting a violation inside a transaction that is always rolled back.
+func (s *Store) verifyForeignKeys() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("verify foreign keys: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.Exec(
+		`INSERT INTO web_sessions (token, user_id, expires_at) VALUES (?,?,?)`,
+		"fk-probe", "no-such-user", time.Now().UTC().Format(time.RFC3339))
+	if err == nil {
+		return fmt.Errorf("foreign keys are not enforced on the write path: " +
+			"an orphan row was accepted, so ON DELETE CASCADE cannot be relied on")
+	}
+	return nil
 }
 
 // BackupOpts configures Colmena S3 backup.
