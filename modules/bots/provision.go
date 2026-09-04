@@ -26,6 +26,15 @@ const DefaultBotBinDir = "/opt/takan/bot-binaries"
 // binary directory is keyed by this name so other daemons can be added later.
 const BinaryName = "atlas"
 
+// UnitMarker is stamped into every unit provisioning writes. Its absence in an
+// existing unit of the same name means a human installed that service, so
+// provisioning refuses rather than overwriting someone's working daemon.
+const UnitMarker = "# managed-by: takan-bots"
+
+// ExitUnmanagedUnit is the script exit code for "a unit of this name exists and
+// Takan did not create it". Distinct from 77 (no root) and 78 (unsupported host).
+const ExitUnmanagedUnit = 79
+
 // TokenResolver hands back the clear Telegram credential of a channel.
 // Implemented by the telegram module, which owns the sealing key.
 type TokenResolver func(ctx context.Context, c *store.TelegramChannel) (string, error)
@@ -219,6 +228,13 @@ BIN=/usr/local/bin/$INSTANCE
 TMPBIN="$(mktemp)"
 trap 'rm -f "$TMPBIN"' EXIT
 
+# Refuse before touching anything: overwriting a hand-rolled unit would also
+# replace its binary at $BIN and orphan its own env file and working directory.
+if [ -e "$UNIT" ] && ! grep -qF ` + shellQuote(UnitMarker) + ` "$UNIT" 2>/dev/null; then
+  echo "takan-provision: $INSTANCE.service already exists on $(hostname -s 2>/dev/null || echo this machine) and is not managed by Takan; refusing to overwrite it. Flip it to hub mode manually, or remove the unit first." >&2
+  exit ` + fmt.Sprint(ExitUnmanagedUnit) + `
+fi
+
 umask 077
 $SUDO mkdir -p "$ENVDIR"
 
@@ -236,6 +252,7 @@ fi
 $SUDO install -m 0755 "$TMPBIN" "$BIN"
 
 $SUDO tee "$UNIT" >/dev/null <<UNITEOF
+` + UnitMarker + `
 [Unit]
 Description=Takan bot instance $INSTANCE
 After=network-online.target
