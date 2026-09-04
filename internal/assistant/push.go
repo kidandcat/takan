@@ -107,7 +107,7 @@ func (p *PushSender) Send(ctx context.Context, token, body string, data map[stri
 		return pushResult{err: fmt.Errorf("fcm send: %w", err)}
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16)) // safe-ignore: only enriches an error message
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return pushResult{}
 	}

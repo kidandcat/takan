@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -205,7 +206,12 @@ func (s *Server) saveAssistant(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	_ = r.ParseForm()
+	// A form that will not parse yields empty values for every field, which
+	// would silently disable the assistant and blank its runner config.
+	if err := r.ParseForm(); err != nil {
+		s.redirectAssistant(w, r, "error: could not read the form: "+err.Error())
+		return
+	}
 	opts, err := asst.LoadOptions(r.Context(), s.Store, u.ID)
 	if err != nil {
 		opts = asst.DefaultOptions()
@@ -280,8 +286,14 @@ func (s *Server) runAssistantJob(w http.ResponseWriter, r *http.Request) {
 		s.redirectAssistant(w, r, "error: the assistant is not running")
 		return
 	}
-	// An agent job can take minutes; fire and forget, the result arrives in Telegram.
-	go func(id string) { _ = s.Assistant.RunJob(context.Background(), id) }(r.PathValue("id"))
+	// An agent job can take minutes; fire and forget, the result arrives in
+	// Telegram. Log a failure: the operator clicked a button and would otherwise
+	// see nothing at all.
+	go func(id string) {
+		if err := s.Assistant.RunJob(context.Background(), id); err != nil {
+			log.Printf("assistant: manual run of job %s failed: %v", id, err)
+		}
+	}(r.PathValue("id"))
 	s.redirectAssistant(w, r, "Job fired — the result will arrive in Telegram")
 }
 

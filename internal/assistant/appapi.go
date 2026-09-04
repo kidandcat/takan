@@ -283,7 +283,7 @@ func publicMessage(m HistoryMessage) HistoryMessage {
 
 func parseAppInbound(r *http.Request, inboxDir string) (*appInbound, error) {
 	ctype := r.Header.Get("Content-Type")
-	media, _, _ := mime.ParseMediaType(ctype)
+	media, _, _ := mime.ParseMediaType(ctype) // safe-ignore: a malformed Content-Type falls through to the prefix check below
 	if media == "application/json" || (media == "" && !strings.HasPrefix(ctype, "multipart/")) {
 		var req struct {
 			Text string `json:"text"`
@@ -368,7 +368,9 @@ func attachmentsFromInbound(in *appInbound) []Attachment {
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	// The status line is already sent, so a write failure here can only be a
+	// dead client; there is nothing left to report to.
+	_ = json.NewEncoder(w).Encode(payload) // safe-ignore: response already committed
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

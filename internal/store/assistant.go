@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -198,7 +199,7 @@ func (s *Store) AssistantMeta(ctx context.Context, userID, key string) (string, 
 	var v string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT value FROM assistant_meta WHERE user_id = ? AND key = ?`, userID, key).Scan(&v)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	return v, err
@@ -220,7 +221,7 @@ func (s *Store) AssistantChatState(ctx context.Context, userID, chatID string) (
 SELECT chat_id, kind, title, session_id, fork_from, conversation_started, runs, last_run_at
 FROM assistant_chats WHERE user_id = ? AND chat_id = ?`, userID, chatID)
 	c, err := scanAssistantChat(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return AssistantChat{ChatID: chatID}, nil
 	}
 	return c, err
@@ -587,7 +588,7 @@ func (s *Store) JobChatByID(ctx context.Context, jobID string) (*JobChat, error)
 	row := s.db.QueryRowContext(ctx, `
 SELECT job_id, user_id, chat_id, machine, created_at, delivered_at FROM job_chats WHERE job_id = ?`, jobID)
 	jc, err := scanJobChat(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

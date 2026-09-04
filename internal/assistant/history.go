@@ -104,7 +104,9 @@ func (h *History) List(after, before string, limit int) []HistoryMessage {
 			ID: r.ID, Role: r.Role, Text: r.Text, Source: r.Source, CreatedAt: r.CreatedAt,
 		}
 		if r.FilesJSON != "" && r.FilesJSON != "[]" {
-			_ = json.Unmarshal([]byte(r.FilesJSON), &m.Files)
+			// A corrupt attachment list must not hide the message text, which is
+			// the part the operator actually reads.
+			_ = json.Unmarshal([]byte(r.FilesJSON), &m.Files) // safe-ignore: text matters more than its attachments
 		}
 		out = append(out, m)
 	}

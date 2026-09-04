@@ -90,7 +90,9 @@ func schedList() {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
 			job.ID, job.Type, schedule, job.NextRun.Format("2006-01-02 15:04"), job.Name)
 	}
-	_ = tw.Flush()
+	if err := tw.Flush(); err != nil {
+		log.Fatalf("could not write the table: %v", err)
+	}
 	fmt.Printf("\ntimezone: %s\n", out.Timezone)
 }
 

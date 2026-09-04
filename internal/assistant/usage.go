@@ -267,7 +267,9 @@ func readSessionSummary(dir string) sessionSummary {
 	if err != nil {
 		return s
 	}
-	_ = json.Unmarshal(raw, &s)
+	// A broken summary.json falls back to the directory mtime: a partial usage
+	// report is worth more than none.
+	_ = json.Unmarshal(raw, &s) // safe-ignore: caller tolerates a zero summary
 	return s
 }
 

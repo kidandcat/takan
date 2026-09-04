@@ -158,7 +158,9 @@ func importState(ctx context.Context, st *store.Store, userID string, raw []byte
 		if err != nil {
 			return 0, err
 		}
-		existing, _ := strconv.ParseInt(current, 10, 64)
+		// An unreadable stored offset counts as 0, so the imported one wins —
+		// the correct direction for a first import.
+		existing, _ := strconv.ParseInt(current, 10, 64) // safe-ignore: unparseable means "no offset yet"
 		if state.Offset > existing {
 			if err := st.SetAssistantMeta(ctx, userID, store.MetaTelegramOffset,
 				strconv.FormatInt(state.Offset, 10)); err != nil {

@@ -109,7 +109,9 @@ func taskList() {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
 			t.ID, t.State, t.Duration().Truncate(time.Second), t.StartedAt.Format("15:04:05"), t.Title)
 	}
-	_ = tw.Flush()
+	if err := tw.Flush(); err != nil {
+		log.Fatalf("could not write the table: %v", err)
+	}
 }
 
 func taskStatus(id string) {

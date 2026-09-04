@@ -4,6 +4,7 @@
 package tg
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -172,10 +173,7 @@ func (e *APIError) Error() string {
 }
 
 // AsAPIError reports whether err is an *APIError and stores it in target.
+// It unwraps, so a wrapped 409 is still recognised as the webhook conflict.
 func AsAPIError(err error, target **APIError) bool {
-	if e, ok := err.(*APIError); ok {
-		*target = e
-		return true
-	}
-	return false
+	return errors.As(err, target)
 }

@@ -6,7 +6,13 @@
 #   TAKAN_PUBLIC_URL=https://takan.example.com docker compose up --build
 #
 # Optional: pin the session key (otherwise it is generated into the data volume):
-#   TAKAN_SESSION_KEY=$(openssl rand -hex 32) docker compose up --build
+#   ATLAS_SESSION_KEY=$(openssl rand -hex 32) docker compose up --build
+#
+# The assistant (Telegram bot + phone app) is off in this image unless you set
+# TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_ID. It also wants a CLI coding agent on
+# PATH, which this image does not ship: for the assistant, prefer the systemd
+# install (deploy/takan.service), where it runs as a user with a real home and
+# its own agent credentials.
 
 services:
   takan:
@@ -19,7 +25,12 @@ services:
       TAKAN_PUBLIC_URL: "${TAKAN_PUBLIC_URL:-http://localhost:8090}"
       TAKAN_DATA_DIR: /data
       TAKAN_AGENT_BIN_DIR: /opt/takan/agents
-      TAKAN_SESSION_KEY: "${TAKAN_SESSION_KEY:-}"
+      TAKAN_SESSION_KEY: "${ATLAS_SESSION_KEY:-${TAKAN_SESSION_KEY:-}}"
+      # Assistant. Leave unset to run as a plain MCP hub.
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      OWNER_TELEGRAM_ID: "${OWNER_TELEGRAM_ID:-}"
+      # Loopback API for atlas-send / atlas-sched / atlas-task, inside the container.
+      ATLAS_LOCAL_ADDR: "127.0.0.1:8099"
     volumes:
       - takan-data:/data
     restart: unless-stopped
