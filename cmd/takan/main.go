@@ -187,7 +187,7 @@ func main() {
 		Vault:     vault.Factory(st, box),
 		Display:   display.Factory(st, hub),
 		TV:        tv.Factory(st, hub),
-		Bots:      bots.Factory(st, botWatch),
+		Bots:      bots.Factory(st, botWatch, provisioner),
 		SIPHub:    sipHub,
 	}
 

@@ -28,7 +28,7 @@ func TestBotsToolsApproveDenyFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tools := toolMap(t, Factory(f.st, f.srv.Watch)(ctx, f.user.ID))
+	tools := toolMap(t, Factory(f.st, f.srv.Watch, nil)(ctx, f.user.ID))
 	for _, name := range []string{"bots_list", "bots_chats", "bots_approve", "bots_deny"} {
 		if _, ok := tools[name]; !ok {
 			t.Fatalf("missing tool %s", name)

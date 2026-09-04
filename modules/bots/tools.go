@@ -21,7 +21,8 @@ func Online(b store.Bot) bool {
 
 // Factory returns bots_* tools. Watch (optional) wakes long-polling daemons
 // immediately after an approve/deny so decisions land without waiting a poll.
-func Factory(st *store.Store, watch *Watcher) func(ctx context.Context, userID string) []mcp.RegisteredTool {
+// prov (optional) enables bots_provision.
+func Factory(st *store.Store, watch *Watcher, prov *Provisioner) func(ctx context.Context, userID string) []mcp.RegisteredTool {
 	return func(ctx context.Context, userID string) []mcp.RegisteredTool {
 		return []mcp.RegisteredTool{
 			{
@@ -51,6 +52,9 @@ func Factory(st *store.Store, watch *Watcher) func(ctx context.Context, userID s
 						Pending    int    `json:"pending_chats"`
 						Approved   int    `json:"approved_chats"`
 						Deliveries int    `json:"queued_deliveries,omitempty"`
+						Provision  string `json:"provision_status,omitempty"`
+						ProvErr    string `json:"provision_error,omitempty"`
+						Channel    string `json:"channel,omitempty"`
 					}
 					out := make([]row, 0, len(list))
 					for _, b := range list {
@@ -58,6 +62,13 @@ func Factory(st *store.Store, watch *Watcher) func(ctx context.Context, userID s
 							Name: b.Name, Username: b.BotUsername, Machine: b.MachineName, Kind: b.Kind,
 							Online: Online(b), Pending: b.PendingChats, Approved: b.ApprovedChats,
 							Deliveries: b.PendingDeliveries,
+							Provision:  b.ProvisionStatus, ProvErr: b.ProvisionError,
+						}
+						if ch, _, err := st.ChannelForConsumer(ctx, userID,
+							store.ConsumerBot, b.ID, store.DirectionReceive); err == nil && ch != nil {
+							if atts, _ := st.ConsumerAttachments(ctx, userID, store.ConsumerBot, b.ID, store.DirectionReceive); len(atts) > 0 {
+								r.Channel = ch.Name
+							}
 						}
 						if b.LastSeen != nil {
 							r.LastSeen = b.LastSeen.UTC().Format(time.RFC3339)
@@ -146,6 +157,45 @@ func Factory(st *store.Store, watch *Watcher) func(ctx context.Context, userID s
 					InputSchema: decisionSchema("Approve"),
 				},
 				Handler: decisionHandler(st, watch, store.BotChatApproved),
+			},
+			{
+				Tool: mcp.Tool{
+					Name: "bots_provision",
+					Description: "Install (or re-install) a bot daemon on its target machine through " +
+						"takan-agent: downloads the binary, writes the env file from the bot's telegram " +
+						"channel, installs and starts <instance>.service. Idempotent. Linux/systemd only. " +
+						"Returns immediately; poll bots_list for provision status (queued|running|ok|failed).",
+					InputSchema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"bot": map[string]any{
+								"type":        "string",
+								"description": "Bot name from bots_list",
+							},
+						},
+						"required": []string{"bot"},
+					},
+				},
+				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
+					if prov == nil {
+						return "", fmt.Errorf("provisioning is not configured on this hub")
+					}
+					b, err := resolveBot(ctx, st, userID, str(args, "bot"))
+					if err != nil {
+						return "", err
+					}
+					if !b.Provisionable() {
+						return "", fmt.Errorf("bot %q has no target machine — set one in the panel", b.Name)
+					}
+					prov.Start(userID, b.ID)
+					return marshal(map[string]any{
+						"bot":      b.Name,
+						"machine":  b.MachineName,
+						"instance": b.Instance + ".service",
+						"status":   store.ProvisionQueued,
+						"hint":     "poll bots_list for provision_status",
+					})
+				},
 			},
 			{
 				Tool: mcp.Tool{
