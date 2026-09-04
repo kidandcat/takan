@@ -51,6 +51,7 @@ type assistantView struct {
 	PollTimeout        string
 	TypingInterval     string
 	RespondToAll       bool
+	Progress           bool
 
 	Chats   []assistantChatView
 	Jobs    []assistantJobView
@@ -89,6 +90,7 @@ func (s *Server) fillAssistant(ctx context.Context, u *store.User, data *pageDat
 	v := assistantView{
 		Enabled:            opts.Enabled,
 		RespondToAll:       opts.RespondToAll,
+		Progress:           opts.Agent.ProgressEnabled(),
 		Command:            opts.Agent.Command,
 		Args:               strings.Join(opts.Agent.Args, "\n"),
 		NewSessionArgs:     strings.Join(opts.Agent.NewSessionArgs, "\n"),
@@ -218,6 +220,10 @@ func (s *Server) saveAssistant(w http.ResponseWriter, r *http.Request) {
 	}
 	opts.Enabled = checked(r, "enabled")
 	opts.RespondToAll = checked(r, "respond_to_all")
+	// Progress picks the runner's --output-format, so SaveOptions rewrites the
+	// argument list to match rather than trusting whatever the textarea said.
+	progress := checked(r, "progress")
+	opts.Agent.Progress = &progress
 	opts.Agent.Command = strings.TrimSpace(r.FormValue("command"))
 	opts.Agent.Args = splitLines(r.FormValue("args"))
 	opts.Agent.NewSessionArgs = splitLines(r.FormValue("new_session_args"))

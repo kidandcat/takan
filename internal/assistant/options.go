@@ -73,6 +73,47 @@ type AgentOpts struct {
 	// UnsetEnv removes variables from the child environment on top of the
 	// allowlist. XAI_API_KEY must stay unset so grok uses ~/.grok/auth.json.
 	UnsetEnv []string `json:"unset_env"`
+	// Progress streams the runner's tool activity into one editable Telegram
+	// message per run and into the app's SSE channel. It picks the runner's
+	// --output-format, because the two cannot disagree: with the streaming
+	// format the answer is rebuilt from the stream's text deltas.
+	//
+	// It is a pointer so a configuration stored before this existed still
+	// defaults to on rather than to the zero value.
+	Progress *bool `json:"progress,omitempty"`
+}
+
+// Runner output formats. "plain" prints the answer; "streaming-json" prints one
+// NDJSON event per line and the answer has to be reconstructed from it.
+const (
+	OutputPlain     = "plain"
+	OutputStreaming = "streaming-json"
+	// outputFormatFlag is the runner flag both formats are selected with.
+	outputFormatFlag = "--output-format"
+)
+
+// ProgressEnabled reports whether live progress is on. Unset means on.
+func (o AgentOpts) ProgressEnabled() bool { return o.Progress == nil || *o.Progress }
+
+// withOutputFormat rewrites (or appends) the runner's --output-format argument.
+//
+// It rewrites rather than only defaulting because the format is not a free
+// setting: a configuration saved by the panel before progress existed still
+// pins "plain", and leaving it there would silently disable the feature on
+// every instance that ever opened the panel.
+func withOutputFormat(args []string, format string) []string {
+	out := append([]string(nil), args...)
+	for i, arg := range out {
+		if arg == outputFormatFlag && i+1 < len(out) {
+			out[i+1] = format
+			return out
+		}
+		if strings.HasPrefix(arg, outputFormatFlag+"=") {
+			out[i] = outputFormatFlag + "=" + format
+			return out
+		}
+	}
+	return append(out, outputFormatFlag, format)
 }
 
 // TelegramOpts tunes the polling loop and the typing indicator.
@@ -93,8 +134,17 @@ func (o *Options) applyDefaults() {
 		o.Agent.Command = "grok"
 	}
 	if len(o.Agent.Args) == 0 {
-		o.Agent.Args = []string{"--single", promptPlaceholder, "--output-format", "plain", "--always-approve"}
+		o.Agent.Args = []string{"--single", promptPlaceholder, outputFormatFlag, OutputStreaming, "--always-approve"}
 	}
+	if o.Agent.Progress == nil {
+		on := true
+		o.Agent.Progress = &on
+	}
+	format := OutputStreaming
+	if !o.Agent.ProgressEnabled() {
+		format = OutputPlain
+	}
+	o.Agent.Args = withOutputFormat(o.Agent.Args, format)
 	if len(o.Agent.NewSessionArgs) == 0 {
 		o.Agent.NewSessionArgs = []string{"--session-id", sessionPlaceholder}
 	}

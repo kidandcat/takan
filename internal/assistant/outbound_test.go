@@ -197,6 +197,9 @@ func TestOnlyEmitTalksToTelegram(t *testing.T) {
 	const allowedFile = "outbound.go"
 	sendMethods := map[string]bool{
 		"SendText": true, "SendLongText": true, "SendMessage": true, "SendFile": true,
+		// The progress display rewrites and removes the message it sent, so
+		// these are on the list for the same reason the sends are.
+		"EditMessageText": true, "DeleteMessage": true,
 	}
 
 	fset := token.NewFileSet()

@@ -82,12 +82,17 @@ type TaskManager struct {
 	// out is the assistant's single outbound choke point, so a task result
 	// reaches the app history as well as Telegram.
 	out Emitter
+	// host builds a task's progress display. Nil disables it, which is what a
+	// manager built without a bot gets.
+	host progressHost
 	// ownerChat is the default delivery target.
 	ownerChat int64
 
 	mu      sync.Mutex
 	tasks   map[string]*Task
 	cancels map[string]context.CancelFunc
+	// progress holds each running task's single editable message.
+	progress map[string]*progressTracker
 	// ctx is the daemon lifetime; tasks are spawned from it.
 	ctx context.Context
 	// rateLimited counts runs refused upstream, for /usage.
@@ -101,7 +106,8 @@ func NewTaskManager(ctx context.Context, st *store.Store, userID string, opts Op
 		st: st, userID: userID, opts: opts, home: home, workdir: workdir,
 		out: out, ownerChat: ownerChat,
 		tasks: map[string]*Task{}, cancels: map[string]context.CancelFunc{},
-		ctx: ctx,
+		progress: map[string]*progressTracker{},
+		ctx:      ctx,
 	}
 	rows, err := st.ListAssistantTasks(ctx, userID)
 	if err != nil {
@@ -145,6 +151,45 @@ func (m *TaskManager) rowOf(t *Task) store.AssistantTask {
 		row.FinishedAt = &finished
 	}
 	return row
+}
+
+// progressHost builds the single editable message a run reports through. Only
+// *Bot implements it; the task manager holds it so a background task gets the
+// same one-message-per-run treatment as a conversational turn.
+type progressHost interface {
+	NewProgress(chatID int64, telegram bool, started time.Time) *progressTracker
+}
+
+// SetProgressHost wires the live progress display. Without it tasks still run;
+// they just report once, at the end, as they always did.
+func (m *TaskManager) SetProgressHost(h progressHost) { m.host = h }
+
+// newProgress starts a task's display, or returns nil when there is no host.
+func (m *TaskManager) newProgress(id string, chatID int64, started time.Time, header string) *progressTracker {
+	if m.host == nil {
+		return nil
+	}
+	p := m.host.NewProgress(chatID, true, started)
+	p.SetHeader(header)
+	m.mu.Lock()
+	m.progress[id] = p
+	m.mu.Unlock()
+	return p
+}
+
+// takeProgress removes and returns a task's display.
+func (m *TaskManager) takeProgress(id string) *progressTracker {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p := m.progress[id]
+	delete(m.progress, id)
+	return p
+}
+
+// taskHeader is the line that stays pinned above a running task's steps, so its
+// id is readable at every moment rather than only in the final message.
+func taskHeader(id, title string) string {
+	return fmt.Sprintf("⏳ Tarea %s — %s", id, tg.TruncateRunes(strings.TrimSpace(title), 60))
 }
 
 // announce delivers text to the owner on every channel.
@@ -256,18 +301,21 @@ func (m *TaskManager) Run(prompt, title string, chatID int64) (Task, error) {
 	m.mu.Unlock()
 
 	log.Printf("tasks: started %s (%q), timeout %s, dir %s", id, title, m.opts.TaskTimeout(), dir)
-	go m.execute(ctx, id, dir, prompt, sessionID)
+	progress := m.newProgress(id, chatID, task.StartedAt, taskHeader(id, title))
+	go m.execute(ctx, id, dir, prompt, sessionID, progress)
 
 	return snapshot, nil
 }
 
 // execute runs the task's agent and delivers the outcome.
-func (m *TaskManager) execute(ctx context.Context, id, dir, prompt, sessionID string) {
+func (m *TaskManager) execute(ctx context.Context, id, dir, prompt, sessionID string, progress *progressTracker) {
 	// A task always gets a fresh session in its own directory, so it never
 	// resumes (or disturbs) the conversation the owner is having in Telegram.
 	agent := NewAgent(m.opts.Agent, dir, m.home, m.opts.TaskTimeout())
 
-	handle, startErr := agent.Start(ctx, RunSpec{Prompt: prompt, SessionID: sessionID, Mode: RunNew})
+	handle, startErr := agent.Start(ctx, RunSpec{
+		Prompt: prompt, SessionID: sessionID, Mode: RunNew, OnProgress: progress.Add,
+	})
 	if startErr != nil {
 		m.finalize(id, dir, nil, startErr)
 		return
@@ -292,7 +340,10 @@ func (m *TaskManager) setPID(id string, pid int) {
 // background task. This is how a conversational reply that overruns the soft
 // budget stops blocking the chat: the process keeps going untouched, only its
 // bookkeeping and its delivery channel change.
-func (m *TaskManager) Adopt(h *RunHandle, title string, chatID int64) (Task, error) {
+// progress is the display the conversational turn already started; it is taken
+// over rather than replaced, so the message the chat is watching becomes the
+// task's message. It may be nil.
+func (m *TaskManager) Adopt(h *RunHandle, title string, chatID int64, progress *progressTracker) (Task, error) {
 	id := newJobID()
 	dir := filepath.Join(m.workdir, "tasks", id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -324,6 +375,9 @@ func (m *TaskManager) Adopt(h *RunHandle, title string, chatID int64) (Task, err
 	m.mu.Lock()
 	m.tasks[id] = task
 	m.cancels[id] = h.Cancel
+	if progress != nil {
+		m.progress[id] = progress
+	}
 	m.persistLocked(task)
 	snapshot := *task
 	m.mu.Unlock()
@@ -387,12 +441,17 @@ func (m *TaskManager) finalize(id, dir string, res *AgentResult, err error) {
 }
 
 // report pushes a finished task's outcome to the chat that asked for it.
+//
+// A task is one message in the chat from beginning to end: the progress display
+// is edited in place while it runs and then edited into this result. Only a
+// result too long for a single Telegram message costs a second one, and even
+// then the first is edited into the header rather than left showing steps.
 func (m *TaskManager) report(task *Task, res *AgentResult) {
+	icon := map[string]string{
+		TaskDone: "✅", TaskFailed: "❌", TaskKilled: "🛑", TaskTimeout: "⌛",
+	}[task.State]
 	header := fmt.Sprintf("%s Tarea %s — %s (%s)",
-		map[string]string{
-			TaskDone: "✅", TaskFailed: "❌", TaskKilled: "🛑", TaskTimeout: "⌛",
-		}[task.State],
-		task.ID, task.Title, task.Duration().Truncate(time.Second))
+		icon, task.ID, task.Title, task.Duration().Truncate(time.Second))
 	if task.Promoted {
 		// Make it obvious which message this answers.
 		header += fmt.Sprintf("\n↩️ Responde a: «%s»", tg.TruncateRunes(strings.TrimSpace(task.Prompt), 160))
@@ -412,7 +471,21 @@ func (m *TaskManager) report(task *Task, res *AgentResult) {
 		body = "(sin salida)"
 	}
 
-	m.announceTo(task.ChatID, header+"\n\n"+body)
+	full := header + "\n\n" + body
+	ctx := context.WithoutCancel(m.ctx)
+	progress := m.takeProgress(task.ID)
+	switch {
+	case progress.FinishWith(ctx, full):
+		return
+	case progress.FinishHeader(ctx, fmt.Sprintf("%s Tarea %s — %s (%s) · resultado abajo ↓",
+		icon, task.ID, tg.TruncateRunes(strings.TrimSpace(task.Title), 60),
+		task.Duration().Truncate(time.Second))):
+		// Too long to live in one message: the progress message becomes a
+		// one-line "done" and the result follows through the chunked send.
+	default:
+		progress.Discard(ctx)
+	}
+	m.announceTo(task.ChatID, full)
 }
 
 // List returns every task, newest first.
@@ -498,6 +571,7 @@ func (m *TaskManager) Prune(olderThan time.Duration) int {
 	for id, t := range m.tasks {
 		if !t.Running() && !t.FinishedAt.IsZero() && t.FinishedAt.Before(cutoff) {
 			delete(m.tasks, id)
+			delete(m.progress, id)
 			if err := m.st.DeleteAssistantTask(context.WithoutCancel(m.ctx), m.userID, id); err != nil {
 				log.Printf("tasks: failed to delete %s: %v", id, err)
 			}

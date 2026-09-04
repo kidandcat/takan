@@ -312,6 +312,10 @@
       <input type="checkbox" name="respond_to_all" value="1" {{if $a.RespondToAll}}checked{{end}}/>
       <span>In groups, answer every message you write (not only mentions and replies)</span>
     </label>
+    <label class="row" style="gap:.5rem;align-items:center">
+      <input type="checkbox" name="progress" value="1" {{if $a.Progress}}checked{{end}}/>
+      <span>Show live run progress (one editable message per run; sets <code>--output-format streaming-json</code>)</span>
+    </label>
     <div>
       <label for="as_command">Command</label>
       <input id="as_command" name="command" value="{{$a.Command}}" autocomplete="off" required/>

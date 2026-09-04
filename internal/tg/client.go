@@ -55,6 +55,12 @@ type apiResponse struct {
 	Result      json.RawMessage `json:"result"`
 	Description string          `json:"description"`
 	ErrorCode   int             `json:"error_code"`
+	// Parameters carries retry_after on a 429. Telegram allows roughly one
+	// message per second per chat and answers a burst with the number of
+	// seconds to wait, which is the only reliable way to pace an edit loop.
+	Parameters struct {
+		RetryAfter int `json:"retry_after"`
+	} `json:"parameters"`
 }
 
 func (c *Client) endpoint(method string) string {
@@ -128,7 +134,10 @@ func (c *Client) do(client *http.Client, req *http.Request, method string, out a
 		return fmt.Errorf("telegram %s: decode body (status %d): %w", method, resp.StatusCode, err)
 	}
 	if !env.OK {
-		return &APIError{Method: method, Code: env.ErrorCode, Description: env.Description}
+		return &APIError{
+			Method: method, Code: env.ErrorCode, Description: env.Description,
+			RetryAfter: env.Parameters.RetryAfter,
+		}
 	}
 	if out != nil {
 		if err := json.Unmarshal(env.Result, out); err != nil {
@@ -226,17 +235,12 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text, parseMode 
 		return 0, fmt.Errorf("text exceeds Telegram %d character limit (%d runes)", MaxMessageRunes, len([]rune(text)))
 	}
 	payload := map[string]any{"chat_id": chatID, "text": text}
-	switch strings.ToLower(strings.TrimSpace(parseMode)) {
-	case "", "plain", "none", "text":
-		// plain
-	case "html":
-		payload["parse_mode"] = "HTML"
-	case "markdown", "md":
-		payload["parse_mode"] = "Markdown"
-	case "markdownv2", "mdv2":
-		payload["parse_mode"] = "MarkdownV2"
-	default:
-		return 0, fmt.Errorf("parse_mode must be empty, HTML, Markdown, or MarkdownV2 (got %q)", parseMode)
+	mode, err := resolveParseMode(parseMode)
+	if err != nil {
+		return 0, err
+	}
+	if mode != "" {
+		payload["parse_mode"] = mode
 	}
 	var msg struct {
 		MessageID int64 `json:"message_id"`
@@ -245,6 +249,89 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text, parseMode 
 		return 0, err
 	}
 	return msg.MessageID, nil
+}
+
+// notModifiedMarker is what Telegram answers when an edit would change nothing.
+const notModifiedMarker = "message is not modified"
+
+// EditMessageText rewrites a message in place. parseMode takes the same values
+// as SendMessage; when a mode is set and Telegram rejects the markup, the edit
+// is retried unformatted rather than lost.
+//
+// An edit whose text is byte-identical to what the message already says is
+// answered with "message is not modified", which is not a failure: the caller
+// asked for a state the chat is already in, so it reports success.
+//
+// A 429 is returned as an *APIError carrying RetryAfter. It is deliberately not
+// retried here: the caller driving an edit loop is the only one that knows
+// whether a stale progress frame is still worth sending a second later.
+func (c *Client) EditMessageText(ctx context.Context, chatID, messageID int64, text, parseMode string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("text required")
+	}
+	if len([]rune(text)) > MaxMessageRunes {
+		return fmt.Errorf("text exceeds Telegram %d character limit (%d runes)", MaxMessageRunes, len([]rune(text)))
+	}
+	payload := map[string]any{
+		"chat_id":                  chatID,
+		"message_id":               messageID,
+		"text":                     text,
+		"disable_web_page_preview": true,
+	}
+	mode, err := resolveParseMode(parseMode)
+	if err != nil {
+		return err
+	}
+	if mode != "" {
+		payload["parse_mode"] = mode
+	}
+
+	err = c.call(ctx, c.client, "editMessageText", payload, nil)
+	if err == nil {
+		return nil
+	}
+	var apiErr *APIError
+	if !AsAPIError(err, &apiErr) {
+		return err
+	}
+	if strings.Contains(strings.ToLower(apiErr.Description), notModifiedMarker) {
+		return nil
+	}
+	if mode == "" || apiErr.Code == 429 {
+		return err
+	}
+	delete(payload, "parse_mode")
+	return c.call(ctx, c.client, "editMessageText", payload, nil)
+}
+
+// DeleteMessage removes a message from the chat. A message that is already gone
+// is not an error: the caller wanted it absent and it is.
+func (c *Client) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
+	err := c.call(ctx, c.client, "deleteMessage", map[string]any{
+		"chat_id": chatID, "message_id": messageID,
+	}, nil)
+	var apiErr *APIError
+	if err != nil && AsAPIError(err, &apiErr) && apiErr.Code == 400 {
+		return nil
+	}
+	return err
+}
+
+// resolveParseMode maps the caller's spelling onto Telegram's, returning "" for
+// an unformatted message.
+func resolveParseMode(parseMode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(parseMode)) {
+	case "", "plain", "none", "text":
+		return "", nil
+	case "html":
+		return "HTML", nil
+	case "markdown", "md":
+		return "Markdown", nil
+	case "markdownv2", "mdv2":
+		return "MarkdownV2", nil
+	}
+	return "", fmt.Errorf("parse_mode must be empty, HTML, Markdown, or MarkdownV2 (got %q)", parseMode)
 }
 
 // GetWebhookInfo reports which webhook, if any, owns this bot's updates.

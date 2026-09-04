@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,18 +30,80 @@ const ownerChat = int64(1)
 type fakeTelegram struct {
 	mu   sync.Mutex
 	sent []sentMessage
+	// nextID is the message id handed out by sendMessage, so a test can tell
+	// which message an edit targets.
+	nextID int64
+	// failEdits, when set, makes every editMessageText answer with it.
+	failEdits *fakeAPIError
+}
+
+// fakeAPIError is a Bot API refusal a test asks the server to produce.
+type fakeAPIError struct {
+	Code        int
+	Description string
+	RetryAfter  int
+	// times is how many calls still fail; zero means "for ever".
+	times int
 }
 
 type sentMessage struct {
-	Method string
-	ChatID int64
-	Text   string
+	Method    string
+	ChatID    int64
+	Text      string
+	MessageID int64
 }
 
 func (f *fakeTelegram) record(m sentMessage) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, m)
+}
+
+// calls counts the requests made to one Bot API method.
+func (f *fakeTelegram) calls(method string) int {
+	n := 0
+	for _, m := range f.Sent() {
+		if m.Method == method {
+			n++
+		}
+	}
+	return n
+}
+
+// lastText is the body of the most recent call to a method, "" when there was
+// none.
+func (f *fakeTelegram) lastText(method string) string {
+	sent := f.Sent()
+	for i := len(sent) - 1; i >= 0; i-- {
+		if sent[i].Method == method {
+			return sent[i].Text
+		}
+	}
+	return ""
+}
+
+// failEditsWith makes the next n edits fail (n <= 0 means all of them).
+func (f *fakeTelegram) failEditsWith(code, retryAfter, n int, description string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failEdits = &fakeAPIError{Code: code, Description: description, RetryAfter: retryAfter, times: n}
+}
+
+// takeEditFailure returns the refusal to answer this edit with, if any.
+func (f *fakeTelegram) takeEditFailure() *fakeAPIError {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fail := f.failEdits
+	if fail == nil {
+		return nil
+	}
+	if fail.times > 0 {
+		fail.times--
+		if fail.times == 0 {
+			f.failEdits = nil
+		}
+	}
+	return fail
 }
 
 // Sent returns a copy of everything delivered so far.
@@ -67,14 +130,30 @@ func newFakeTelegram(t *testing.T) (*fakeTelegram, string) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method := path.Base(r.URL.Path)
 		var body struct {
-			ChatID int64  `json:"chat_id"`
-			Text   string `json:"text"`
+			ChatID    int64  `json:"chat_id"`
+			Text      string `json:"text"`
+			MessageID int64  `json:"message_id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		switch method {
 		case "sendMessage":
-			f.record(sentMessage{Method: method, ChatID: body.ChatID, Text: body.Text})
-			_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":42}}`)
+			f.mu.Lock()
+			f.nextID++
+			id := 41 + f.nextID
+			f.mu.Unlock()
+			f.record(sentMessage{Method: method, ChatID: body.ChatID, Text: body.Text, MessageID: id})
+			_, _ = fmt.Fprintf(w, `{"ok":true,"result":{"message_id":%d}}`, id)
+		case "editMessageText":
+			f.record(sentMessage{Method: method, ChatID: body.ChatID, Text: body.Text, MessageID: body.MessageID})
+			if fail := f.takeEditFailure(); fail != nil {
+				_, _ = fmt.Fprintf(w, `{"ok":false,"error_code":%d,"description":%q,"parameters":{"retry_after":%d}}`,
+					fail.Code, fail.Description, fail.RetryAfter)
+				return
+			}
+			_, _ = io.WriteString(w, `{"ok":true,"result":{"message_id":1}}`)
+		case "deleteMessage":
+			f.record(sentMessage{Method: method, ChatID: body.ChatID, MessageID: body.MessageID})
+			_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
 		case "getMe":
 			_, _ = io.WriteString(w, `{"ok":true,"result":{"id":77,"is_bot":true,"username":"casa_bot"}}`)
 		case "sendChatAction":

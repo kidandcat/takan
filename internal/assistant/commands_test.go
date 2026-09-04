@@ -134,7 +134,7 @@ func TestInterruptedRunIsAnnounced(t *testing.T) {
 
 	r := &chatRunner{wake: make(chan struct{}, 1)}
 	handle := cancelledHandle()
-	b.finishConversationalRun(context.Background(), ownerChat, true, RunSpec{}, handle, r)
+	b.finishConversationalRun(context.Background(), ownerChat, true, RunSpec{}, handle, r, nil)
 
 	got := fake.TextsTo(ownerChat)
 	if len(got) != 1 || !strings.Contains(got[0], "reiniciado a mitad") {
@@ -158,7 +158,7 @@ func TestUserCancelledRunIsNotAnnounced(t *testing.T) {
 		t.Fatal("expected the runner to report a cancellation")
 	}
 
-	b.finishConversationalRun(context.Background(), ownerChat, true, RunSpec{}, cancelledHandle(), r)
+	b.finishConversationalRun(context.Background(), ownerChat, true, RunSpec{}, cancelledHandle(), r, nil)
 	if got := fake.TextsTo(ownerChat); len(got) != 0 {
 		t.Fatalf("/cancel was already acknowledged; a second notice is noise: %v", got)
 	}

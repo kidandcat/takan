@@ -1,11 +1,13 @@
 package assistant
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -18,6 +20,15 @@ import (
 // killGrace is how long a cancelled agent has to exit after SIGTERM before the
 // whole process group is SIGKILLed.
 const killGrace = 10 * time.Second
+
+const (
+	// streamLineLimit bounds one NDJSON line. A tool that dumps a whole file
+	// into its update produces a line nothing needs to read; past this it is
+	// discarded, but the pipe keeps draining so the child never blocks.
+	streamLineLimit = 8 << 20
+	// streamRawLimit bounds the verbatim copy kept for the fallback below.
+	streamRawLimit = 4 << 20
+)
 
 // Run modes. Sessions are addressed by explicit id rather than "continue the
 // most recent session in this directory", which silently breaks when any other
@@ -51,6 +62,10 @@ type RunSpec struct {
 	// ParentSession is the session forked from, when Mode is RunFork.
 	ParentSession string
 	Mode          string
+	// OnProgress receives redacted progress events as the run streams them. It
+	// is called from the stdout reader, so it must not block: whatever it feeds
+	// has to be buffered, or the child stalls on a full pipe.
+	OnProgress func(ProgressEvent)
 }
 
 // AgentResult is the outcome of one CLI agent run.
@@ -93,10 +108,21 @@ type RunHandle struct {
 	pid       int
 	done      chan struct{}
 	cancel    context.CancelFunc
+	// progress is the run's bounded step history, filled by the stdout reader
+	// and replayed to an app that connects mid-run.
+	progress *progressRing
 
 	mu  sync.Mutex
 	res *AgentResult
 	err error
+}
+
+// Progress is the run's step history so far.
+func (h *RunHandle) Progress() []ProgressEvent {
+	if h.progress == nil {
+		return nil
+	}
+	return h.progress.snapshot()
 }
 
 // Done is closed when the run finishes.
@@ -175,15 +201,30 @@ func (a *Agent) Start(ctx context.Context, spec RunSpec) (*RunHandle, error) {
 	// The child is put in its own process group so that cancelling a run kills
 	// the whole tree: the agent spawns tools and subagents that would otherwise
 	// survive a kill aimed at the leader alone.
-	cmd := exec.Command(a.opts.Command, a.buildArgs(spec)...)
+	args := a.buildArgs(spec)
+	cmd := exec.Command(a.opts.Command, args...)
 	cmd.Dir = a.workdir
 	cmd.Env = a.childEnv()
 	cmd.Stdin = nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+
+	// With the streaming format stdout is NDJSON, read line by line so progress
+	// is live; the answer is then reconstructed from its text deltas. With any
+	// other format stdout is the answer itself and is buffered as before.
+	streaming := outputFormatOf(args) == OutputStreaming
+	var pipe io.ReadCloser
+	if streaming {
+		var err error
+		if pipe, err = cmd.StdoutPipe(); err != nil {
+			cancel()
+			return nil, fmt.Errorf("agent stdout pipe: %w", err)
+		}
+	} else {
+		cmd.Stdout = &stdout
+	}
 
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
@@ -197,6 +238,19 @@ func (a *Agent) Start(ctx context.Context, spec RunSpec) (*RunHandle, error) {
 		pid:       cmd.Process.Pid,
 		done:      make(chan struct{}),
 		cancel:    cancel,
+		progress:  &progressRing{},
+	}
+
+	// The reader must finish before Wait closes the pipe under it.
+	var stream streamResult
+	scanDone := make(chan struct{})
+	if streaming {
+		go func() {
+			defer close(scanDone)
+			stream = scanStream(pipe, handle.progress, spec.OnProgress, start)
+		}()
+	} else {
+		close(scanDone)
 	}
 
 	go func() {
@@ -219,6 +273,7 @@ func (a *Agent) Start(ctx context.Context, spec RunSpec) (*RunHandle, error) {
 			}
 		}()
 
+		<-scanDone
 		waitErr := cmd.Wait()
 		close(exited)
 
@@ -226,6 +281,9 @@ func (a *Agent) Start(ctx context.Context, spec RunSpec) (*RunHandle, error) {
 			Stdout:   strings.TrimSpace(stdout.String()),
 			Stderr:   strings.TrimSpace(stderr.String()),
 			Duration: time.Since(start),
+		}
+		if streaming {
+			res.Stdout = stream.answer()
 		}
 		res.RateLimited = looksRateLimited(res.Stderr)
 		var err error
@@ -258,6 +316,127 @@ func (a *Agent) Run(ctx context.Context, spec RunSpec) (*AgentResult, error) {
 	}
 	<-handle.Done()
 	return handle.Result()
+}
+
+// streamResult is what reading a run's NDJSON stdout produced.
+type streamResult struct {
+	// text is the answer, rebuilt by concatenating the runner's text deltas.
+	text string
+	// raw is a capped verbatim copy of the lines that did NOT parse as the
+	// known schema. It is the fallback answer.
+	raw string
+	// known is true once at least one line matched the runner's schema.
+	known bool
+	// lines and events are counted for the log line only.
+	lines, events int
+}
+
+// answer is the reply to deliver.
+//
+// The reply now depends on parsing a format the runner does not promise to keep
+// stable, so the failure mode is chosen deliberately: if nothing on stdout
+// looked like the streaming schema, the raw output is delivered verbatim. A
+// runner upgrade that changes the format therefore costs the progress display,
+// never the answer.
+func (s streamResult) answer() string {
+	if s.known {
+		return strings.TrimSpace(stripANSI(s.text))
+	}
+	if raw := strings.TrimSpace(stripANSI(s.raw)); raw != "" {
+		log.Printf("agent: stdout did not match the %s schema (%d lines); delivering it verbatim", OutputStreaming, s.lines)
+		return raw
+	}
+	return ""
+}
+
+// stripANSI removes terminal colour codes, which reach stdout whenever a tool
+// writes through a pty.
+func stripANSI(s string) string {
+	if !strings.Contains(s, "\x1b") {
+		return s
+	}
+	return ansiPattern.ReplaceAllString(s, "")
+}
+
+// scanStream reads the runner's NDJSON stdout to EOF, rebuilding the answer and
+// publishing progress as it goes. It always drains the pipe: returning early
+// would leave the child blocked on a full buffer.
+func scanStream(r io.Reader, ring *progressRing, onProgress func(ProgressEvent), start time.Time) streamResult {
+	var out streamResult
+	var text, raw strings.Builder
+
+	reader := bufio.NewReaderSize(r, 64<<10)
+	for {
+		line, truncated, err := readLimitedLine(reader, streamLineLimit)
+		if len(bytes.TrimSpace(line)) > 0 && !truncated {
+			out.lines++
+			delta, ev, known := parseStreamLine(line)
+			switch {
+			case known:
+				out.known = true
+			case raw.Len() < streamRawLimit:
+				// line still carries its newline; the fallback answer is the
+				// stray output exactly as the runner printed it.
+				raw.Write(line)
+			}
+			if delta != "" {
+				text.WriteString(delta)
+			}
+			if ev != nil {
+				ev.Elapsed = time.Since(start)
+				if stored, ok := ring.add(*ev); ok {
+					out.events++
+					if onProgress != nil {
+						onProgress(stored)
+					}
+				}
+			}
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				log.Printf("agent: reading the progress stream stopped early: %v", err)
+			}
+			break
+		}
+	}
+
+	out.text, out.raw = text.String(), raw.String()
+	return out
+}
+
+// readLimitedLine reads one newline-terminated line, discarding anything past
+// limit bytes and reporting that it did. The overflow is still consumed, which
+// is the point: the reader may never stop draining the pipe.
+func readLimitedLine(r *bufio.Reader, limit int) (line []byte, truncated bool, err error) {
+	for {
+		chunk, readErr := r.ReadSlice('\n')
+		if len(chunk) > 0 {
+			if len(line)+len(chunk) <= limit {
+				line = append(line, chunk...)
+			} else {
+				truncated = true
+			}
+		}
+		if errors.Is(readErr, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, truncated, readErr
+	}
+}
+
+// outputFormatOf reads the --output-format value out of a rendered argument
+// list. The runner's format and this code's parser must agree, so the args are
+// the single source of truth for both.
+func outputFormatOf(args []string) string {
+	for i, arg := range args {
+		if arg == outputFormatFlag && i+1 < len(args) {
+			return args[i+1]
+		}
+		if value, ok := strings.CutPrefix(arg, outputFormatFlag+"="); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 // killGroup signals the whole process group led by pid.

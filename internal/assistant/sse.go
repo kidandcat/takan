@@ -7,7 +7,7 @@ import (
 
 // AppEvent is one SSE payload on GET /v1/events.
 //
-// Types: typing, token, done, error, message, interrupted.
+// Types: typing, token, progress, done, error, message, interrupted.
 //
 // "interrupted" is terminal for the turn that was in flight: the app must stop
 // waiting on it and show nothing for it. A fresh "typing" follows immediately,
@@ -22,6 +22,10 @@ type AppEvent struct {
 	Token   string          `json:"token,omitempty"`
 	Error   string          `json:"error,omitempty"`
 	Since   string          `json:"since,omitempty"`
+	// Progress is one step of the run in flight, on a "progress" event. It is
+	// advisory: it is never persisted, and a client that misses one is not out
+	// of sync with anything.
+	Progress *ProgressEvent `json:"progress,omitempty"`
 }
 
 // EventBus fans app-channel events out to connected SSE clients. It is named
@@ -36,7 +40,10 @@ func NewEventBus() *EventBus {
 	return &EventBus{subs: map[chan AppEvent]struct{}{}}
 }
 
-const eventBuffer = 16
+// eventBuffer is the per-client backlog. A run now emits a progress event per
+// tool call on top of the turn's own events, so 16 was small enough that a
+// client stalled for a moment would start losing them.
+const eventBuffer = 64
 
 // Subscribe registers a client. The caller must Unsubscribe.
 func (h *EventBus) Subscribe() chan AppEvent {

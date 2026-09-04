@@ -19,6 +19,7 @@ group chats the assistant sits in never appear here.
 |---|---|
 | `message` | an unsolicited message (reminder, task result, `atlas-send`) |
 | `typing` | a run is in flight; `since` is when it started |
+| `progress` | one step of the run in flight, in `progress` |
 | `token` | reserved for streamed output |
 | `done` | terminal: the turn's reply, in `message` |
 | `error` | terminal: the turn failed; the text is in `error` and in `message` |
@@ -26,6 +27,43 @@ group chats the assistant sits in never appear here.
 
 `typing` is also replayed on connect when a run is already going, so an app that
 reconnects mid-turn shows the indicator immediately.
+
+### `progress`
+
+What the run is actually doing, so the indicator is not the only thing the app
+can show during a turn that takes minutes.
+
+```json
+{"type":"progress","progress":{"kind":"tool_start","tool":"run_terminal_command",
+ "detail":"ls -la","status":"in_progress","call_id":"call-6ee3…-0","seq":4,"elapsed_ms":20650}}
+```
+
+| Field | Meaning |
+|---|---|
+| `kind` | `tool_start`, `tool_end`, `thinking`, `end` |
+| `tool` | the runner's tool name |
+| `detail` | a redacted one-line summary, ≤80 runes; may be empty |
+| `status` | `in_progress`, `completed`, `failed` |
+| `call_id` | ties a `tool_end` to its `tool_start`, so a step is updated in place |
+| `seq` | monotonic within the run |
+| `elapsed_ms` | milliseconds since the run started |
+
+`detail` is scrubbed before it leaves the process: credentials, long base64/hex
+blobs and ANSI escapes are removed, and a tool's **output** is never forwarded at
+all. Treat it as a label, not as data.
+
+Progress is **advisory**: it is never persisted, it does not appear in
+`GET /v1/messages`, and a client that misses one is not out of sync with
+anything. `thinking` is emitted once per run, not once per reasoning token.
+
+The last 64 events of the run in flight are **replayed on connect**, right after
+the replayed `typing`. `kind: "end"` is terminal for the run's progress stream —
+it arrives when the run finishes and equally when it is interrupted, so the app
+can stop showing a step that will never be followed by another.
+
+The same run is shown in Telegram as a single message that is edited in place and
+then removed (or, for a background task, edited into the result); see
+`docs/PROGRESS-STREAMING.md`.
 
 ### `interrupted`
 

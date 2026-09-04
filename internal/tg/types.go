@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Chat kinds, normalised from Telegram's five chat types.
@@ -166,10 +167,22 @@ type APIError struct {
 	Method      string
 	Code        int
 	Description string
+	// RetryAfter is the seconds Telegram asked the caller to wait, set on a
+	// 429. Zero on every other failure.
+	RetryAfter int
 }
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("telegram %s failed (%d): %s", e.Method, e.Code, e.Description)
+}
+
+// RetryDelay is how long to wait before trying again, or zero when Telegram did
+// not ask for a wait.
+func (e *APIError) RetryDelay() time.Duration {
+	if e.RetryAfter <= 0 {
+		return 0
+	}
+	return time.Duration(e.RetryAfter) * time.Second
 }
 
 // AsAPIError reports whether err is an *APIError and stores it in target.

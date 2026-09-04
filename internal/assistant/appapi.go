@@ -212,6 +212,12 @@ func (b *Bot) handleAppEvents(w http.ResponseWriter, r *http.Request) {
 
 	if busy, elapsed := b.ChatBusy(b.ownerTelegram); busy {
 		writeSSE(w, flusher, typingEvent(time.Now().Add(-elapsed)))
+		// The indicator alone says only "wait"; the steps say what for. Replay
+		// them so an app that connects mid-run is level with one that was
+		// listening from the start.
+		for _, ev := range b.ProgressSnapshot(b.ownerTelegram) {
+			writeSSE(w, flusher, AppEvent{Type: EventProgress, Progress: &ev})
+		}
 	}
 
 	ticker := time.NewTicker(sseHeartbeat)

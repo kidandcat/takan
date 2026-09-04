@@ -68,6 +68,9 @@ type Bot struct {
 	startHook func(ctx context.Context, spec RunSpec) (*RunHandle, error)
 	// noticeHook captures outgoing notices in tests.
 	noticeHook func(text string)
+	// progressInterval overrides the progress-message edit throttle. Tests set
+	// it so they do not have to wait out 2.5s per frame.
+	progressInterval time.Duration
 
 	// runCtx is the process lifetime. App-channel requests must not use the HTTP
 	// request context or the worker dies when the handler returns.
@@ -239,8 +242,29 @@ type chatRunner struct {
 	// answer must be discarded rather than delivered: by the time it lands, the
 	// question it answers has already been replaced.
 	interrupted bool
+	// progress is the in-flight run's single editable progress message. It is
+	// kept here so an app connecting mid-run can be handed the steps so far.
+	progress *progressTracker
 	// wake nudges the worker that new work arrived.
 	wake chan struct{}
+}
+
+// setProgress points the runner at the in-flight run's progress display.
+func (r *chatRunner) setProgress(p *progressTracker) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.progress = p
+}
+
+// progressSnapshot is the in-flight run's steps so far, empty when idle.
+func (r *chatRunner) progressSnapshot() []ProgressEvent {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	p := r.progress
+	r.mu.Unlock()
+	return p.Snapshot()
 }
 
 // setHandle points the runner at the live agent process. It reports false when
@@ -664,6 +688,15 @@ func (b *Bot) RunningConversations() int {
 // InterruptedRuns is how many conversational runs a newer message has killed.
 func (b *Bot) InterruptedRuns() int64 { return b.interruptedRuns.Load() }
 
+// ProgressSnapshot is the steps of the run in flight for a chat, so a client
+// connecting mid-run can be shown where it got to.
+func (b *Bot) ProgressSnapshot(chatID int64) []ProgressEvent {
+	b.runnersMu.Lock()
+	r := b.runners[chatID]
+	b.runnersMu.Unlock()
+	return r.progressSnapshot()
+}
+
 // ChatBusy reports whether the shared runner is in flight.
 func (b *Bot) ChatBusy(chatID int64) (bool, time.Duration) {
 	b.runnersMu.Lock()
@@ -734,6 +767,7 @@ func (b *Bot) worker(ctx context.Context, chatID int64, r *chatRunner) {
 				r.cancel = nil
 				r.current = nil
 				r.interrupted = false
+				r.progress = nil
 				r.mu.Unlock()
 				break
 			}
@@ -806,6 +840,15 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 	log.Printf("running agent for %d message(s) (mode=%s, session=%s, carried_context=%t, prompt %d chars)",
 		len(batch), spec.Mode, spec.SessionID, note == "", len(prompt))
 
+	// One editable message shows what the run is doing. It is created on the
+	// first tool call, so a turn answered straight away never produces one, and
+	// it is removed again on every exit from here — delivered, failed,
+	// cancelled or interrupted — unless it was handed to the task manager.
+	progress := b.NewProgress(chatID, hasTG, started)
+	spec.OnProgress = progress.Add
+	r.setProgress(progress)
+	defer progress.Discard(context.WithoutCancel(ctx))
+
 	// The run is started on the process context, not the batch context, so it
 	// survives being promoted to a background task when this turn returns.
 	handle, err := b.startAgent(b.background(), spec)
@@ -836,12 +879,13 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 			stopTyping()
 		}
 		if !r.claimTurn() {
+			progress.Discard(sendCtx)
 			b.discardInterrupted(chatID, spec, handle)
 			return
 		}
 		b.processedRuns.Add(1)
 		b.noteRun()
-		b.finishConversationalRun(sendCtx, chatID, hasTG, spec, handle, r)
+		b.finishConversationalRun(sendCtx, chatID, hasTG, spec, handle, r, progress)
 
 	case <-time.After(b.opts.SoftTimeout()):
 		// Over budget. Do NOT kill it: hand the live process to the task
@@ -852,10 +896,11 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 		// Claim before adopting: once the task manager owns the process, an
 		// interrupt must not reach it. Background work outlives the chat.
 		if !r.claimTurn() {
+			progress.Discard(sendCtx)
 			b.discardInterrupted(chatID, spec, handle)
 			return
 		}
-		b.promote(sendCtx, chatID, hasTG, spec, handle, r)
+		b.promote(sendCtx, chatID, hasTG, spec, handle, r, progress)
 	}
 }
 
@@ -912,8 +957,13 @@ func todayKey() string {
 
 // finishConversationalRun delivers a run that completed within the budget.
 func (b *Bot) finishConversationalRun(ctx context.Context, chatID int64, hasTG bool,
-	spec RunSpec, handle *RunHandle, r *chatRunner) {
+	spec RunSpec, handle *RunHandle, r *chatRunner, progress *progressTracker) {
 	res, err := handle.Result()
+
+	// The steps were scaffolding for the wait; the answer replaces them. Remove
+	// the message before anything is delivered, so the chat never shows a
+	// half-finished checklist sitting above a finished reply.
+	progress.Discard(ctx)
 
 	if err != nil {
 		if res != nil && res.Cancelled {
@@ -955,27 +1005,31 @@ func (b *Bot) finishConversationalRun(ctx context.Context, chatID int64, hasTG b
 
 // promote moves an over-budget run to the background and says so.
 func (b *Bot) promote(ctx context.Context, chatID int64, hasTG bool,
-	spec RunSpec, handle *RunHandle, r *chatRunner) {
+	spec RunSpec, handle *RunHandle, r *chatRunner, progress *progressTracker) {
 	if b.tasks == nil {
 		// Without a task manager there is nowhere to hand it: keep waiting.
 		log.Printf("soft budget exceeded but the task manager is unavailable; waiting for the run")
 		<-handle.Done()
 		b.processedRuns.Add(1)
 		b.noteRun()
-		b.finishConversationalRun(ctx, chatID, hasTG, spec, handle, r)
+		b.finishConversationalRun(ctx, chatID, hasTG, spec, handle, r, progress)
 		return
 	}
 
-	task, err := b.tasks.Adopt(handle, tg.TruncateRunes(strings.TrimSpace(spec.Prompt), 60), chatID)
+	// The message the chat is already watching becomes the task's message: the
+	// notice is edited into it and the result will be too, so a promoted run
+	// still costs exactly one message from start to finish.
+	task, err := b.tasks.Adopt(handle, tg.TruncateRunes(strings.TrimSpace(spec.Prompt), 60), chatID, progress)
 	if err != nil {
 		log.Printf("failed to promote run to a task: %v", err)
 		<-handle.Done()
 		b.processedRuns.Add(1)
 		b.noteRun()
-		b.finishConversationalRun(ctx, chatID, hasTG, spec, handle, r)
+		b.finishConversationalRun(ctx, chatID, hasTG, spec, handle, r, progress)
 		return
 	}
 
+	progress.Release()
 	b.processedRuns.Add(1)
 	b.noteRun()
 	log.Printf("promoted over-budget run (session %s) to task %s after %s",
@@ -989,7 +1043,12 @@ func (b *Bot) promote(ctx context.Context, chatID int64, hasTG bool,
 	notice := fmt.Sprintf(
 		"⏳ Esto está tardando; lo paso a background (tarea %s). Te aviso con el resultado — puedes seguir escribiéndome.",
 		task.ID)
-	b.deliverNotice(ctx, chatID, hasTG, notice)
+	if b.noticeHook != nil {
+		b.noticeHook(notice)
+	}
+	// Not deliverNotice: that would post a second message next to the one the
+	// chat is already watching. The notice becomes that message's header.
+	progress.Announce(ctx, notice)
 }
 
 // interruptedNotice is what the operator sees when a reply died with the
@@ -1010,18 +1069,6 @@ func (b *Bot) noticeInterrupted(chatID int64, hasTG bool) {
 		Event: EventError, SkipTelegram: !hasTG,
 	}); err != nil {
 		log.Printf("could not report the interrupted run: %v", err)
-	}
-}
-
-// deliverNotice sends an informational message on every active channel.
-func (b *Bot) deliverNotice(ctx context.Context, chatID int64, hasTG bool, text string) {
-	if b.noticeHook != nil {
-		b.noticeHook(text)
-	}
-	if _, err := b.Emit(ctx, Outbound{
-		ChatID: chatID, Text: text, Source: SourceApp, Event: EventDone, SkipTelegram: !hasTG,
-	}); err != nil {
-		log.Printf("failed to send notice: %v", err)
 	}
 }
 

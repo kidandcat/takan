@@ -15,6 +15,21 @@ const (
 	// EventInterrupted terminates a turn whose run a newer message killed. It
 	// carries no message: there is no half-answer to show. See AppEvent.
 	EventInterrupted = "interrupted"
+	// EventProgress is one step of the run in flight. It is advisory: it never
+	// carries a message, it is not persisted, and dropping it costs nothing.
+	EventProgress = "progress"
+)
+
+// Outbound kinds. An assistant message is normally sent, but the run-progress
+// display needs to rewrite and remove one it already sent, and those have to go
+// through the same choke point as everything else.
+const (
+	// OutboundSend posts a new message. The zero value.
+	OutboundSend = ""
+	// OutboundEdit rewrites an existing message, addressed by MessageID.
+	OutboundEdit = "edit"
+	// OutboundDelete removes an existing message, addressed by MessageID.
+	OutboundDelete = "delete"
 )
 
 // Emitter is the outbound choke point, as seen by the scheduler, the task
@@ -62,6 +77,20 @@ type Outbound struct {
 	// Left empty, Emit uses the chunked send, which tries Markdown and falls
 	// back to plain text — the right default for agent-written replies.
 	ParseMode string
+	// Kind selects the Telegram operation: send (default), edit or delete.
+	Kind string
+	// MessageID is the message an edit or a delete targets.
+	MessageID int64
+	// SkipHistory keeps a message out of the app history and out of the push
+	// channel, delivering it to Telegram alone.
+	//
+	// The progress message is what this exists for: it is rewritten every few
+	// seconds and then removed, so recording each frame would fill the phone's
+	// conversation with lines that no longer exist in the chat. The app follows
+	// the same run through SSE `progress` events instead. A background task's
+	// final edit-into-result does NOT set it: that text is the task's answer and
+	// belongs in the history exactly once.
+	SkipHistory bool
 }
 
 // Emit delivers one outbound message and is the single choke point for
@@ -72,7 +101,13 @@ type Outbound struct {
 // Telegram. Group chats only get step 3: the app mirrors the owner's own
 // conversation, not every room the assistant sits in.
 //
-// No other code may call the Telegram client's Send* for the owner chat.
+// Editing and deleting go through here too (Kind), for the same reason: the
+// run-progress display rewrites and removes a message it sent, and a second
+// path to the Telegram client is exactly how the history drifts again. Those
+// two set SkipHistory, so the app follows the run through SSE instead.
+//
+// No other code may call the Telegram client's Send*/Edit*/Delete* for the
+// owner chat.
 func (b *Bot) Emit(ctx context.Context, out Outbound) (Receipt, error) {
 	target := out.ChatID
 	if target == 0 {
@@ -86,11 +121,17 @@ func (b *Bot) Emit(ctx context.Context, out Outbound) (Receipt, error) {
 	}
 
 	var receipt Receipt
-	if target == b.ownerTelegram {
+	if target == b.ownerTelegram && !out.SkipHistory && out.Kind != OutboundDelete {
 		receipt.StoredID = b.record(out)
 	}
 	if out.SkipTelegram || b.tg == nil {
 		return receipt, nil
+	}
+	switch out.Kind {
+	case OutboundEdit:
+		return receipt, b.tg.EditMessageText(ctx, target, out.MessageID, out.Text, out.ParseMode)
+	case OutboundDelete:
+		return receipt, b.tg.DeleteMessage(ctx, target, out.MessageID)
 	}
 	switch {
 	case out.File != "":

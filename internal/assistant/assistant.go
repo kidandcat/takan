@@ -149,6 +149,7 @@ func New(ctx context.Context, st *store.Store, box *cryptox.Box, hub *agenthub.H
 		return nil, err
 	}
 	a.Bot.SetTasks(a.TaskMgr)
+	a.TaskMgr.SetProgressHost(a.Bot)
 
 	a.Sched, err = NewScheduler(ctx, st, cfg.OwnerID, opts, workdir, home, a.Bot, cfg.OwnerTelegram)
 	if err != nil {
