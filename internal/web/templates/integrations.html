@@ -37,7 +37,8 @@
         <form method="post" action="/dashboard/modules/{{.ID}}/toggle" title="{{if .Enabled}}Disable{{else}}Enable{{end}}">
           <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
           <label class="switch">
-            <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.submit()"/>
+            <input type="checkbox" {{if .Enabled}}checked{{end}}
+              aria-label="Enable module {{.Name}}" onchange="this.form.submit()"/>
             <span class="slider"></span>
           </label>
         </form>

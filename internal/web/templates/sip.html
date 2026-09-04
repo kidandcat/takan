@@ -84,8 +84,9 @@
           <div class="name">Auto-answer</div>
           <div class="faint">When a gateway reports ringing, send <code>call.answer</code>.</div>
         </div>
-        <label class="switch" title="Auto-answer">
-          <input type="checkbox" name="auto_answer" value="1" {{if .SIPAutoAnswer}}checked{{end}}/>
+        <label class="switch">
+          <input type="checkbox" name="auto_answer" value="1" {{if .SIPAutoAnswer}}checked{{end}}
+            aria-label="Auto-answer incoming calls"/>
           <span class="slider"></span>
         </label>
       </div>

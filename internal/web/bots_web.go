@@ -58,6 +58,10 @@ func (s *Server) fillBotsDashboard(ctx context.Context, u *store.User, data *pag
 				data.BotPendingChats = append(data.BotPendingChats, cv)
 			}
 		}
+		if bv.Legacy {
+			data.LegacyBots = append(data.LegacyBots, bv)
+			continue
+		}
 		data.Bots = append(data.Bots, bv)
 	}
 }

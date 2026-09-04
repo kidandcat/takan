@@ -35,9 +35,9 @@
           <div class="name">Require approval for agent secrets</div>
           <div class="faint">On → <code>secrets_request</code> waits for you in this panel. Off → matched items are auto-approved (agent gets secrets immediately via <code>secrets_status</code>).</div>
         </div>
-        <label class="switch" title="Require approval">
+        <label class="switch">
           <input type="checkbox" name="require_approval" value="1" {{if .VaultRequireApproval}}checked{{end}}
-            onchange="this.form.submit()"/>
+            aria-label="Require approval for agent secrets" onchange="this.form.submit()"/>
           <span class="slider"></span>
         </label>
       </div>
@@ -245,7 +245,7 @@
     </div>
     <p class="muted" style="margin:0 0 .5rem;font-size:.9rem">
       Chrome or Google Password Manager export
-      (<code style="font-size:.78rem">name,url,username,password,note</code>.
+      (<code style="font-size:.78rem">name,url,username,password,note</code>).
     </p>
     <div>
       <label for="v-csv">CSV file</label>

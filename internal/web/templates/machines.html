@@ -44,9 +44,9 @@
           <div class="name">Enable direct bash</div>
           <div class="faint">Off → hide <code>machine_bash</code> from MCP. Agents act only via AI runners (if enabled).</div>
         </div>
-        <label class="switch" title="Enable direct bash">
+        <label class="switch">
           <input type="checkbox" name="bash_enabled" value="1" {{if .BashEnabled}}checked{{end}}
-            onchange="this.form.submit()"/>
+            aria-label="Enable direct bash" onchange="this.form.submit()"/>
           <span class="slider"></span>
         </label>
       </div>
@@ -111,8 +111,9 @@
           <div class="name">Enable AI tasks</div>
           <div class="faint">Off → hide <code>machine_ai_*</code> from MCP.</div>
         </div>
-        <label class="switch" title="Enable AI tasks">
-          <input type="checkbox" name="ai_tasks_enabled" value="1" {{if .AITasksEnabled}}checked{{end}}/>
+        <label class="switch">
+          <input type="checkbox" name="ai_tasks_enabled" value="1" {{if .AITasksEnabled}}checked{{end}}
+            aria-label="Enable AI tasks"/>
           <span class="slider"></span>
         </label>
       </div>
@@ -127,11 +128,13 @@
         <input type="hidden" name="runner_builtin" value="{{if .Builtin}}1{{else}}0{{end}}"/>
         <div class="ai-runner-head">
           <div class="row">
-            <label class="switch" title="{{if .Enabled}}Disable{{else}}Enable{{end}} runner">
-              <input type="checkbox" name="runner_enabled" value="{{.ID}}" {{if .Enabled}}checked{{end}}/>
+            <label class="switch">
+              <input type="checkbox" name="runner_enabled" value="{{.ID}}" {{if .Enabled}}checked{{end}}
+                aria-label="Enable runner {{.Name}}"/>
               <span class="slider"></span>
             </label>
-            <input name="runner_name" value="{{.Name}}" placeholder="Name" title="id: {{.ID}}"/>
+            <input id="runner-{{.ID}}-name" name="runner_name" value="{{.Name}}" placeholder="Name"
+              aria-label="Runner name" title="id: {{.ID}}"/>
             {{if .Builtin}}
               <span class="pill neutral">preset</span>
             {{else}}
@@ -145,8 +148,8 @@
             onclick="return confirm('Remove runner {{.Name}}?')">Remove</button>
           {{end}}
         </div>
-        <label class="cmd-label">Command</label>
-        <input name="runner_command" value="{{.Command}}" required
+        <label class="cmd-label" for="runner-{{.ID}}-command">Command</label>
+        <input id="runner-{{.ID}}-command" name="runner_command" value="{{.Command}}" required
           placeholder="claude -p --dangerously-skip-permissions {{"{{prompt}}"}}"/>
       </div>
       {{else}}

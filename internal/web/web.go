@@ -245,8 +245,11 @@ type pageData struct {
 	TVClientName string
 	TVWifiMAC    string
 	TVAppsText   string
-	// Bots module (Telegram assistant daemons on machines)
+	// Bots module (Telegram assistant daemons on machines).
+	// Bots holds the real daemons; LegacyBots holds the seeded owner
+	// placeholders, which are listed compactly so they cannot bury the fleet.
 	Bots            []botView
+	LegacyBots      []botView
 	BotsOnline      int
 	BotsPending     int
 	BotsDeliveries  int

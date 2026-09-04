@@ -184,20 +184,24 @@
     var row = document.createElement('div');
     row.className = 'contact-row';
     row.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;gap:.4rem;margin-bottom:.4rem;align-items:center';
+    // A placeholder is not an accessible name: it disappears on input and
+    // screen readers may skip it. Every field carries a real label.
     var keyIn = document.createElement('input');
     keyIn.name = 'contact_key';
     keyIn.placeholder = 'key (linkedin…)';
     keyIn.autocomplete = 'off';
+    keyIn.setAttribute('aria-label', 'Contact type');
     keyIn.value = key || '';
     var valIn = document.createElement('input');
     valIn.name = 'contact_value';
     valIn.placeholder = 'value';
     valIn.autocomplete = 'off';
+    valIn.setAttribute('aria-label', 'Contact value');
     valIn.value = value || '';
     var rm = document.createElement('button');
     rm.type = 'button';
     rm.className = 'icon-btn';
-    rm.setAttribute('aria-label', 'Remove');
+    rm.setAttribute('aria-label', 'Remove contact');
     rm.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>';
     rm.onclick = function () { row.remove(); };
     row.appendChild(keyIn);

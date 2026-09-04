@@ -87,8 +87,9 @@
           hx-swap="outerHTML">
       <input type="hidden" name="domain" value="{{.Name}}"/>
       <input type="hidden" name="enabled" value="{{if .Enabled}}0{{else}}1{{end}}"/>
-      <label class="switch" title="{{if .Enabled}}Disable{{else}}Enable{{end}}">
-        <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()"/>
+      <label class="switch">
+        <input type="checkbox" {{if .Enabled}}checked{{end}}
+          aria-label="Receive mail for {{.Name}}" onchange="this.form.requestSubmit()"/>
         <span class="slider"></span>
       </label>
     </form>
