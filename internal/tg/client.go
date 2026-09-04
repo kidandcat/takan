@@ -173,8 +173,27 @@ func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string
 }
 
 // SendText sends one chunk, trying Markdown first and falling back to plain
-// text when Telegram rejects the markup.
+// text when Telegram rejects the markup. GFM tables are rewritten first so
+// they stay readable on a phone.
 func (c *Client) SendText(ctx context.Context, chatID int64, text string) error {
+	return c.sendChunks(ctx, chatID, RewriteTablesForTelegram(text))
+}
+
+// SendLongText splits text into API-sized chunks and sends them in order.
+func (c *Client) SendLongText(ctx context.Context, chatID int64, text string) error {
+	return c.sendChunks(ctx, chatID, RewriteTablesForTelegram(text))
+}
+
+func (c *Client) sendChunks(ctx context.Context, chatID int64, text string) error {
+	for _, chunk := range SplitMessage(text, MaxMessageRunes) {
+		if err := c.sendOne(ctx, chatID, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) sendOne(ctx context.Context, chatID int64, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -194,16 +213,6 @@ func (c *Client) SendText(ctx context.Context, chatID int64, text string) error 
 	}
 	delete(payload, "parse_mode")
 	return c.call(ctx, c.client, "sendMessage", payload, nil)
-}
-
-// SendLongText splits text into API-sized chunks and sends them in order.
-func (c *Client) SendLongText(ctx context.Context, chatID int64, text string) error {
-	for _, chunk := range SplitMessage(text, MaxMessageRunes) {
-		if err := c.SendText(ctx, chatID, chunk); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // SendMessage posts text to chatID with an explicit parse mode and returns the
