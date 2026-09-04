@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,38 +65,297 @@ func TestChatRunnerBusyAndStop(t *testing.T) {
 	}
 }
 
-// TestEnqueueAcksWhileBusy checks the core promise: a message arriving during a
-// run is acknowledged immediately rather than silently queued.
-func TestEnqueueAcksWhileBusy(t *testing.T) {
+// TestBatchPromptMarksSupersededTurns pins the shape of a coalesced prompt: the
+// interrupted turn is carried, in order, labelled, and the agent is told the
+// last message is the live one.
+func TestBatchPromptMarksSupersededTurns(t *testing.T) {
 	b := newTestBot(t)
+	batch := queuedTG("esto está solucionado?", "es Astra en app store")
+	batch[0].superseded.Store(true)
+
+	prompt := b.buildBatchPrompt(context.Background(), ownerChat, batch)
+
+	if !strings.Contains(prompt, supersededMarker) {
+		t.Fatalf("the interrupted turn must be labelled:\n%s", prompt)
+	}
+	first := strings.Index(prompt, "esto está solucionado?")
+	second := strings.Index(prompt, "es Astra en app store")
+	if first < 0 || second < 0 {
+		t.Fatalf("both turns must survive the interrupt:\n%s", prompt)
+	}
+	if first > second {
+		t.Fatalf("the interrupted turn must come first:\n%s", prompt)
+	}
+	if strings.Index(prompt, supersededMarker) > first {
+		t.Fatalf("the marker belongs on the interrupted turn, not after it:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "interrupted you") {
+		t.Fatalf("the prompt must say the previous run was cut short:\n%s", prompt)
+	}
+	// The header for an ordinary pile-up would be wrong here: nothing queued.
+	if strings.Contains(prompt, "while you were busy") {
+		t.Fatalf("an interrupt is not a backlog:\n%s", prompt)
+	}
+}
+
+// blockingRun builds a startHook whose first run blocks until it is cancelled
+// (like a real grok being killed) and whose later runs answer immediately. It
+// returns the prompts each run was given, in order.
+type runRecorder struct {
+	mu      sync.Mutex
+	prompts []string
+
+	started chan struct{}
+	release chan struct{}
+}
+
+func (rec *runRecorder) record(prompt string) int {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	rec.prompts = append(rec.prompts, prompt)
+	return len(rec.prompts)
+}
+
+func (rec *runRecorder) all() []string {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return append([]string(nil), rec.prompts...)
+}
+
+// ownerText is an inbound Telegram message from the owner's own chat.
+func ownerText(id int64, text string) *tg.Message {
+	return &tg.Message{
+		MessageID: id, Chat: tg.Chat{ID: ownerChat, Type: "private"},
+		From: &tg.User{ID: ownerChat}, Text: text,
+	}
+}
+
+// TestNewMessageInterruptsTheRunInFlight is the core promise: writing again
+// kills the run rather than queueing behind it, its answer is thrown away, and
+// exactly one replacement run is started carrying both turns.
+func TestNewMessageInterruptsTheRunInFlight(t *testing.T) {
+	a, fake := newTestAssistantWithTelegram(t)
+	b := a.Bot
+	b.opts.Agent.SoftTimeout = "30s"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Take the runner's slot without starting the worker, simulating a run.
-	b.runnersMu.Lock()
-	r := &chatRunner{wake: make(chan struct{}, 1), running: true, startedAt: time.Now(), cancel: func() {}}
-	b.runners[ownerChat] = r
-	b.runnersMu.Unlock()
-
-	acked := make(chan struct{}, 1)
-	b.ackHook = func(int64, time.Duration, int) { acked <- struct{}{} }
-
-	b.enqueue(ctx, &tg.Message{
-		MessageID: 7, Chat: tg.Chat{ID: ownerChat, Type: "private"},
-		From: &tg.User{ID: ownerChat}, Text: "hello",
+	rec := &runRecorder{started: make(chan struct{}, 4)}
+	b.startHook = stubStart(func(spec RunSpec, cancelled <-chan struct{}) (*AgentResult, error) {
+		n := rec.record(spec.Prompt)
+		rec.started <- struct{}{}
+		if n > 1 {
+			return &AgentResult{Stdout: "answer to both", Duration: time.Millisecond}, nil
+		}
+		<-cancelled
+		// The nasty case: the run actually produced an answer just as it was
+		// killed. It must still never reach the chat.
+		return &AgentResult{Stdout: "half answer", Duration: time.Second}, nil
 	})
 
-	select {
-	case <-acked:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected an immediate ack while a run was in flight")
+	b.enqueue(ctx, ownerText(1, "esto está solucionado?"))
+	waitStarted(t, rec, "the first run never started")
+
+	b.enqueue(ctx, ownerText(2, "es Astra en app store"))
+	waitStarted(t, rec, "the replacement run never started")
+
+	waitFor(t, func() bool { return containsText(historyTexts(b), "answer to both") },
+		"the replacement run's answer never reached the conversation")
+
+	prompts := rec.all()
+	if len(prompts) != 2 {
+		t.Fatalf("expected exactly two runs (the killed one and its replacement), got %d: %v", len(prompts), prompts)
+	}
+	replacement := prompts[1]
+	for _, want := range []string{supersededMarker, "esto está solucionado?", "es Astra en app store"} {
+		if !strings.Contains(replacement, want) {
+			t.Fatalf("the replacement prompt is missing %q:\n%s", want, replacement)
+		}
 	}
 
-	r.mu.Lock()
-	queued := len(r.pending)
-	r.mu.Unlock()
-	if queued != 1 {
-		t.Fatalf("expected the message to be queued, got %d pending", queued)
+	for _, texts := range [][]string{historyTexts(b), fake.TextsTo(ownerChat)} {
+		if containsText(texts, "half answer") {
+			t.Fatalf("the killed run's reply must never be delivered: %v", texts)
+		}
+		if containsText(texts, "encolado") || containsText(texts, "Interrumpido") {
+			t.Fatalf("an interrupt is silent; the typing indicator is the whole story: %v", texts)
+		}
+	}
+
+	if b.InterruptedRuns() != 1 {
+		t.Fatalf("expected one interrupted run to be counted, got %d", b.InterruptedRuns())
+	}
+	waitFor(t, func() bool { return b.RunningConversations() == 0 },
+		"the chat's slot was never released, so /health and deploy.sh would both hang")
+}
+
+// TestBurstInterruptsOnceAndKeepsOrder covers the real habit: three corrections
+// in a row must produce ONE replacement run, not three.
+func TestBurstInterruptsOnceAndKeepsOrder(t *testing.T) {
+	a := newTestAssistantWithLegacyDir(t, "")
+	b := a.Bot
+	b.opts.Agent.SoftTimeout = "30s"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rec := &runRecorder{started: make(chan struct{}, 8), release: make(chan struct{})}
+	b.startHook = stubStart(func(spec RunSpec, cancelled <-chan struct{}) (*AgentResult, error) {
+		n := rec.record(spec.Prompt)
+		rec.started <- struct{}{}
+		if n > 1 {
+			return &AgentResult{Stdout: "one answer", Duration: time.Millisecond}, nil
+		}
+		<-cancelled
+		// Hold the killed run open until the whole burst has landed, so the
+		// worker cannot start a replacement halfway through it.
+		<-rec.release
+		return &AgentResult{Cancelled: true, Duration: time.Second}, context.Canceled
+	})
+
+	b.enqueue(ctx, ownerText(1, "uno"))
+	waitStarted(t, rec, "the first run never started")
+
+	b.enqueue(ctx, ownerText(2, "dos"))
+	b.enqueue(ctx, ownerText(3, "tres"))
+	b.enqueue(ctx, ownerText(4, "cuatro"))
+	close(rec.release)
+
+	waitStarted(t, rec, "the replacement run never started")
+	waitFor(t, func() bool { return containsText(historyTexts(b), "one answer") },
+		"the replacement run never answered")
+
+	prompts := rec.all()
+	if len(prompts) != 2 {
+		t.Fatalf("a burst must interrupt once and coalesce, got %d runs: %v", len(prompts), prompts)
+	}
+	replacement := prompts[1]
+	last := -1
+	for _, want := range []string{"uno", "dos", "tres", "cuatro"} {
+		at := strings.Index(replacement, want)
+		if at < 0 {
+			t.Fatalf("the coalesced prompt lost %q:\n%s", want, replacement)
+		}
+		if at < last {
+			t.Fatalf("the coalesced prompt reordered %q:\n%s", want, replacement)
+		}
+		last = at
+	}
+	if b.InterruptedRuns() != 1 {
+		t.Fatalf("a burst must interrupt exactly once, got %d", b.InterruptedRuns())
+	}
+}
+
+// TestBackgroundTaskSurvivesANewMessage is the boundary the interrupt must not
+// cross. A run that outlived the soft budget belongs to the task manager now,
+// and a new message starts a fresh conversation instead of killing it.
+func TestBackgroundTaskSurvivesANewMessage(t *testing.T) {
+	a := newTestAssistant(t)
+	b := a.Bot
+	b.opts.Agent.SoftTimeout = "80ms"
+	a.TaskMgr.Start(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var killed atomic.Bool
+	rec := &runRecorder{started: make(chan struct{}, 4), release: make(chan struct{})}
+	b.startHook = stubStart(func(spec RunSpec, cancelled <-chan struct{}) (*AgentResult, error) {
+		n := rec.record(spec.Prompt)
+		rec.started <- struct{}{}
+		if n > 1 {
+			return &AgentResult{Stdout: "fresh answer", Duration: time.Millisecond}, nil
+		}
+		select {
+		case <-rec.release:
+		case <-cancelled:
+			killed.Store(true)
+		}
+		return &AgentResult{Stdout: "slow answer", Duration: time.Second}, nil
+	})
+
+	b.enqueue(ctx, ownerText(1, "algo lento"))
+	waitStarted(t, rec, "the slow run never started")
+
+	// Wait for the promotion to actually happen before writing again.
+	waitFor(t, func() bool {
+		for _, task := range a.TaskMgr.List() {
+			if task.Promoted && task.Running() {
+				return true
+			}
+		}
+		return false
+	}, "the slow run was never promoted to a background task")
+
+	b.enqueue(ctx, ownerText(2, "otra cosa"))
+	waitStarted(t, rec, "the new message did not start its own run")
+	waitFor(t, func() bool { return containsText(historyTexts(b), "fresh answer") },
+		"the new message was never answered")
+
+	if killed.Load() {
+		t.Fatal("a new message must never cancel background work")
+	}
+	if b.InterruptedRuns() != 0 {
+		t.Fatalf("nothing conversational was in flight, so nothing should have been interrupted: %d", b.InterruptedRuns())
+	}
+	for _, task := range a.TaskMgr.List() {
+		if task.Promoted && !task.Running() {
+			t.Fatalf("the promoted task must still be running, got %s", task.State)
+		}
+	}
+
+	// The replacement prompt is a fresh turn, not a coalesced one: the promoted
+	// turn is still being answered in the background and is not superseded.
+	if prompts := rec.all(); len(prompts) < 2 || strings.Contains(prompts[1], supersededMarker) {
+		t.Fatalf("a message after a promotion starts a clean turn, got %v", prompts)
+	}
+	close(rec.release)
+}
+
+// TestNewCommandInterruptsTheRunInFlight: /new resets the conversation, so
+// keeping the run alive makes no sense — but unlike an ordinary interrupt the
+// discarded turn is NOT carried into a replacement run.
+func TestNewCommandInterruptsTheRunInFlight(t *testing.T) {
+	a, fake := newTestAssistantWithTelegram(t)
+	b := a.Bot
+	b.opts.Agent.SoftTimeout = "30s"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var killed atomic.Bool
+	rec := &runRecorder{started: make(chan struct{}, 4)}
+	b.startHook = stubStart(func(spec RunSpec, cancelled <-chan struct{}) (*AgentResult, error) {
+		rec.record(spec.Prompt)
+		rec.started <- struct{}{}
+		<-cancelled
+		killed.Store(true)
+		return &AgentResult{Cancelled: true, Duration: time.Second}, context.Canceled
+	})
+
+	b.enqueue(ctx, ownerText(1, "una pregunta larga"))
+	waitStarted(t, rec, "the run never started")
+
+	b.handleCommand(ctx, ownerChat, ownerText(2, "/new"))
+
+	waitFor(t, killed.Load, "/new left the run alive; its answer belongs to a conversation that no longer exists")
+	waitFor(t, func() bool { return b.RunningConversations() == 0 }, "the chat's slot was never released")
+
+	if chat := b.state.Chat(ownerChat); chat.ConversationStarted {
+		t.Fatalf("/new must rotate the session, got %#v", chat)
+	}
+	if prompts := rec.all(); len(prompts) != 1 {
+		t.Fatalf("/new discards the turn rather than replaying it, got %d runs: %v", len(prompts), prompts)
+	}
+	if texts := fake.TextsTo(ownerChat); !containsText(texts, "Empezamos conversación nueva") {
+		t.Fatalf("expected the reset confirmation, got %v", texts)
+	}
+}
+
+// waitStarted blocks until one more run has begun.
+func waitStarted(t *testing.T, rec *runRecorder, msg string) {
+	t.Helper()
+	select {
+	case <-rec.started:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s (prompts so far: %v)", msg, rec.all())
 	}
 }
 

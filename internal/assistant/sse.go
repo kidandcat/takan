@@ -7,14 +7,21 @@ import (
 
 // AppEvent is one SSE payload on GET /v1/events.
 //
-// Types: typing, token, done, error, message, queued.
+// Types: typing, token, done, error, message, interrupted.
+//
+// "interrupted" is terminal for the turn that was in flight: the app must stop
+// waiting on it and show nothing for it. A fresh "typing" follows immediately,
+// because an interrupt always starts a replacement run — the app should not
+// clear the indicator on the strength of this event alone.
+//
+// It replaced "queued", which announced that a message had been parked behind a
+// running turn. Messages are no longer parked: they interrupt.
 type AppEvent struct {
 	Type    string          `json:"type"`
 	Message *HistoryMessage `json:"message,omitempty"`
 	Token   string          `json:"token,omitempty"`
 	Error   string          `json:"error,omitempty"`
 	Since   string          `json:"since,omitempty"`
-	Queued  int             `json:"queued,omitempty"`
 }
 
 // EventBus fans app-channel events out to connected SSE clients. It is named

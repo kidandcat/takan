@@ -64,8 +64,6 @@ type Bot struct {
 	// usage reports the CLI agent's consumption for /usage.
 	usage UsageReporter
 
-	// ackHook replaces the outgoing "still busy" notice in tests.
-	ackHook func(chatID int64, elapsed time.Duration, queued int)
 	// startHook replaces the CLI agent in tests.
 	startHook func(ctx context.Context, spec RunSpec) (*RunHandle, error)
 	// noticeHook captures outgoing notices in tests.
@@ -78,6 +76,11 @@ type Bot struct {
 	startedAt     time.Time
 	lastUpdateAt  atomic.Int64
 	processedRuns atomic.Int64
+	// interruptedRuns counts conversational runs killed by a newer message.
+	// They are not processedRuns: nothing was delivered and nothing was billed
+	// as a completed turn, and the question they answered is re-asked by the
+	// run that replaced them.
+	interruptedRuns atomic.Int64
 	// runsToday counts conversational runs since midnight, for /usage.
 	runsMu    sync.Mutex
 	runDays   map[string]int
@@ -184,6 +187,20 @@ func (b *Bot) inboxDirFor(chatID int64) string {
 type queuedMsg struct {
 	tg  *tg.Message
 	app *appInbound
+
+	// superseded marks a turn whose run was interrupted by a later message. It
+	// is atomic because the interrupting goroutine sets it while the worker may
+	// still be rendering the batch it belongs to.
+	superseded atomic.Bool
+
+	// rendered caches the prompt built for this message. An interrupted turn is
+	// re-queued and rendered again, and re-rendering would download its photo a
+	// second time and pay Groq for a second transcription of the same voice note.
+	rendered   string
+	renderedOK bool
+	// persisted records that this Telegram message already reached the app
+	// history, so a re-queued turn does not appear twice on the phone.
+	persisted bool
 }
 
 // appInbound is a message that arrived through the native app.
@@ -200,9 +217,14 @@ type chatRunner struct {
 	// pending holds messages waiting for the current run to finish. They are
 	// coalesced into a single prompt rather than replayed one run at a time.
 	pending []*queuedMsg
+	// current is the batch the in-flight run is answering. It exists so an
+	// interrupt can put that turn back at the front of pending instead of
+	// losing it: the next run answers it together with the message that
+	// interrupted it.
+	current []*queuedMsg
 	// running reports whether an agent run is in flight for this chat.
 	running bool
-	// startedAt is when the in-flight run began, used for the "still busy" ack.
+	// startedAt is when the in-flight run began.
 	startedAt time.Time
 	// cancel stops the in-flight run; nil when idle.
 	cancel context.CancelFunc
@@ -213,15 +235,101 @@ type chatRunner struct {
 	// They produce the same cancelled result, but only one of them is something
 	// the operator already knows about.
 	cancelledByUser bool
+	// interrupted marks the in-flight run as superseded by a newer message. Its
+	// answer must be discarded rather than delivered: by the time it lands, the
+	// question it answers has already been replaced.
+	interrupted bool
 	// wake nudges the worker that new work arrived.
 	wake chan struct{}
 }
 
-// setHandle points the runner at the live agent process.
-func (r *chatRunner) setHandle(h *RunHandle) {
+// setHandle points the runner at the live agent process. It reports false when
+// the run was interrupted while it was still starting, in which case the caller
+// owns stopping it.
+func (r *chatRunner) setHandle(h *RunHandle) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.interrupted {
+		return false
+	}
 	r.handle = h
+	return true
+}
+
+// superseded reports whether the in-flight run has been interrupted.
+func (r *chatRunner) superseded() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.interrupted
+}
+
+// claimTurn ends the turn and reports whether this caller owns its delivery.
+//
+// It is the single point where "the run finished" races "a new message
+// arrived": whoever gets here first wins. On true the batch is released, so a
+// later interrupt cannot re-queue a turn that has already been answered — and,
+// just as importantly, cannot kill a run that has just been handed to the task
+// manager. On false the caller must emit nothing at all.
+func (r *chatRunner) claimTurn() bool {
+	if r == nil {
+		return true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.interrupted {
+		return false
+	}
+	r.current = nil
+	r.handle = nil
+	return true
+}
+
+// releaseTurn ends a turn that has nothing to deliver, so a late interrupt does
+// not re-queue a batch nobody is working on any more.
+func (r *chatRunner) releaseTurn() { _ = r.claimTurn() }
+
+// interrupt stops the in-flight conversational run because a newer message has
+// arrived, and folds the interrupted turn back into the backlog so the next run
+// answers both together. It reports whether a run was actually interrupted.
+//
+// It deliberately does nothing once the turn has been claimed (delivered, or
+// promoted to a background task): background work is never cancelled by a new
+// message, only the conversational run in flight is.
+func (r *chatRunner) interrupt() bool {
+	r.mu.Lock()
+	if !r.running || r.interrupted || len(r.current) == 0 {
+		r.mu.Unlock()
+		return false
+	}
+	handle, cancel := r.handle, r.cancel
+	if handle != nil && handle.Finished() {
+		// The answer is already written; let it be delivered and let the new
+		// message start the next run behind it.
+		r.mu.Unlock()
+		return false
+	}
+	r.interrupted = true
+	for _, m := range r.current {
+		m.superseded.Store(true)
+	}
+	r.pending = append(append(make([]*queuedMsg, 0, len(r.current)+len(r.pending)), r.current...), r.pending...)
+	r.current = nil
+	r.mu.Unlock()
+
+	// Kill the process itself, not just the bookkeeping: the run was started on
+	// the process context so it survives promotion, which means cancelling the
+	// turn context alone would leave grok running and burning tokens.
+	if handle != nil {
+		handle.Cancel()
+	} else if cancel != nil {
+		// No process yet — the turn is still downloading attachments or
+		// transcribing. Cancelling the turn context stops it before it starts.
+		cancel()
+	}
+	return true
 }
 
 // clearHandle detaches the agent process from the runner.
@@ -518,17 +626,43 @@ func (b *Bot) runner(ctx context.Context, chatID int64) *chatRunner {
 	return r
 }
 
-// enqueue adds a Telegram message to the chat's backlog. If a run is already in
-// flight the message is acknowledged immediately, so the chat never goes silent.
+// enqueue adds a Telegram message to the chat's backlog, interrupting whatever
+// the chat was answering.
 func (b *Bot) enqueue(ctx context.Context, msg *tg.Message) {
 	b.enqueueMsg(ctx, msg.Chat.ID, &queuedMsg{tg: msg}, true)
 }
 
 // enqueueApp adds a native-app message to the owner's runner, the same one
-// Telegram uses.
+// Telegram uses. The app is the same conversation, so it interrupts too.
 func (b *Bot) enqueueApp(_ context.Context, in *appInbound) {
 	b.enqueueMsg(b.background(), b.ownerTelegram, &queuedMsg{app: in}, false)
 }
+
+// RunningConversations is how many chats have a conversational run in flight.
+//
+// It is a gauge, not a counter, and it is the number that has to come back down
+// after an interrupt: a killed run must free its chat's slot, or /health would
+// show a conversation in flight forever and deploy.sh would wait out its whole
+// window before every restart.
+func (b *Bot) RunningConversations() int {
+	b.runnersMu.Lock()
+	runners := make([]*chatRunner, 0, len(b.runners))
+	for _, r := range b.runners {
+		runners = append(runners, r)
+	}
+	b.runnersMu.Unlock()
+
+	n := 0
+	for _, r := range runners {
+		if busy, _ := r.busy(); busy {
+			n++
+		}
+	}
+	return n
+}
+
+// InterruptedRuns is how many conversational runs a newer message has killed.
+func (b *Bot) InterruptedRuns() int64 { return b.interruptedRuns.Load() }
 
 // ChatBusy reports whether the shared runner is in flight.
 func (b *Bot) ChatBusy(chatID int64) (bool, time.Duration) {
@@ -542,6 +676,17 @@ func (b *Bot) ChatBusy(chatID int64) (bool, time.Duration) {
 }
 
 // enqueueMsg is the shared queue entry point for every channel.
+//
+// A new message from the owner INTERRUPTS the conversational run in flight
+// rather than queueing behind it. In practice the second message is a
+// clarification of the first ("is this fixed?" + screenshot, then "it's Astra
+// in the App Store"), so waiting out an answer to a question that has already
+// been refined is wasted time and a wasted answer. The interrupted turn is not
+// lost: it is folded into the next prompt, marked as superseded.
+//
+// Background work is never touched. Only the chat's own conversational run is
+// interruptible; tasks (including runs auto-promoted past the soft budget),
+// scheduled jobs and machine_ai_run jobs keep going.
 func (b *Bot) enqueueMsg(ctx context.Context, chatID int64, msg *queuedMsg, telegramAck bool) {
 	r := b.runner(ctx, chatID)
 
@@ -554,36 +699,22 @@ func (b *Bot) enqueueMsg(ctx context.Context, chatID int64, msg *queuedMsg, tele
 		return
 	}
 	r.pending = append(r.pending, msg)
-	queued := len(r.pending)
-	busy, elapsed := r.running, time.Since(r.startedAt)
 	r.mu.Unlock()
 
-	if busy {
-		if telegramAck {
-			go b.sendAck(ctx, chatID, elapsed, queued)
-		} else {
-			b.events.Broadcast(AppEvent{Type: "queued", Queued: queued, Since: time.Now().Add(-elapsed).UTC().Format(time.RFC3339)})
-		}
+	if r.interrupt() {
+		b.interruptedRuns.Add(1)
+		log.Printf("chat %d: a new message interrupted the run in flight; coalescing it into the next turn", chatID)
+		// Deliberately silent on Telegram: the new run's typing indicator is
+		// the whole story, and a "⏹ interrumpido" line every time he corrects
+		// himself is noise in a chat he reads all day. The app gets a terminal
+		// event instead, so it stops waiting on the discarded turn.
+		b.events.Broadcast(AppEvent{Type: EventInterrupted})
 	}
+
 	select {
 	case r.wake <- struct{}{}:
 	default:
 	}
-}
-
-// sendAck tells the owner his message landed while a run is still going.
-func (b *Bot) sendAck(ctx context.Context, chatID int64, elapsed time.Duration, queued int) {
-	if b.ackHook != nil {
-		b.ackHook(chatID, elapsed, queued)
-		return
-	}
-	note := fmt.Sprintf("⏳ Sigo con lo anterior (%s) — tu mensaje queda encolado.",
-		elapsed.Truncate(time.Second))
-	if queued > 1 {
-		note = fmt.Sprintf("⏳ Sigo con lo anterior (%s). Tienes %d mensajes en cola; los responderé juntos.",
-			elapsed.Truncate(time.Second), queued)
-	}
-	b.say(ctx, chatID, note)
 }
 
 // worker drains one chat's backlog, one agent run at a time. Each run takes
@@ -601,6 +732,8 @@ func (b *Bot) worker(ctx context.Context, chatID int64, r *chatRunner) {
 			if len(r.pending) == 0 {
 				r.running = false
 				r.cancel = nil
+				r.current = nil
+				r.interrupted = false
 				r.mu.Unlock()
 				break
 			}
@@ -608,8 +741,10 @@ func (b *Bot) worker(ctx context.Context, chatID int64, r *chatRunner) {
 			r.pending = nil
 			runCtx, cancel := context.WithCancel(ctx)
 			r.running = true
+			r.interrupted = false
 			r.startedAt = time.Now()
 			r.cancel = cancel
+			r.current = batch
 			r.mu.Unlock()
 
 			b.handleBatch(runCtx, chatID, r, batch)
@@ -622,6 +757,7 @@ func (b *Bot) worker(ctx context.Context, chatID int64, r *chatRunner) {
 func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batch []*queuedMsg) {
 	defer func() {
 		if rec := recover(); rec != nil {
+			r.releaseTurn()
 			log.Printf("panic handling batch of %d message(s): %v\n%s", len(batch), rec, debug.Stack())
 			b.emitError(context.WithoutCancel(ctx), chatID, false, "Error interno al procesar ese mensaje.")
 		}
@@ -633,12 +769,20 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 
 	prompt := b.buildBatchPrompt(ctx, chatID, batch)
 	if strings.TrimSpace(prompt) == "" {
+		r.releaseTurn()
 		log.Printf("batch of %d message(s) produced an empty prompt, ignoring", len(batch))
 		return
 	}
 
 	hasTG, _ := batchChannels(batch)
 	b.persistTelegramInbound(chatID, batch)
+
+	// Building the prompt downloads attachments and transcribes voice, which
+	// takes seconds. If he wrote again in the meantime there is no point
+	// starting a run for a question he has already replaced.
+	if r.superseded() {
+		return
+	}
 
 	var stopTyping func()
 	if hasTG && b.tg != nil {
@@ -669,13 +813,19 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 		if stopTyping != nil {
 			stopTyping()
 		}
+		r.releaseTurn()
 		log.Printf("could not start agent: %v", err)
 		b.deliverError(context.WithoutCancel(ctx), chatID, hasTG, "No he podido arrancar el agente: "+tg.TruncateRunes(err.Error(), 200))
 		return
 	}
 
-	// /cancel targets the live process from here on.
-	r.setHandle(handle)
+	// /cancel and the interrupt path target the live process from here on.
+	if !r.setHandle(handle) {
+		// He wrote again in the window between exec and this line. Kill it here
+		// or nothing else will: interrupt() had no handle to cancel.
+		handle.Cancel()
+		return
+	}
 	defer r.clearHandle()
 
 	sendCtx := context.WithoutCancel(ctx)
@@ -684,6 +834,10 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 	case <-handle.Done():
 		if stopTyping != nil {
 			stopTyping()
+		}
+		if !r.claimTurn() {
+			b.discardInterrupted(chatID, spec, handle)
+			return
 		}
 		b.processedRuns.Add(1)
 		b.noteRun()
@@ -695,8 +849,40 @@ func (b *Bot) handleBatch(ctx context.Context, chatID int64, r *chatRunner, batc
 		if stopTyping != nil {
 			stopTyping()
 		}
+		// Claim before adopting: once the task manager owns the process, an
+		// interrupt must not reach it. Background work outlives the chat.
+		if !r.claimTurn() {
+			b.discardInterrupted(chatID, spec, handle)
+			return
+		}
 		b.promote(sendCtx, chatID, hasTG, spec, handle, r)
 	}
+}
+
+// discardInterrupted throws away the output of a run that a newer message
+// superseded. Nothing is emitted on any channel: the operator is about to get
+// one answer covering both turns, and a half-answer to the question he just
+// replaced would only confuse the thread.
+//
+// What this leaves behind in the runner's session (measured against grok 1.0.13,
+// killed 15s into a turn): the session directory survives with the user turn
+// written to chat_history.jsonl and NO assistant turn after it. That dangling
+// user turn does not break anything — a later `grok --resume <session>` starts
+// normally, appends the new user turn after it and answers, so the next turn
+// needs no repair and no fresh session. The interrupted text is therefore in
+// the session twice: once as the dangling turn, once in the coalesced prompt
+// marked superseded. That is deliberate — the marker is what tells the model
+// which of the two won.
+func (b *Bot) discardInterrupted(chatID int64, spec RunSpec, handle *RunHandle) {
+	elapsed := time.Since(handle.StartedAt())
+	if handle.Finished() {
+		res, _ := handle.Result() // safe-ignore: the outcome is discarded on purpose, this is only for the log line
+		if d := durationOf(res); d > 0 {
+			elapsed = d
+		}
+	}
+	log.Printf("chat %d: discarding the interrupted run after %s (session %s); its turn is folded into the next prompt",
+		chatID, elapsed.Truncate(time.Millisecond), spec.SessionID)
 }
 
 // noteRun counts a completed conversational run against today, for /usage.
@@ -904,9 +1090,10 @@ func (b *Bot) persistTelegramInbound(chatID int64, batch []*queuedMsg) {
 		return
 	}
 	for _, m := range batch {
-		if m.tg == nil {
+		if m.tg == nil || m.persisted {
 			continue
 		}
+		m.persisted = true
 		text := strings.TrimSpace(m.tg.Text)
 		if caption := strings.TrimSpace(m.tg.Caption); caption != "" {
 			if text != "" {
@@ -979,33 +1166,84 @@ func (b *Bot) chatContext(chatID int64, batch []*queuedMsg) string {
 	return intro + "; los demás participantes pueden leer tus respuestas.]"
 }
 
+// supersededMarker labels a turn whose run was interrupted by a later message.
+// The interrupted text is still carried: in practice the newer message refines
+// the older one rather than replacing it outright, so the agent needs both, in
+// order, and needs to know which one is the live question.
+const supersededMarker = "[interrupted, superseded by the next message]"
+
+// promptPart is one rendered message inside a coalesced prompt.
+type promptPart struct {
+	text       string
+	superseded bool
+}
+
 // buildBatchPrompt renders one prompt covering every message in the batch.
 func (b *Bot) buildBatchPrompt(ctx context.Context, chatID int64, batch []*queuedMsg) string {
-	parts := make([]string, 0, len(batch))
+	parts := make([]promptPart, 0, len(batch))
+	superseded := 0
 	for _, msg := range batch {
-		prompt, err := b.buildQueuedPrompt(ctx, chatID, msg)
+		prompt, err := b.renderQueued(ctx, chatID, msg)
 		if err != nil {
 			log.Printf("failed to build prompt: %v", err)
 			b.emitError(context.WithoutCancel(ctx), chatID, msg.tg == nil,
 				"No he podido leer ese mensaje: "+tg.TruncateRunes(err.Error(), 300))
 			continue
 		}
-		if strings.TrimSpace(prompt) != "" {
-			parts = append(parts, prompt)
+		if strings.TrimSpace(prompt) == "" {
+			continue
 		}
+		part := promptPart{text: prompt, superseded: msg.superseded.Load()}
+		if part.superseded {
+			superseded++
+		}
+		parts = append(parts, part)
 	}
 
-	if len(parts) <= 1 {
-		return strings.Join(parts, "")
+	if len(parts) == 0 {
+		return ""
 	}
-	// Several messages arrived while the previous run was busy. Answer them as
-	// one turn rather than firing a run per message.
+	if len(parts) == 1 && superseded == 0 {
+		return parts[0].text
+	}
+
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Jairo sent %d messages while you were busy. Answer them together.\n", len(parts))
+	if superseded > 0 {
+		// He wrote again mid-answer. Say plainly that the run was cut short so
+		// the agent does not treat the first turn as still-open work.
+		fmt.Fprintf(&sb, "Jairo interrupted you: you were answering the first %d message(s) below when he wrote again, "+
+			"and that run was stopped. Answer everything together in one reply, treating the last message as the live question.\n",
+			superseded)
+	} else {
+		// Several messages arrived while the previous run was busy. Answer them
+		// as one turn rather than firing a run per message.
+		fmt.Fprintf(&sb, "Jairo sent %d messages while you were busy. Answer them together.\n", len(parts))
+	}
 	for i, part := range parts {
-		fmt.Fprintf(&sb, "\n--- message %d of %d ---\n%s\n", i+1, len(parts), part)
+		fmt.Fprintf(&sb, "\n--- message %d of %d ---\n", i+1, len(parts))
+		if part.superseded {
+			sb.WriteString(supersededMarker + "\n")
+		}
+		fmt.Fprintf(&sb, "%s\n", part.text)
 	}
 	return sb.String()
+}
+
+// renderQueued builds a message's prompt once and remembers it. An interrupted
+// turn goes back on the queue and is rendered again for the coalesced prompt;
+// without the cache that would re-download its photo from Telegram and pay for
+// a second transcription of the same voice note. The cached text still names
+// the inbox paths, so the attachments of both turns reach the new run.
+func (b *Bot) renderQueued(ctx context.Context, chatID int64, msg *queuedMsg) (string, error) {
+	if msg.renderedOK {
+		return msg.rendered, nil
+	}
+	prompt, err := b.buildQueuedPrompt(ctx, chatID, msg)
+	if err != nil {
+		return "", err
+	}
+	msg.rendered, msg.renderedOK = prompt, true
+	return prompt, nil
 }
 
 // isCommand reports whether a message is a slash command.
@@ -1025,6 +1263,13 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, msg *tg.Message) 
 
 	switch strings.ToLower(command) {
 	case "/new", "/reset":
+		// Keeping a run alive across a reset makes no sense: its answer belongs
+		// to a conversation that no longer exists. Unlike an ordinary interrupt
+		// the turn is NOT carried forward — starting fresh is the whole point —
+		// so this is /cancel's path, not the coalescing one.
+		if b.runner(ctx, chatID).stop() {
+			log.Printf("chat %d: /new stopped the run in flight", chatID)
+		}
 		if err := b.state.ResetConversation(chatID); err != nil {
 			log.Printf("failed to reset conversation: %v", err)
 			b.emitError(ctx, chatID, false, "No he podido reiniciar la conversación.")
@@ -1068,7 +1313,8 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, msg *tg.Message) 
 			InstanceName + " — tu asistente personal.",
 			"",
 			"Mándame texto, un audio, una foto o un fichero y se lo paso al agente.",
-			fmt.Sprintf("Si una respuesta tarda más de %s, la paso sola a background y te aviso con el resultado.",
+			"Si me escribes mientras te estoy contestando, corto lo que estaba haciendo y respondo a todo junto.",
+			fmt.Sprintf("Si una respuesta tarda más de %s, la paso sola a background y te aviso con el resultado. Eso ya no lo corto.",
 				b.opts.SoftTimeout().Truncate(time.Second)),
 			"",
 			"/new — empezar conversación nueva",

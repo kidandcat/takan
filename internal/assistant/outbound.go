@@ -12,6 +12,9 @@ const (
 	EventMessage = "message"
 	EventDone    = "done"
 	EventError   = "error"
+	// EventInterrupted terminates a turn whose run a newer message killed. It
+	// carries no message: there is no half-answer to show. See AppEvent.
+	EventInterrupted = "interrupted"
 )
 
 // Emitter is the outbound choke point, as seen by the scheduler, the task

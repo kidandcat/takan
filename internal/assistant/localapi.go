@@ -77,7 +77,12 @@ func (a *Assistant) handleLocalHealth(w http.ResponseWriter, r *http.Request) {
 		"instance":       InstanceName,
 		"scheduled_jobs": len(sched.Store().List()),
 		"running_tasks":  countRunningTasks(tasks),
-		"bot":            b.Username(),
+		// The conversational side of the same picture: running_tasks counts
+		// background work a new message never touches, running_conversations
+		// counts the interruptible runs and must fall back to zero after one.
+		"running_conversations": b.RunningConversations(),
+		"interrupted_runs":      b.InterruptedRuns(),
+		"bot":                   b.Username(),
 	}
 	if last := b.lastUpdateAt.Load(); last > 0 {
 		payload["last_update_at"] = time.Unix(last, 0).UTC().Format(time.RFC3339)
