@@ -48,11 +48,16 @@ type Bot struct {
 	MachineID   string
 	MachineName string
 	// Kind is daemon (a real bot daemon) or legacy (seeded owner placeholder).
-	Kind      string
-	Version   string
-	HasToken  bool
-	LastSeen  *time.Time
-	CreatedAt time.Time
+	Kind     string
+	Version  string
+	HasToken bool
+	// Instance is the systemd unit base name on the target machine.
+	Instance        string
+	ProvisionStatus string // "" | queued | running | ok | failed
+	ProvisionError  string
+	ProvisionAt     *time.Time
+	LastSeen        *time.Time
+	CreatedAt       time.Time
 	// Counters are filled by ListBots (not stored).
 	PendingChats      int
 	ApprovedChats     int
@@ -61,6 +66,22 @@ type Bot struct {
 
 // Legacy reports whether this is a seeded owner placeholder with no daemon yet.
 func (b Bot) Legacy() bool { return b.Kind == BotKindLegacy }
+
+// Provision job states.
+const (
+	ProvisionQueued  = "queued"
+	ProvisionRunning = "running"
+	ProvisionOK      = "ok"
+	ProvisionFailed  = "failed"
+)
+
+// ProvisionTicketTTL bounds how long a provision run may fetch its manifest and
+// binary from the hub.
+const ProvisionTicketTTL = 10 * time.Minute
+
+// Provisionable reports whether this row can be pushed to a machine. The
+// telegram credential comes from its channel attachment, checked at dispatch.
+func (b Bot) Provisionable() bool { return b.MachineName != "" }
 
 // BotChat is one Telegram chat known to a bot, with its approval status.
 type BotChat struct {
@@ -159,10 +180,67 @@ CREATE TABLE IF NOT EXISTS bot_jobs (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bot_jobs_bot ON bot_jobs(bot_id, created_at);
+
+-- Short-lived credential a provision run uses to fetch its manifest and the
+-- daemon binary from the hub. Never reused after the run reports back.
+CREATE TABLE IF NOT EXISTS bot_provision_tickets (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  machine TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bot_provision_tickets_bot ON bot_provision_tickets(bot_id);
 `); err != nil {
 		return err
 	}
+	if err := s.migrateBotProvisionCols(); err != nil {
+		return err
+	}
 	return s.seedLegacyBotsAllUsers()
+}
+
+// migrateBotProvisionCols adds the channel link and provisioning state to bots
+// created before zero-touch provisioning existed.
+func (s *Store) migrateBotProvisionCols() error {
+	cols, err := s.tableColumns("bots")
+	if err != nil || len(cols) == 0 {
+		return err
+	}
+	for _, a := range []struct{ col, ddl string }{
+		{"instance", `ALTER TABLE bots ADD COLUMN instance TEXT NOT NULL DEFAULT ''`},
+		{"provision_status", `ALTER TABLE bots ADD COLUMN provision_status TEXT NOT NULL DEFAULT ''`},
+		{"provision_error", `ALTER TABLE bots ADD COLUMN provision_error TEXT NOT NULL DEFAULT ''`},
+		{"provision_at", `ALTER TABLE bots ADD COLUMN provision_at TEXT`},
+	} {
+		if cols[a.col] {
+			continue
+		}
+		if _, err := s.db.Exec(a.ddl); err != nil {
+			return fmt.Errorf("migrate bots.%s: %w", a.col, err)
+		}
+	}
+	return nil
+}
+
+// tableColumns reports the column set of a table (empty when it does not exist).
+func (s *Store) tableColumns(table string) (map[string]bool, error) {
+	rows, err := s.db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		cols[n] = true
+	}
+	return cols, rows.Err()
 }
 
 // seedLegacyBotsAllUsers gives every existing account one placeholder bot per
@@ -220,11 +298,35 @@ func NormalizeBotChatType(t string) string {
 	}
 }
 
+// InstanceName derives the systemd unit base name from a bot name.
+func InstanceName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == ' ' || r == '.':
+			b.WriteRune('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	for strings.Contains(out, "--") {
+		out = strings.ReplaceAll(out, "--", "-")
+	}
+	return stringMin(out, 48)
+}
+
 // CreateBot returns (bot, rawToken, error). The raw token is shown once.
+// machineID (optional) is the provisioning target; the telegram credential is
+// bound separately with AttachChannel (consumer=bot, direction=receive).
 func (s *Store) CreateBot(ctx context.Context, userID, name, machineID string) (*Bot, string, error) {
 	name = normalizeName(name)
 	if name == "" {
 		return nil, "", fmt.Errorf("name required")
+	}
+	instance := InstanceName(name)
+	if instance == "" {
+		return nil, "", fmt.Errorf("name must contain letters or digits")
 	}
 	machineName := ""
 	machineID = strings.TrimSpace(machineID)
@@ -246,16 +348,113 @@ func (s *Store) CreateBot(ctx context.Context, userID, name, machineID string) (
 		machineCol = machineID
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO bots (id, user_id, name, machine_id, machine_name, kind, token_hash, created_at)
-VALUES (?,?,?,?,?,?,?,?)`,
-		id, userID, name, machineCol, machineName, BotKindDaemon, hashToken(raw), now.Format(time.RFC3339))
+INSERT INTO bots (id, user_id, name, machine_id, machine_name, kind, token_hash, instance, created_at)
+VALUES (?,?,?,?,?,?,?,?,?)`,
+		id, userID, name, machineCol, machineName, BotKindDaemon, hashToken(raw),
+		instance, now.Format(time.RFC3339))
 	if err != nil {
 		return nil, "", fmt.Errorf("create bot: %w", err)
 	}
 	return &Bot{
 		ID: id, UserID: userID, Name: name, MachineID: machineID, MachineName: machineName,
-		Kind: BotKindDaemon, HasToken: true, CreatedAt: now,
+		Kind: BotKindDaemon, HasToken: true, Instance: instance, CreatedAt: now,
 	}, raw, nil
+}
+
+// SetBotProvisionState records progress of a provision run.
+func (s *Store) SetBotProvisionState(ctx context.Context, botID, status, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE bots SET provision_status = ?, provision_error = ?, provision_at = ? WHERE id = ?`,
+		status, stringMin(strings.TrimSpace(errMsg), 500),
+		time.Now().UTC().Format(time.RFC3339), botID)
+	return err
+}
+
+// SetBotTarget updates the provisioning target machine of an existing bot.
+func (s *Store) SetBotTarget(ctx context.Context, userID, id, machineID string) error {
+	machineID = strings.TrimSpace(machineID)
+	var machineCol any
+	machineName := ""
+	if machineID != "" {
+		mac, err := s.MachineByID(ctx, userID, machineID)
+		if err != nil {
+			return fmt.Errorf("unknown machine")
+		}
+		machineCol, machineName = machineID, mac.Name
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE bots SET machine_id = ?, machine_name = ? WHERE id = ? AND user_id = ?`,
+		machineCol, machineName, id, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// --- provision tickets ---
+
+// IssueProvisionTicket mints the short-lived credential the provision script
+// uses to pull its manifest and the daemon binary. Previous tickets for the bot
+// are dropped, so only the newest run can fetch secrets.
+func (s *Store) IssueProvisionTicket(ctx context.Context, botID, userID, machine string) (string, error) {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM bot_provision_tickets WHERE bot_id = ?`, botID); err != nil {
+		return "", err
+	}
+	raw, err := randomHex(24)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO bot_provision_tickets (id, bot_id, user_id, token_hash, machine, created_at, expires_at)
+VALUES (?,?,?,?,?,?,?)`,
+		uuid.NewString(), botID, userID, hashToken(raw), strings.TrimSpace(machine),
+		now.Format(time.RFC3339), now.Add(ProvisionTicketTTL).Format(time.RFC3339))
+	if err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
+// BotByProvisionTicket resolves an unexpired ticket to its bot.
+func (s *Store) BotByProvisionTicket(ctx context.Context, raw string) (*Bot, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, sql.ErrNoRows
+	}
+	var botID, expires string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT bot_id, expires_at FROM bot_provision_tickets WHERE token_hash = ?`,
+		hashToken(raw)).Scan(&botID, &expires)
+	if err != nil {
+		return nil, err
+	}
+	exp, perr := time.Parse(time.RFC3339, expires)
+	if perr != nil || time.Now().UTC().After(exp) {
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM bot_provision_tickets WHERE token_hash = ?`, hashToken(raw))
+		return nil, sql.ErrNoRows
+	}
+	return scanBot(s.db.QueryRowContext(ctx, botSelect+` WHERE b.id = ?`, botID))
+}
+
+// RevokeProvisionTickets invalidates every ticket of a bot (end of a run).
+func (s *Store) RevokeProvisionTickets(ctx context.Context, botID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM bot_provision_tickets WHERE bot_id = ?`, botID)
+	return err
+}
+
+// PurgeProvisionTickets drops expired rows.
+func (s *Store) PurgeProvisionTickets(ctx context.Context) (int, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM bot_provision_tickets WHERE expires_at < ?`,
+		time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // IssueBotToken (re)issues the daemon token for a bot and promotes a legacy
@@ -280,18 +479,25 @@ func (s *Store) IssueBotToken(ctx context.Context, userID, id string) (string, e
 const botSelect = `
 SELECT b.id, b.user_id, b.name, b.bot_username, COALESCE(b.machine_id, ''),
        COALESCE(m.name, b.machine_name), b.kind, b.version,
-       b.token_hash IS NOT NULL, b.last_seen_at, b.created_at
+       b.token_hash IS NOT NULL, b.instance,
+       b.provision_status, b.provision_error, b.provision_at,
+       b.last_seen_at, b.created_at
 FROM bots b LEFT JOIN machines m ON m.id = b.machine_id`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanBot(row rowScanner) (*Bot, error) {
 	var b Bot
-	var last, created sql.NullString
+	var last, created, provAt sql.NullString
 	err := row.Scan(&b.ID, &b.UserID, &b.Name, &b.BotUsername, &b.MachineID, &b.MachineName,
-		&b.Kind, &b.Version, &b.HasToken, &last, &created)
+		&b.Kind, &b.Version, &b.HasToken, &b.Instance,
+		&b.ProvisionStatus, &b.ProvisionError, &provAt, &last, &created)
 	if err != nil {
 		return nil, err
+	}
+	if provAt.Valid && provAt.String != "" {
+		t, _ := time.Parse(time.RFC3339, provAt.String)
+		b.ProvisionAt = &t
 	}
 	if last.Valid && last.String != "" {
 		t, _ := time.Parse(time.RFC3339, last.String)

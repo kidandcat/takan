@@ -114,6 +114,10 @@ func Open(dataDir string, backup *BackupOpts) (*Store, error) {
 		_ = node.Close()
 		return nil, err
 	}
+	if err := s.migrateTelegramChannels(); err != nil {
+		_ = node.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

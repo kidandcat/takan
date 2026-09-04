@@ -30,6 +30,10 @@ type Server struct {
 	Notify Notifier
 	// Watch optional: long-poll support for GET /api/bots/chats?wait=…
 	Watch *Watcher
+	// PublicURL is the hub URL handed to provisioned daemons.
+	PublicURL string
+	// Provision optional: zero-touch installs onto machines via takan-agent.
+	Provision *Provisioner
 }
 
 func (s *Server) Routes(mux *http.ServeMux) {
@@ -39,6 +43,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/bots/chats/pending", s.reportPending)
 	mux.HandleFunc("GET /api/bots/deliveries", s.listDeliveries)
 	mux.HandleFunc("POST /api/bots/deliveries/ack", s.ackDeliveries)
+	// Provisioning: ticket-authenticated, used by the generated install script.
+	mux.HandleFunc("GET /api/bots/provision/env", s.provisionEnv)
+	mux.HandleFunc("GET /api/bots/binary", s.serveBinary)
 }
 
 const (

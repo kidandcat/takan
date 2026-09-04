@@ -4,7 +4,9 @@ The **Bots** module turns Telegram assistant bots (first one: **Atlas**) into a 
 fleet, the same way the Machine module manages `takan-agent` installs.
 
 - Takan owns the **fleet registry**, the **chat whitelist with approvals**, and a **hub → bot outbox**.
-- The bot daemon owns the Telegram connection. **The Telegram bot token never reaches the hub.**
+- The bot daemon owns the Telegram connection. The Telegram credential is no longer the daemon's
+  private secret: it belongs to a **channel** (§4), is sealed at rest in the hub, and reaches the
+  daemon through its channel attachment.
 - A bot instance is also a `machine_ai_run` **owner**: when a job it launched finishes, the result
   is queued in that bot's outbox instead of being POSTed to an external webhook.
 
@@ -55,6 +57,10 @@ the account's machine names (Machine module) and links the bot to that machine w
 **Takan's name wins.** If the daemon's configured `name` differs, the response carries `note` and
 the daemon should adopt `bot.name` (renaming is a panel action).
 
+`bot.name` is **guaranteed present and non-empty** on every `200`. The stored name always wins over
+whatever the daemon sent, and the hub never returns it blank, so a daemon can adopt it
+unconditionally (no fallback to its own configured `name` is needed, and no empty-string check).
+
 ### `POST /api/bots/heartbeat` — liveness
 
 Empty body. Call every ~60 s when not long-polling.
@@ -71,7 +77,7 @@ Query params (all optional):
 | Param | Meaning |
 |---|---|
 | `status` | `pending` \| `approved` \| `denied` — filter |
-| `updated_since` | RFC3339; only chats changed **after** that instant |
+| `updated_since` | RFC3339; only chats with `updated_at` **strictly after** that instant (exclusive) |
 | `wait` | seconds (max 60) — long-poll: block until something changes, then return |
 
 ```json
@@ -91,6 +97,13 @@ Query params (all optional):
 new `cursor`. A decision made in the panel or by an MCP tool wakes the long poll immediately, so
 approvals land in seconds. A missed wake-up self-heals on the next poll (the cursor is durable).
 
+**The boundary is exclusive** (`updated_at > updated_since`), never inclusive. `cursor` is the
+newest `updated_at` in the returned set, so re-sending the last received `cursor` returns only
+genuinely newer rows: the row that produced the cursor is not handed back, and there is no eternal
+replay loop of the same chat. The daemon's merge should still be idempotent anyway (re-applying a
+row it already has must be a no-op), because a row can legitimately be returned again after any
+later edit, and because the first poll after a restart replays the whole whitelist.
+
 `type` is `private` or `group` — Telegram `supergroup`/`channel` are normalised to `group`.
 **Approving a group authorises the whole group** (every member), by design.
 
@@ -103,7 +116,15 @@ Call the first time an unknown chat writes to the bot. **Do not answer it yet.**
   "username": "", "first_name": "", "last_name": "", "first_message": "hola" }
 ```
 
-`title` falls back to `first_name + last_name`; `first_message` also accepts the alias `snippet`.
+`title` falls back to `first_name + last_name`. `first_message` is the **canonical and preferred**
+field name; `snippet` is still accepted as an alias for compatibility with older daemons, and
+`first_message` wins when both are sent.
+
+`type` accepts **both** the raw Telegram values (`private`, `group`, `supergroup`, `channel`) and
+the already-normalised ones (`private`, `group`) — a daemon may forward Telegram's `chat.type`
+verbatim without pre-mapping it. The hub normalises server-side to `private|group`, and that
+normalised value is what the whitelist stores and what every response (here, `GET /api/bots/chats`,
+the panel and the MCP tools) reports back.
 
 `201` when the chat was newly recorded, `200` when it was already known:
 
@@ -141,6 +162,16 @@ Query params: `limit` (default 20, max 50), `wait` (seconds, max 60 — long-pol
 - `output_tail` is at most 4000 bytes, prefixed with `…` when cut; the full transcript is still
   available through `machine_ai_log`.
 - **Only deliver to approved chats.** A delivery does not bypass the whitelist.
+- `payload.exit_code` is **only meaningful when `status == "failed"`**. On `done` and `cancelled`
+  the field is still present but its value is unspecified (typically `0`) and carries no
+  information, so daemons should not surface it. Rendering it only when
+  `status == "failed" && exit_code != 0` is the correct behaviour.
+
+**Unknown `type` values: ack and log.** New delivery types may appear without a daemon change. A
+daemon that does not recognise a `type` must **log it and ack it anyway**, not hold it unacked. The
+hub does *not* want unknown types parked in the outbox: an unacked row is re-delivered every 30 s
+and the outbox would grow forever. Acking makes every future type **opt-in** — a daemon starts
+handling one only once it has been taught to, and until then the row is discarded cleanly.
 
 ### `POST /api/bots/deliveries/ack` — confirm
 
@@ -174,7 +205,73 @@ on incoming Telegram message:
 
 Two long polls means two in-flight requests per bot; both are cheap (a blocked goroutine on the hub).
 
-## 4. Machine AI jobs owned by a bot
+## 4. Telegram channels
+
+A **channel** is the first-class Telegram entity in Takan. The Bots module no longer holds Telegram
+tokens of its own: a bot instance receives both its credential and its primary chat by being
+*attached* to a channel. The data model lives in `internal/store/telegram_channels.go`.
+
+| Entity | Fields | Notes |
+|---|---|---|
+| **Channel** | `name`, BotFather token, `bot_username`, `bot_display_name`, `is_default` | The token is pasted once, validated with `getMe`, then sealed with the vault's `cryptox.Box`. It is never stored or logged in clear. `bot_username` and `bot_display_name` come from that same `getMe`. |
+| **Channel chat** | `chat_id`, `type` (`private` \| `group`), `label` | A channel has one or more chats (for example a DM plus a family group). |
+| **Attachment** | `channel`, `consumer`, `consumer_id`, `direction`, `chat_id` | Many-to-many binding between channels and consumers. |
+
+**Directions:**
+
+| `direction` | Meaning |
+|---|---|
+| `receive` | The consumer processes inbound messages arriving at that bot (typically a bot daemon instance running `getUpdates`). |
+| `send` | The consumer emits messages to the channel: the internal operator notifier (`telegram_send`), email-module notifications, AI-job result delivery. |
+
+`consumer` is one of `bot` (with `consumer_id` = the bot id), `notifier` or `email`. The
+attachment's `chat_id` is that consumer's primary chat within the channel; when empty it means "the
+channel's first chat".
+
+**Constraint (important):** a Telegram bot token supports a single `getUpdates` consumer, so a
+channel may have **at most one `receive` attachment**. This is enforced by a partial unique index,
+not just by convention. `send` attachments are unlimited: one channel can serve many senders, and
+one consumer can use many channels.
+
+**Migration and seeding.** The credential and operator chat the Telegram module used before
+channels existed are seeded as the channel named `default`, together with its chats and a
+`notifier` send-attachment, so existing notification behaviour is unchanged.
+
+**What this means for a daemon.** A bot instance gets both its Telegram credential and its
+owner/primary chat from its channel attachment. For a group bot the channel points at the group
+chat id, so the daemon is born already pointed at its group and does not need an approval round for
+it. The pending/approval whitelist (§2, §3) still governs any **other** chat that messages the bot.
+
+Forward note: the standalone resend to Telegram service currently running on vps2 stays as it is
+for now, but this attachment model is what it will bind to when it is absorbed into the hub.
+
+## 5. Zero-touch provisioning and binary hosting
+
+Takan can install a bot daemon on a machine without anyone copying files by hand: the hub itself
+serves the daemon binaries, and provisioning pulls the right one over the same authenticated API.
+The contract below is what a daemon repo's deploy has to satisfy (phase B on the atlas side is
+extending its deploy to upload the built binaries).
+
+| Item | Value |
+|---|---|
+| Binary directory | `/opt/takan/bot-binaries/` on the hub host (default) |
+| Override | env `TAKAN_BOT_BIN_DIR` |
+| Filename layout | `<name>-<os>-<arch>`, for example `atlas-linux-amd64`, `atlas-linux-arm64` |
+| File mode | must be executable |
+| Endpoint | `GET /api/bots/binary?os=linux&arch=amd64` |
+| Response | `application/octet-stream` with the binary body |
+| Auth | `Authorization: Bearer <token>`, accepting **either** a machine agent token **or** a short-lived provision ticket |
+| Not found | `404` when no binary matches the requested `os`/`arch` |
+
+Concretely, the **atlas** deploy should upload its freshly built binary to
+`/opt/takan/bot-binaries/atlas-linux-amd64` on the hub host (vps2), preserving the executable bit
+(`scp` then `chmod +x`, or `install -m 0755`). Publishing extra `os`/`arch` combinations is just a
+matter of dropping more files with the same naming pattern next to it; the hub resolves the request
+purely by filename, so no registration step is needed. v1 targets **Linux with systemd only**:
+provisioning refuses cleanly (with an explanatory error, no partial install) on machines without
+`systemctl`.
+
+## 6. Machine AI jobs owned by a bot
 
 `machine_ai_run` (and `machine_ai_reply`) take:
 
@@ -199,7 +296,7 @@ of "Grok Bots". Those names are now seeded as **legacy bot rows** on accounts th
 so old callers keep resolving. A legacy row has no token and no daemon; the panel can **Issue
 token** on it to turn it into a real bot instance.
 
-## 5. MCP tools
+## 7. MCP tools
 
 Available while the module is enabled:
 
@@ -212,10 +309,11 @@ Available while the module is enabled:
 
 `takan_status` reports module readiness (`x/y online · n chat(s) pending approval`).
 
-## 6. Security notes
+## 8. Security notes
 
 - The bot token is the only credential; treat it like the agent token. Rotate from the panel.
 - Everything is scoped to the owning account: a bot can only ever see its own chats and outbox.
-- The hub never stores the Telegram bot token, and never talks to Telegram on the bot's behalf
-  (the pending-approval alert goes through the operator's own Telegram module).
+- Telegram bot tokens live in **channels** (§4), sealed with the vault's `cryptox.Box`, never
+  stored or logged in clear and never echoed back by the API. The hub does not talk to Telegram on
+  a bot's behalf (the pending-approval alert goes through the operator's own notifier attachment).
 - Chats default to **denied by omission**: a daemon must treat anything not `approved` as silent.

@@ -14,56 +14,62 @@ import (
 
 // Factory returns telegram_* tools. Bot token and allowed chats come from the panel.
 func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID string) []mcp.RegisteredTool {
+	svc := &Service{Store: st, Box: box}
 	return func(ctx context.Context, userID string) []mcp.RegisteredTool {
 		return []mcp.RegisteredTool{
 			{
 				Tool: mcp.Tool{
 					Name: "telegram_chats",
-					Description: "List configured Telegram destinations for this account (default chat + allowlist) " +
-						"and the bot username. Call before telegram_send if you do not know which chat_id to use.",
+					Description: "List Telegram channels for this account and the chats each one serves. " +
+						"A channel is a bot credential plus its chats; telegram_send addresses one. " +
+						"Call before telegram_send if you do not know which channel or chat_id to use.",
 					InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-					ts, token, err := loadSettings(ctx, st, box, userID)
+					channels, err := st.ListTelegramChannels(ctx, userID)
 					if err != nil {
 						return "", err
 					}
-					_ = token
-					var rows []map[string]any
-					for _, c := range ts.AllowedChats {
-						row := map[string]any{"id": c.ID}
-						if c.Label != "" {
-							row["label"] = c.Label
+					if len(channels) == 0 {
+						return "", fmt.Errorf("no telegram channels — open Takan panel → Telegram and add one")
+					}
+					type chatRow struct {
+						ID    string `json:"chat_id"`
+						Type  string `json:"type"`
+						Label string `json:"label,omitempty"`
+					}
+					type row struct {
+						Name     string    `json:"channel"`
+						Bot      string    `json:"bot,omitempty"`
+						Default  bool      `json:"default,omitempty"`
+						Receiver string    `json:"receiving_bot,omitempty"`
+						Chats    []chatRow `json:"chats"`
+					}
+					out := make([]row, 0, len(channels))
+					for _, c := range channels {
+						r := row{Name: c.Name, Bot: c.BotUser, Default: c.IsDefault}
+						for _, a := range c.Attachments {
+							if a.ReceiveConsumer() {
+								r.Receiver = a.Consumer
+							}
 						}
-						if c.ID == ts.DefaultChatID {
-							row["default"] = true
+						for _, ch := range c.Chats {
+							r.Chats = append(r.Chats, chatRow{ID: ch.ChatID, Type: ch.Type, Label: ch.Label})
 						}
-						rows = append(rows, row)
+						out = append(out, r)
 					}
-					if ts.DefaultChatID != "" && !store.ChatAllowed("", ts.AllowedChats, ts.DefaultChatID) {
-						// defensive: default always listed via NormalizeTelegramChats on save
-						rows = append([]map[string]any{{
-							"id": ts.DefaultChatID, "label": "default", "default": true,
-						}}, rows...)
-					}
-					out := map[string]any{
-						"bot":            strings.TrimPrefix(ts.BotUsername, "@"),
-						"default_chat":   ts.DefaultChatID,
-						"chats":          rows,
-						"hint":           "telegram_send uses default_chat when chat_id is omitted. Only listed chats are allowed.",
-					}
-					if out["bot"] == "" {
-						out["bot"] = nil
-					}
-					return marshal(out)
+					return marshal(map[string]any{
+						"channels": out,
+						"hint":     "telegram_send takes channel (name, default when omitted) and chat_id (first chat when omitted).",
+					})
 				},
 			},
 			{
 				Tool: mcp.Tool{
 					Name: "telegram_send",
-					Description: "Send a Telegram message via the configured bot. " +
-						"chat_id is optional (defaults to the panel default chat). " +
-						"Only chat_ids in the panel allowlist are accepted. " +
+					Description: "Send a Telegram message. channel selects which bot credential to send as " +
+						"(default channel when omitted); chat_id selects one of that channel's chats " +
+						"(its first chat when omitted). Call telegram_chats to see both. " +
 						"parse_mode: empty (plain), HTML, Markdown, or MarkdownV2. Max 4096 characters.",
 					InputSchema: map[string]any{
 						"type": "object",
@@ -72,9 +78,13 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 								"type":        "string",
 								"description": "Message body (required)",
 							},
+							"channel": map[string]any{
+								"type":        "string",
+								"description": "Channel name from telegram_chats (optional; default channel when omitted)",
+							},
 							"chat_id": map[string]any{
 								"type":        "string",
-								"description": "Destination chat id (optional; uses default from panel)",
+								"description": "Destination chat id within the channel (optional; its first chat when omitted)",
 							},
 							"parse_mode": map[string]any{
 								"type":        "string",
@@ -85,31 +95,28 @@ func Factory(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID
 					},
 				},
 				Handler: func(ctx context.Context, userID string, args map[string]any) (string, error) {
-					ts, token, err := loadSettings(ctx, st, box, userID)
-					if err != nil {
-						return "", err
-					}
 					text, _ := args["text"].(string)
 					chatID, _ := args["chat_id"].(string)
 					parseMode, _ := args["parse_mode"].(string)
+					name, _ := args["channel"].(string)
+
+					c, err := st.ResolveTelegramChannel(ctx, userID, name)
+					if err != nil || c == nil {
+						return "", fmt.Errorf("unknown telegram channel %q — call telegram_chats", strings.TrimSpace(name))
+					}
 					chatID = strings.TrimSpace(chatID)
-					if chatID == "" {
-						chatID = strings.TrimSpace(ts.DefaultChatID)
+					if chatID != "" && c.PrimaryChat(chatID) != chatID {
+						return "", fmt.Errorf("chat_id %q is not a chat of channel %q — call telegram_chats", chatID, c.Name)
 					}
-					if chatID == "" {
-						return "", fmt.Errorf("no chat_id: set a default chat in Takan panel → Telegram, or pass chat_id")
-					}
-					if !store.ChatAllowed(ts.DefaultChatID, ts.AllowedChats, chatID) {
-						return "", fmt.Errorf("chat_id %q is not in the allowlist — open panel → Telegram or call telegram_chats", chatID)
-					}
-					msgID, err := SendMessage(ctx, token, chatID, text, parseMode)
+					msgID, err := svc.SendVia(ctx, c, chatID, text, parseMode)
 					if err != nil {
 						return "", err
 					}
 					return marshal(map[string]any{
 						"status":     "sent",
 						"message_id": msgID,
-						"chat_id":    chatID,
+						"channel":    c.Name,
+						"chat_id":    c.PrimaryChat(chatID),
 					})
 				},
 			},
@@ -141,33 +148,4 @@ func marshal(v any) (string, error) {
 		return "", err
 	}
 	return string(b), nil
-}
-
-// Notifier returns a function that sends a plain-text message to the operator's
-// default Telegram chat. Other modules use it to surface things that need
-// attention (e.g. a bot chat waiting for approval) without importing the panel.
-// It is a no-op error when Telegram is not configured or the module is off.
-func Notifier(st *store.Store, box *cryptox.Box) func(ctx context.Context, userID, text string) error {
-	return func(ctx context.Context, userID, text string) error {
-		on, err := st.ModuleEnabled(ctx, userID, "telegram")
-		if err != nil {
-			return err
-		}
-		if !on {
-			return fmt.Errorf("telegram module is disabled")
-		}
-		ts, token, err := loadSettings(ctx, st, box, userID)
-		if err != nil {
-			return err
-		}
-		chatID := strings.TrimSpace(ts.DefaultChatID)
-		if chatID == "" && len(ts.AllowedChats) > 0 {
-			chatID = ts.AllowedChats[0].ID
-		}
-		if chatID == "" {
-			return fmt.Errorf("no default telegram chat configured")
-		}
-		_, err = SendMessage(ctx, token, chatID, text, "")
-		return err
-	}
 }

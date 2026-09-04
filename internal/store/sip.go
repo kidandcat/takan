@@ -12,15 +12,15 @@ import (
 // --- SIP module (phone gateways → Grok Voice via central proxy) ---
 
 type SIPSettings struct {
-	UserID         string
-	XAIAPIKeyEnc   string
-	Voice          string
-	Instructions   string
-	AutoAnswer     bool
-	AudioRate      int
-	BridgeMode     string // realtime | sip (sip UAC planned)
-	UpdatedAt      time.Time
-	HasKey         bool // true when encrypted key is non-empty
+	UserID       string
+	XAIAPIKeyEnc string
+	Voice        string
+	Instructions string
+	AutoAnswer   bool
+	AudioRate    int
+	BridgeMode   string // realtime | sip (sip UAC planned)
+	UpdatedAt    time.Time
+	HasKey       bool // true when encrypted key is non-empty
 }
 
 type SIPDevice struct {

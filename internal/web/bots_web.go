@@ -21,7 +21,17 @@ func (s *Server) fillBotsDashboard(ctx context.Context, u *store.User, data *pag
 			ID: b.ID, Name: b.Name, Username: b.BotUsername, MachineName: b.MachineName,
 			Kind: b.Kind, Version: b.Version, Online: botsmod.Online(b), Legacy: b.Legacy(),
 			HasToken: b.HasToken, Pending: b.PendingChats, Approved: b.ApprovedChats,
-			Deliveries: b.PendingDeliveries,
+			Deliveries: b.PendingDeliveries, Instance: b.Instance,
+			ProvisionStatus: b.ProvisionStatus, ProvisionError: b.ProvisionError,
+		}
+		if b.ProvisionAt != nil {
+			bv.ProvisionAt = b.ProvisionAt.UTC().Format("2006-01-02 15:04")
+		}
+		if ch, chat, err := s.Store.ChannelForConsumer(ctx, u.ID,
+			store.ConsumerBot, b.ID, store.DirectionReceive); err == nil && ch != nil {
+			if atts, _ := s.Store.ConsumerAttachments(ctx, u.ID, store.ConsumerBot, b.ID, store.DirectionReceive); len(atts) > 0 {
+				bv.Channel, bv.ChannelChat = ch.Name, chat
+			}
 		}
 		if b.LastSeen != nil {
 			bv.LastSeen = b.LastSeen.UTC().Format("2006-01-02 15:04")
@@ -61,17 +71,73 @@ func (s *Server) createBot(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	name := strings.TrimSpace(r.FormValue("name"))
 	machineID := strings.TrimSpace(r.FormValue("machine_id"))
-	_, token, err := s.Store.CreateBot(r.Context(), u.ID, name, machineID)
+	channelID := strings.TrimSpace(r.FormValue("channel_id"))
+	bot, token, err := s.Store.CreateBot(r.Context(), u.ID, name, machineID)
 	if err != nil {
 		http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
 		return
+	}
+	// The channel gives the instance its Telegram credential and primary chat.
+	if channelID != "" {
+		if err := s.Store.AttachChannel(r.Context(), u.ID, store.ChannelAttachment{
+			ChannelID: channelID, Consumer: store.ConsumerBot, ConsumerID: bot.ID,
+			Direction: store.DirectionReceive,
+		}); err != nil {
+			_ = s.Store.DeleteBot(r.Context(), u.ID, bot.ID)
+			http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+			return
+		}
 	}
 	_ = s.Store.SetModuleEnabled(r.Context(), u.ID, "bots", true)
 	if s.OnToolsChanged != nil {
 		s.OnToolsChanged(u.ID)
 	}
+	// Zero touch: with a channel and a machine there is nothing left to do by hand.
+	if channelID != "" && machineID != "" && s.Provision != nil {
+		s.Provision.Start(u.ID, bot.ID)
+		http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("Bot created — provisioning started"), http.StatusFound)
+		return
+	}
 	s.flashBotToken(w, token)
 	http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("Bot created — copy the token now"), http.StatusFound)
+}
+
+// provisionBot installs (or re-installs) the daemon on the bot's machine.
+func (s *Server) provisionBot(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	id := r.PathValue("id")
+	if s.Provision == nil {
+		http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("error: provisioning is not configured"), http.StatusFound)
+		return
+	}
+	bot, err := s.Store.BotByID(r.Context(), u.ID, id)
+	if err != nil {
+		http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("error: unknown bot"), http.StatusFound)
+		return
+	}
+	if !bot.Provisionable() {
+		http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("error: set a target machine first"), http.StatusFound)
+		return
+	}
+	s.Provision.Start(u.ID, bot.ID)
+	http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("Provisioning "+bot.Name+" on "+bot.MachineName), http.StatusFound)
+}
+
+// saveBotTarget changes the machine a bot is provisioned onto.
+func (s *Server) saveBotTarget(w http.ResponseWriter, r *http.Request) {
+	u := s.requireUser(w, r)
+	if u == nil {
+		return
+	}
+	_ = r.ParseForm()
+	if err := s.Store.SetBotTarget(r.Context(), u.ID, r.PathValue("id"), r.FormValue("machine_id")); err != nil {
+		http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("Target machine updated"), http.StatusFound)
 }
 
 // flashBotToken stashes a freshly issued token for one render of the Bots page
@@ -108,6 +174,7 @@ func (s *Server) deleteBot(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
+	_ = s.Store.DetachConsumer(r.Context(), u.ID, store.ConsumerBot, r.PathValue("id"))
 	if err := s.Store.DeleteBot(r.Context(), u.ID, r.PathValue("id")); err != nil {
 		http.Redirect(w, r, "/dashboard/bots?flash="+urlQuery("error: "+err.Error()), http.StatusFound)
 		return

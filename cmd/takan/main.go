@@ -158,6 +158,18 @@ func main() {
 	)
 
 	botWatch := bots.NewWatcher()
+	// Telegram channels own every bot credential; the notifier and the bots
+	// module both resolve theirs through channel attachments.
+	tgSvc := &telegram.Service{Store: st, Box: box}
+	// Zero-touch provisioning rides the agent's existing bash transport, so no
+	// agent update is needed on machines already in the field.
+	provisioner := &bots.Provisioner{
+		Store:     st,
+		Hub:       hub,
+		PublicURL: cfg.PublicURL,
+		Token:     tgSvc.Token,
+		Notify:    tgSvc.Notifier(),
+	}
 
 	prov := &modules.Provider{
 		Store: st,
@@ -185,6 +197,8 @@ func main() {
 	}
 	webSrv.SIPHub = sipHub
 	webSrv.BotWatch = botWatch
+	webSrv.Telegram = tgSvc
+	webSrv.Provision = provisioner
 	webSrv.AuthRateLimit = authLimit
 	webSrv.SendLoginCode = sendLoginCode
 	webSrv.OwnerEmail = cfg.OwnerEmail
@@ -231,9 +245,11 @@ func main() {
 
 	// Bot daemons (Telegram assistants) authenticate with their own bot token.
 	botsSrv := &bots.Server{
-		Store:  st,
-		Watch:  botWatch,
-		Notify: telegram.Notifier(st, box),
+		Store:     st,
+		Watch:     botWatch,
+		Notify:    tgSvc.Notifier(),
+		PublicURL: cfg.PublicURL,
+		Provision: provisioner,
 	}
 
 	oauthSrv := &oauth.Server{
@@ -262,6 +278,9 @@ func main() {
 			}
 			if _, err := st.PurgeBotJobs(context.Background(), 30*24*time.Hour); err != nil {
 				log.Printf("bot job gc: %v", err)
+			}
+			if _, err := st.PurgeProvisionTickets(context.Background()); err != nil {
+				log.Printf("provision ticket gc: %v", err)
 			}
 			if _, err := st.PurgeLoginCodes(context.Background(), time.Hour); err != nil {
 				log.Printf("login code gc: %v", err)

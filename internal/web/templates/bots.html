@@ -111,6 +111,10 @@
             {{if gt .Pending 0}}<span class="pill warn">{{.Pending}} pending</span>{{end}}
             {{if gt .Deliveries 0}}<span class="pill warn">{{.Deliveries}} queued</span>{{end}}
             {{if .Legacy}}<span class="pill neutral">legacy owner</span>{{end}}
+            {{if eq .ProvisionStatus "queued"}}<span class="pill neutral">provision queued</span>{{end}}
+            {{if eq .ProvisionStatus "running"}}<span class="pill warn">provisioning…</span>{{end}}
+            {{if eq .ProvisionStatus "ok"}}<span class="pill on">provisioned</span>{{end}}
+            {{if eq .ProvisionStatus "failed"}}<span class="pill off">provision failed</span>{{end}}
           </div>
           <p class="faint" style="margin-top:.2rem">
             {{if .Username}}@{{.Username}} · {{end}}
@@ -119,6 +123,17 @@
             {{if .LastSeen}} · last seen {{.LastSeen}}{{end}}
             · {{.Approved}} approved chat(s)
           </p>
+          {{if .Channel}}
+          <p class="faint" style="margin-top:.2rem">
+            channel <strong>{{.Channel}}</strong>{{if .ChannelChat}} · chat {{.ChannelChat}}{{end}}
+            {{if .Instance}} · unit {{.Instance}}.service{{end}}
+          </p>
+          {{end}}
+          {{if .ProvisionError}}
+          <p class="err" style="margin-top:.35rem">{{.ProvisionError}}</p>
+          {{else if .ProvisionAt}}
+          <p class="faint" style="margin-top:.2rem">last provision {{.ProvisionAt}}</p>
+          {{end}}
           {{if .Legacy}}
           <p class="faint" style="margin-top:.2rem">
             Placeholder kept so <code>machine_ai_run owner={{.Name}}</code> still resolves.
@@ -173,6 +188,12 @@
         </div>
 
         <div class="row" style="gap:.4rem;align-items:flex-start">
+          {{if $bot.MachineName}}
+          <form method="post" action="/dashboard/bots/{{.ID}}/provision"
+                onsubmit="return confirm('Install {{$bot.Instance}}.service on {{$bot.MachineName}}? Re-provisioning updates the binary and env and restarts it.')">
+            <button type="submit">{{if eq $bot.ProvisionStatus "ok"}}Re-provision{{else}}Provision{{end}}</button>
+          </form>
+          {{end}}
           <form method="post" action="/dashboard/bots/{{.ID}}/token"
                 onsubmit="return confirm('{{if $bot.HasToken}}Issue a NEW token for {{$bot.Name}}? The current one stops working.{{else}}Issue a daemon token for {{$bot.Name}}?{{end}}')">
             <button type="submit" class="secondary">{{if $bot.HasToken}}New token{{else}}Issue token{{end}}</button>
@@ -204,13 +225,30 @@
         <input id="name" name="name" type="text" required placeholder="Atlas" autocomplete="off"/>
       </div>
       <div>
-        <label for="machine_id">Machine (optional)</label>
+        <label for="channel_id">Telegram channel</label>
+        <select id="channel_id" name="channel_id">
+          <option value="">— none (register the daemon by hand) —</option>
+          {{range .BotChannels}}
+          <option value="{{.ID}}">{{.Name}}{{if .BotUser}} (@{{.BotUser}}){{end}}</option>
+          {{end}}
+        </select>
+        <p class="faint" style="margin-top:.3rem">
+          The channel supplies the bot credential and its primary chat. Add channels in
+          <a href="/dashboard/telegram">Telegram</a>. Channels already receiving for another bot are hidden.
+        </p>
+      </div>
+      <div>
+        <label for="machine_id">Machine</label>
         <select id="machine_id" name="machine_id">
-          <option value="">— report on register —</option>
+          <option value="">— none (no automatic install) —</option>
           {{range .Machines}}
           <option value="{{.ID}}">{{.Name}}{{if .Online}} (online){{end}}</option>
           {{end}}
         </select>
+        <p class="faint" style="margin-top:.3rem">
+          With a channel and a machine, Takan installs the daemon over its takan-agent right away
+          (Linux/systemd only). No ssh, no manual steps.
+        </p>
       </div>
       <div class="row">
         <button type="submit">Add bot</button>
@@ -227,6 +265,7 @@
         <li><span><code>POST /api/bots/chats/pending</code> — report an unknown chat (idempotent per chat)</span></li>
         <li><span><code>GET /api/bots/deliveries</code> — outbox (AI job results); <code>wait</code> for long-poll</span></li>
         <li><span><code>POST /api/bots/deliveries/ack</code> — confirm what was forwarded; unacked deliveries come back</span></li>
+        <li><span><code>GET /api/bots/binary?os=&amp;arch=</code> — daemon binary (agent token or provision ticket)</span></li>
       </ul>
       <p class="muted" style="margin-top:.6rem">
         MCP tools when this module is enabled: <code>bots_list</code>, <code>bots_chats</code>,

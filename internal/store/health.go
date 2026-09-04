@@ -39,18 +39,18 @@ type HealthLogEntry struct {
 
 // HealthIssue is an injury, condition, or medical event (historial).
 type HealthIssue struct {
-	ID         string
-	UserID     string
-	Title      string
-	Status     string // active | recovering | resolved | chronic
-	StartedOn  string // YYYY-MM-DD
-	EndedOn    string
-	BodyPart   string
-	Diagnosis  string
-	Treatment  string
-	Notes      string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID        string
+	UserID    string
+	Title     string
+	Status    string // active | recovering | resolved | chronic
+	StartedOn string // YYYY-MM-DD
+	EndedOn   string
+	BodyPart  string
+	Diagnosis string
+	Treatment string
+	Notes     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 func (s *Store) migrateHealth() error {

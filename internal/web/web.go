@@ -53,6 +53,10 @@ type Server struct {
 	SIPHub *sipmod.Hub
 	// BotWatch optional: wakes long-polling bot daemons after a panel decision.
 	BotWatch *botsmod.Watcher
+	// Telegram optional: channel CRUD (sealing, getMe validation) for the panel.
+	Telegram *telegrammod.Service
+	// Provision optional: zero-touch bot installs onto machines.
+	Provision *botsmod.Provisioner
 	// SendLoginCode delivers a one-time login code by email. Required for login.
 	SendLoginCode func(ctx context.Context, to, code string, ttl time.Duration) (string, error)
 	// OwnerEmail is TAKAN_OWNER_EMAIL; it wins over the address stored in the DB.
@@ -120,6 +124,16 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /dashboard/bots", s.createBot)
 	mux.HandleFunc("POST /dashboard/bots/{id}/delete", s.deleteBot)
 	mux.HandleFunc("POST /dashboard/bots/{id}/token", s.issueBotToken)
+	mux.HandleFunc("POST /dashboard/bots/{id}/provision", s.provisionBot)
+	mux.HandleFunc("POST /dashboard/telegram/channels", s.createChannel)
+	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/delete", s.deleteChannel)
+	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/default", s.defaultChannel)
+	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/chats", s.addChannelChat)
+	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/chats/{chat}/remove", s.removeChannelChat)
+	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/discover", s.discoverChannelChats)
+	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/attach", s.attachChannel)
+	mux.HandleFunc("POST /dashboard/telegram/channels/{id}/detach", s.detachChannel)
+	mux.HandleFunc("POST /dashboard/bots/{id}/target", s.saveBotTarget)
 	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/approve", s.approveBotChat)
 	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/deny", s.denyBotChat)
 	mux.HandleFunc("POST /dashboard/bots/{id}/chats/{chat}/forget", s.forgetBotChat)
@@ -237,6 +251,8 @@ type pageData struct {
 	BotsPending     int
 	BotsDeliveries  int
 	BotPendingChats []botChatView
+	Channels        []channelView
+	BotChannels     []channelView
 	BotToken        string // flash: bot token shown once after create/reissue
 	BotInstallHint  string // flash: one-line hint with the API base URL
 	// ActiveNav highlights the sidebar item: overview|integrations|machine|mercadona|…
@@ -324,6 +340,8 @@ type displayView struct {
 
 type botView struct {
 	ID, Name, Username, MachineName, Kind, Version string
+	Instance, Channel, ChannelChat                 string
+	ProvisionStatus, ProvisionError, ProvisionAt   string
 	Online, Legacy, HasToken                       bool
 	LastSeen                                       string
 	Pending, Approved, Deliveries                  int
@@ -1022,6 +1040,7 @@ func (s *Server) buildDashboard(ctx context.Context, u *store.User) pageData {
 			})
 		}
 	}
+	s.fillChannels(ctx, u, &data)
 	s.fillBotsDashboard(ctx, u, &data)
 	tvc, _ := tvmod.LoadConfig(ctx, s.Store, u.ID)
 	data.TVMachine = tvc.Machine
