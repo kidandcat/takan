@@ -96,7 +96,18 @@ func newTestAssistant(t *testing.T) *Assistant {
 	return a
 }
 
+func newTestAssistantWithLegacyDir(t *testing.T, legacyDir string) *Assistant {
+	t.Helper()
+	a, _ := newTestAssistantOpts(t, legacyDir)
+	return a
+}
+
 func newTestAssistantWithTelegram(t *testing.T) (*Assistant, *fakeTelegram) {
+	t.Helper()
+	return newTestAssistantOpts(t, "")
+}
+
+func newTestAssistantOpts(t *testing.T, legacyDir string) (*Assistant, *fakeTelegram) {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(dir, nil)
@@ -125,6 +136,7 @@ func newTestAssistantWithTelegram(t *testing.T) (*Assistant, *fakeTelegram) {
 		TelegramBotToken: "test-bot-token",
 		AppToken:         "test-token",
 		TelegramAPIBase:  base,
+		LegacyDir:        legacyDir,
 	})
 	if err != nil {
 		t.Fatal(err)

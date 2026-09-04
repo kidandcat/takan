@@ -61,9 +61,12 @@ type Assistant struct {
 	Hub *agenthub.Hub
 
 	dataDir string
-	workdir string
-	home    string
-	ctx     context.Context
+	// legacyDir is the standalone daemon's data directory, imported once at
+	// boot. Empty disables the import.
+	legacyDir string
+	workdir   string
+	home      string
+	ctx       context.Context
 }
 
 // New builds the assistant from the process configuration and the panel's
@@ -115,7 +118,7 @@ func New(ctx context.Context, st *store.Store, box *cryptox.Box, hub *agenthub.H
 	a := &Assistant{
 		Opts: opts, Store: st, Box: box, Hub: hub,
 		OwnerID: cfg.OwnerID, OwnerTelegram: cfg.OwnerTelegram, AppToken: cfg.AppToken,
-		dataDir: cfg.DataDir, workdir: workdir, home: home, ctx: ctx,
+		dataDir: cfg.DataDir, legacyDir: cfg.LegacyDir, workdir: workdir, home: home, ctx: ctx,
 	}
 
 	a.Bot = &Bot{
@@ -193,7 +196,9 @@ func (a *Assistant) Run(ctx context.Context) error {
 	a.ctx = ctx
 	a.Bot.SetRunContext(ctx)
 
-	if err := ImportLegacyJSON(ctx, a.Store, a.OwnerID, a.dataDir); err != nil {
+	// The legacy daemon kept its state in its OWN directory, which is not the
+	// hub's data dir: importing from a.dataDir found nothing and said nothing.
+	if err := ImportLegacyJSON(ctx, a.Store, a.OwnerID, a.legacyDir); err != nil {
 		log.Printf("assistant: legacy state import: %v", err)
 	}
 

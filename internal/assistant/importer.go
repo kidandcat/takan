@@ -99,6 +99,8 @@ func ImportLegacyJSON(ctx context.Context, st *store.Store, userID, dir string) 
 	if strings.TrimSpace(dir) == "" {
 		return nil
 	}
+	log.Printf("assistant: legacy import scanning %s", dir)
+
 	var problems []string
 	for _, step := range []struct {
 		file string
@@ -112,17 +114,23 @@ func ImportLegacyJSON(ctx context.Context, st *store.Store, userID, dir string) 
 		path := filepath.Join(dir, step.file)
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			if !os.IsNotExist(err) {
-				problems = append(problems, fmt.Sprintf("%s: %v", step.file, err))
+			if os.IsNotExist(err) {
+				// Say so explicitly: a silent no-op looks exactly like a
+				// successful import, which is how a wrong path goes unnoticed.
+				log.Printf("assistant: legacy import: %s not present, skipping", path)
+				continue
 			}
+			log.Printf("assistant: legacy import: cannot read %s: %v", path, err)
+			problems = append(problems, fmt.Sprintf("%s: %v", step.file, err))
 			continue
 		}
 		n, err := step.run(ctx, st, userID, raw)
 		if err != nil {
+			log.Printf("assistant: legacy import: %s failed: %v", path, err)
 			problems = append(problems, fmt.Sprintf("%s: %v", step.file, err))
 			continue
 		}
-		log.Printf("assistant: imported %d row(s) from %s", n, path)
+		log.Printf("assistant: legacy import: %s → %d row(s)", path, n)
 		if err := os.Rename(path, path+".imported"); err != nil {
 			problems = append(problems, fmt.Sprintf("rename %s: %v", step.file, err))
 		}

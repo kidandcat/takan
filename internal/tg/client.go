@@ -61,6 +61,40 @@ func (c *Client) endpoint(method string) string {
 	return c.base + "/bot" + c.token + "/" + method
 }
 
+// tokenPlaceholder is what a redacted bot token reads as.
+const tokenPlaceholder = "«bot-token»"
+
+// scrubbedError hides the bot token in an error message.
+//
+// The Bot API puts the credential in the URL path, so every *url.Error from
+// http.Client carries it verbatim. Those errors do not stay in the process:
+// a failed getUpdates lands in the panel, in takan_status and in /health, and a
+// failed download is delivered to Telegram and stored in the conversation. One
+// transient DNS failure would publish the bot token to all of them.
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+
+// Unwrap keeps errors.Is/As working for sentinels like context.Canceled. Only
+// Error() is redacted, because only Error() is what callers store and display.
+func (e *scrubbedError) Unwrap() error { return e.err }
+
+// scrub redacts the bot token anywhere in an error's message. Every path that
+// can produce an error mentioning a request URL must pass through here.
+func (c *Client) scrub(err error) error {
+	if err == nil || c.token == "" {
+		return err
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, c.token) {
+		return err
+	}
+	return &scrubbedError{msg: strings.ReplaceAll(msg, c.token, tokenPlaceholder), err: err}
+}
+
 // call posts a JSON payload to a Bot API method and decodes result into out.
 func (c *Client) call(ctx context.Context, client *http.Client, method string, payload any, out any) error {
 	if c.token == "" {
@@ -72,7 +106,7 @@ func (c *Client) call(ctx context.Context, client *http.Client, method string, p
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(method), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return c.scrub(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return c.do(client, req, method, out)
@@ -81,7 +115,7 @@ func (c *Client) call(ctx context.Context, client *http.Client, method string, p
 func (c *Client) do(client *http.Client, req *http.Request, method string, out any) error {
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram %s: %w", method, err)
+		return c.scrub(fmt.Errorf("telegram %s: %w", method, err))
 	}
 	defer resp.Body.Close()
 
@@ -236,11 +270,11 @@ func (c *Client) DownloadFile(ctx context.Context, filePath, dst string) error {
 	rawURL := c.base + "/file/bot" + c.token + "/" + filePath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return err
+		return c.scrub(err)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("download %s: %w", filepath.Base(filePath), err)
+		return c.scrub(fmt.Errorf("download %s: %w", filepath.Base(filePath), err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -306,7 +340,7 @@ func (c *Client) upload(ctx context.Context, method, field string, chatID int64,
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint(method), &buf)
 	if err != nil {
-		return err
+		return c.scrub(err)
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return c.do(&http.Client{Timeout: 5 * time.Minute}, req, method, nil)

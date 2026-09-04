@@ -5,9 +5,23 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kidandcat/takan/internal/store"
 )
+
+// waitFor polls cond until it holds or the test gives up.
+func waitFor(t *testing.T, cond func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
 
 // legacyFixture copies testdata/legacy into a writable directory. The fixtures
 // keep the shapes the standalone daemon wrote in production, with every message
@@ -268,5 +282,69 @@ func TestImportIsANoOpWithoutALegacyDir(t *testing.T) {
 	}
 	if err := ImportLegacyTOML(ctx, a.Store, a.OwnerID, ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestNewWiresTheLegacyDir is the regression test for an import that pointed at
+// the hub's own data directory instead of the daemon's. Nothing failed: the
+// files simply were not there, so the import was a silent no-op and prod would
+// have come up with an empty conversation, no reminders and no tasks.
+func TestNewWiresTheLegacyDir(t *testing.T) {
+	legacy := legacyFixture(t)
+	processAlive = func(int) bool { return false }
+	t.Cleanup(func() { processAlive = defaultProcessAlive })
+
+	a := newTestAssistantWithLegacyDir(t, legacy)
+	ctx := context.Background()
+
+	// Run() performs the import, then blocks on the poll loop; the fake Bot API
+	// answers getMe, so stop it once the import has happened.
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = a.Run(runCtx)
+	}()
+	waitFor(t, func() bool {
+		jobs, _ := a.Store.ListAssistantJobs(ctx, a.OwnerID)
+		return len(jobs) == 2
+	}, "jobs to be imported")
+	cancel()
+	<-done
+
+	tasks, _ := a.Store.ListAssistantTasks(ctx, a.OwnerID)
+	if len(tasks) != 2 {
+		t.Fatalf("tasks were not imported: %d", len(tasks))
+	}
+	if got := len(a.Bot.history.List("", "", 100)); got != 3 {
+		t.Fatalf("messages were not imported: %d", got)
+	}
+	offset, _ := a.Store.AssistantMeta(ctx, a.OwnerID, store.MetaTelegramOffset)
+	if offset != "246853685" {
+		t.Fatalf("the update offset was not imported, got %q", offset)
+	}
+	for _, name := range []string{"state.json", "app-messages.json", "jobs.json", "tasks.json"} {
+		if _, err := os.Stat(filepath.Join(legacy, name+".imported")); err != nil {
+			t.Fatalf("%s was not consumed: %v", name, err)
+		}
+	}
+}
+
+// TestRunWithoutALegacyDirImportsNothing: once the operator removes the env
+// var, a re-run must not touch anything.
+func TestRunWithoutALegacyDirImportsNothing(t *testing.T) {
+	a := newTestAssistant(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = a.Run(ctx)
+	}()
+	waitFor(t, func() bool { return a.Bot.Username() != "" }, "the bot to identify itself")
+	cancel()
+	<-done
+
+	if got := len(a.Bot.history.List("", "", 10)); got != 0 {
+		t.Fatalf("nothing should have been imported, got %d messages", got)
 	}
 }
