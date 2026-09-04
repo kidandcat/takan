@@ -3,6 +3,7 @@ package email
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -65,12 +66,15 @@ func sendLoginMail(ctx context.Context, apiKey string, senders []string, to, bod
 	for _, sender := range senders {
 		id, err := sendResend(ctx, apiKey, sender, to, subject, body, "")
 		if err == nil {
+			// Sender and Resend id only — the code itself is never logged.
+			log.Printf("login code accepted by Resend (from=%s id=%s)", sender, id)
 			return id, nil
 		}
 		lastErr = err
 		if !unverifiedSender(err) {
 			return "", err
 		}
+		log.Printf("login mail: sender %s rejected as unverified, trying the next domain", sender)
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no sender address available")
