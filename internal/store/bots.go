@@ -68,13 +68,21 @@ type Bot struct {
 // Legacy reports whether this is a seeded owner placeholder with no daemon yet.
 func (b Bot) Legacy() bool { return b.Kind == BotKindLegacy }
 
-// Provision job states.
+// Provision job states. ProvisionAdopted is a success like ProvisionOK, but the
+// daemon was already installed by hand: Takan only injected its environment
+// through a drop-in and left the operator's unit untouched.
 const (
 	ProvisionQueued  = "queued"
 	ProvisionRunning = "running"
 	ProvisionOK      = "ok"
+	ProvisionAdopted = "adopted"
 	ProvisionFailed  = "failed"
 )
+
+// ProvisionSucceeded reports whether a provision state is a success.
+func ProvisionSucceeded(status string) bool {
+	return status == ProvisionOK || status == ProvisionAdopted
+}
 
 // ProvisionTicketTTL bounds how long a provision run may fetch its manifest and
 // binary from the hub.

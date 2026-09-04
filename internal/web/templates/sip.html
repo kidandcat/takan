@@ -124,10 +124,13 @@
         <h3>Phone gateways</h3>
         <p class="muted">Each device is one Android + SIM. Outbound WSS only.</p>
       </div>
-      <span class="pill {{if gt .SIPOnlineCount 0}}on{{else}}neutral{{end}}">
-        {{if gt .SIPOnlineCount 0}}<span class="live"></span>{{end}}
-        {{.SIPOnlineCount}} online
-      </span>
+      <div class="row" style="gap:.55rem;align-items:center">
+        <span class="pill {{if gt .SIPOnlineCount 0}}on{{else}}neutral{{end}}">
+          {{if gt .SIPOnlineCount 0}}<span class="live"></span>{{end}}
+          {{.SIPOnlineCount}} online
+        </span>
+        <button type="button" class="btn" style="margin-top:0" data-modal-open="m-add-gateway">Add gateway</button>
+      </div>
     </div>
 
     {{if .SIPDevices}}
@@ -156,22 +159,8 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">No gateways yet. Add one and put the token on the phone.</div>
+    <div class="empty">No gateways yet. Use <strong>Add gateway</strong> and put the token on the phone.</div>
     {{end}}
-
-    <h3 class="subhead">Add gateway</h3>
-    <p class="subhead-help">Name is the device slug (e.g. honor-1). Token shown once.</p>
-    <form method="post" action="/dashboard/sip/devices" class="form-grid">
-      <div>
-        <label for="sip-name">Name</label>
-        <input id="sip-name" name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="honor-1"/>
-      </div>
-      <div>
-        <label for="sip-sim">SIM E.164</label>
-        <input id="sip-sim" name="sim_e164" type="text" placeholder="+34600…" autocomplete="off"/>
-      </div>
-      <button type="submit">Create device</button>
-    </form>
 
     {{if .SIPCalls}}
     <h3 class="subhead">Active calls</h3>
@@ -187,4 +176,26 @@
     {{end}}
   </div>
 </section>
+
+<dialog id="m-add-gateway" class="tk-modal">
+  <form method="post" action="/dashboard/sip/devices" class="form-stack">
+    <div class="modal-head">
+      <h3>Add gateway</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <p class="muted" style="margin:0 0 .5rem;font-size:.9rem">Name is the device slug (e.g. honor-1). Token shown once.</p>
+    <div>
+      <label for="sip-name">Name</label>
+      <input id="sip-name" name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="honor-1"/>
+    </div>
+    <div>
+      <label for="sip-sim">SIM E.164</label>
+      <input id="sip-sim" name="sim_e164" type="text" placeholder="+34600…" autocomplete="off"/>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Create device</button>
+    </div>
+  </form>
+</dialog>
 {{end}}

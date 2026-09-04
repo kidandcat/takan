@@ -76,18 +76,12 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">No machines yet. Create one and run the install command on the host.</div>
+    <div class="empty">No machines yet — use Add machine, then run the install command on the host.</div>
     {{end}}
 
-    <h3 class="subhead">Add machine</h3>
-    <p class="subhead-help">Name is stored on the server. Token shown once.</p>
-    <form method="post" action="/dashboard/machines" class="form-grid">
-      <div>
-        <label for="mach-name">Name</label>
-        <input id="mach-name" name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="mac, vps1, laptop…"/>
-      </div>
-      <button type="submit">Create + install</button>
-    </form>
+    <div class="row" style="margin-top:.85rem">
+      <button type="button" class="btn" data-modal-open="m-add-machine">Add machine</button>
+    </div>
 
     {{if .InstallCmd}}
     <div class="install-box">
@@ -111,7 +105,7 @@
       </span>
     </div>
 
-    <form method="post" action="/dashboard/machines/ai" class="form-stack">
+    <form id="ai-settings-form" method="post" action="/dashboard/machines/ai" class="form-stack">
       <div class="machine-row ai-enable">
         <div>
           <div class="name">Enable AI tasks</div>
@@ -160,19 +154,8 @@
       {{end}}
       </div>
 
-      <h3 class="subhead">Add free command</h3>
-      <p class="subhead-help">Any CLI on the machine PATH.</p>
-      <div class="form-grid" style="grid-template-columns:1fr;gap:.4rem;margin-bottom:.35rem">
-        <div>
-          <label for="new_name">Name</label>
-          <input id="new_name" name="new_name" placeholder="Codex, aider…"/>
-        </div>
-        <div>
-          <label for="new_command">Command</label>
-          <input id="new_command" name="new_command"
-            style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem"
-            placeholder="my-cli --yolo {{"{{prompt}}"}}"/>
-        </div>
+      <div class="row" style="margin-bottom:.35rem">
+        <button type="button" class="btn secondary" data-modal-open="m-add-runner">Add free command</button>
       </div>
 
       <div class="row">
@@ -181,4 +164,48 @@
     </form>
   </div>
 </section>
+
+<dialog id="m-add-machine" class="tk-modal">
+  <form method="post" action="/dashboard/machines" class="form-stack">
+    <div class="modal-head">
+      <h3>Add machine</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <p class="muted">Name is stored on the server. Token shown once.</p>
+    <div>
+      <label for="mach-name">Name</label>
+      <input id="mach-name" name="name" required pattern="[A-Za-z0-9_-]+" maxlength="64" placeholder="mac, vps1, laptop…"/>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Create + install</button>
+    </div>
+  </form>
+</dialog>
+
+{{/* Fields belong to #ai-settings-form so the payload stays identical to the
+     inline version: submitting saves the whole AI config plus the new runner. */}}
+<dialog id="m-add-runner" class="tk-modal">
+  <div class="form-stack">
+    <div class="modal-head">
+      <h3>Add free command</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <p class="muted">Any CLI on the machine PATH.</p>
+    <div>
+      <label for="new_name">Name</label>
+      <input id="new_name" name="new_name" form="ai-settings-form" placeholder="Codex, aider…"/>
+    </div>
+    <div>
+      <label for="new_command">Command</label>
+      <input id="new_command" name="new_command" form="ai-settings-form"
+        style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem"
+        placeholder="my-cli --yolo {{"{{prompt}}"}}"/>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit" form="ai-settings-form">Add command</button>
+    </div>
+  </div>
+</dialog>
 {{end}}

@@ -3,7 +3,6 @@ package bots
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"os"
 	"os/exec"
@@ -290,24 +289,7 @@ func TestInstanceNameSanitises(t *testing.T) {
 
 var _ = json.Marshal
 
-// guardSnippet extracts the "unit already exists" guard from the generated
-// script so the test exercises the real template text, not a copy of it.
-func guardSnippet(t *testing.T, script string) string {
-	t.Helper()
-	const start = `if [ -e "$UNIT" ]`
-	i := strings.Index(script, start)
-	if i < 0 {
-		t.Fatal("guard not found in the generated script")
-	}
-	rest := script[i:]
-	j := strings.Index(rest, "\nfi\n")
-	if j < 0 {
-		t.Fatal("guard has no terminator")
-	}
-	return rest[:j+len("\nfi\n")]
-}
-
-func TestProvisionRefusesUnmanagedUnit(t *testing.T) {
+func TestProvisionAdoptsUnmanagedUnit(t *testing.T) {
 	f, _ := provFixture(t)
 	script := f.srv.Provision.script("atlas", "ticket")
 
@@ -315,18 +297,24 @@ func TestProvisionRefusesUnmanagedUnit(t *testing.T) {
 	if !strings.Contains(script, "<<UNITEOF\n"+UnitMarker+"\n[Unit]") {
 		t.Fatal("generated unit must start with the takan-bots marker")
 	}
-	// The guard must run before anything is written: overwriting a hand-rolled
-	// unit would also replace its binary and orphan its env file.
-	guard := strings.Index(script, `if [ -e "$UNIT" ]`)
-	for _, write := range []string{`mkdir -p "$ENVDIR"`, `tee "$ENVFILE"`, `install -m 0755`, `tee "$UNIT"`} {
-		if at := strings.Index(script, write); at < guard {
-			t.Fatalf("%q happens before the guard", write)
+	// Adoption must never write the unit or the binary: those belong to whoever
+	// installed the daemon by hand.
+	for _, guarded := range []string{`$SUDO install -m 0755 "$TMPBIN" "$BIN"`, `$SUDO tee "$UNIT" >/dev/null <<UNITEOF`} {
+		at := strings.Index(script, guarded)
+		if at < 0 {
+			t.Fatalf("missing %q", guarded)
+		}
+		if at < strings.Index(script, `if [ "$MODE" = install ]; then`) {
+			t.Fatalf("%q must sit inside the install-only branch", guarded)
 		}
 	}
+	if !strings.Contains(script, `EnvironmentFile=-$ENVFILE`) {
+		t.Fatal("adoption must add an optional EnvironmentFile drop-in")
+	}
 
-	// Execute the real guard text against each case.
-	snippet := guardSnippet(t, script)
-	run := func(t *testing.T, contents string, exists bool) (int, string) {
+	// Execute the real mode-selection logic against each case.
+	snippet := modeSnippet(t, script)
+	run := func(t *testing.T, contents string, exists bool) string {
 		t.Helper()
 		dir := t.TempDir()
 		unit := filepath.Join(dir, "atlas.service")
@@ -335,46 +323,41 @@ func TestProvisionRefusesUnmanagedUnit(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		sh := "INSTANCE=atlas\nUNIT=" + unit + "\n" + snippet + "\necho REACHED-WRITES\n"
-		cmd := exec.Command("bash", "-c", sh)
-		out, err := cmd.CombinedOutput()
-		code := 0
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			code = ee.ExitCode()
-		} else if err != nil {
-			t.Fatal(err)
+		sh := "INSTANCE=atlas\nUNIT=" + unit + "\n" + snippet + "\necho MODE=$MODE\n"
+		out, err := exec.Command("bash", "-c", sh).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v: %s", err, out)
 		}
-		return code, string(out)
+		return strings.TrimSpace(string(out))
 	}
 
-	t.Run("no unit installs", func(t *testing.T) {
-		code, out := run(t, "", false)
-		if code != 0 || !strings.Contains(out, "REACHED-WRITES") {
-			t.Fatalf("a fresh machine must proceed: code=%d out=%q", code, out)
-		}
-	})
-	t.Run("takan unit re-provisions", func(t *testing.T) {
-		code, out := run(t, UnitMarker+"\n[Unit]\nDescription=Takan bot instance atlas\n", true)
-		if code != 0 || !strings.Contains(out, "REACHED-WRITES") {
-			t.Fatalf("a Takan-managed unit must be re-provisionable: code=%d out=%q", code, out)
-		}
-	})
-	t.Run("foreign unit refused", func(t *testing.T) {
-		// The shape of the live hand-rolled atlas.service on vps2.
-		foreign := "[Unit]\nDescription=Atlas\n\n[Service]\nUser=debian\n" +
-			"EnvironmentFile=/home/debian/atlas.env\nWorkingDirectory=/home/debian/atlas-data\n"
-		code, out := run(t, foreign, true)
-		if code != ExitUnmanagedUnit {
-			t.Fatalf("want exit %d, got %d (out=%q)", ExitUnmanagedUnit, code, out)
-		}
-		if strings.Contains(out, "REACHED-WRITES") {
-			t.Fatal("guard let execution continue to the writes")
-		}
-		for _, want := range []string{"already exists", "not managed by Takan", "refusing to overwrite"} {
-			if !strings.Contains(out, want) {
-				t.Fatalf("message missing %q: %s", want, out)
-			}
-		}
-	})
+	if got := run(t, "", false); got != "MODE=install" {
+		t.Fatalf("a fresh machine installs: %q", got)
+	}
+	if got := run(t, UnitMarker+"\n[Unit]\nDescription=Takan bot instance atlas\n", true); got != "MODE=install" {
+		t.Fatalf("a Takan-managed unit re-provisions in place: %q", got)
+	}
+	// The shape of the live hand-rolled atlas.service on vps2.
+	foreign := "[Unit]\nDescription=Atlas\n\n[Service]\nUser=debian\n" +
+		"EnvironmentFile=/home/debian/atlas.env\nWorkingDirectory=/home/debian/atlas-data\n"
+	if got := run(t, foreign, true); got != "MODE=adopt" {
+		t.Fatalf("a hand-rolled unit must be adopted, not overwritten: %q", got)
+	}
+}
+
+// modeSnippet extracts the install-vs-adopt decision from the generated script
+// so the test exercises the real template text.
+func modeSnippet(t *testing.T, script string) string {
+	t.Helper()
+	const start = "MODE=install"
+	i := strings.Index(script, start)
+	if i < 0 {
+		t.Fatal("mode selection not found in the generated script")
+	}
+	rest := script[i:]
+	j := strings.Index(rest, "\nfi\n")
+	if j < 0 {
+		t.Fatal("mode selection has no terminator")
+	}
+	return rest[:j+len("\nfi\n")]
 }

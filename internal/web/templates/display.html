@@ -59,7 +59,15 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">No screens yet. Add a machine first, then register it here.</div>
+    <div class="empty">No screens yet — add a machine first, then use Add screen to register it.</div>
+    {{end}}
+
+    {{if .Machines}}
+    <div class="row" style="margin-top:.85rem">
+      <button type="button" class="btn" data-modal-open="m-add-display">Add screen</button>
+    </div>
+    {{else}}
+    <p class="muted" style="margin-top:.85rem">Create a machine in <a href="/dashboard/machines">Machines</a> and run the install command on the kiosk host first.</p>
     {{end}}
   </div>
 </section>
@@ -68,46 +76,48 @@
   <div class="card">
     <div class="card-head">
       <div>
-        <h3>Add screen</h3>
-        <p class="muted">Binds a name to an installed takan-agent. The agent must be the build that serves local HTML.</p>
+        <h3>MCP tools</h3>
+        <p class="muted">
+          When this module is enabled: <code>display_list</code>, <code>display_show</code>.
+          Readiness is included in <code>takan_status</code>.
+        </p>
       </div>
     </div>
-    {{if .Machines}}
-    <form method="post" action="/dashboard/display" class="form-stack" style="max-width:28rem">
-      <div>
-        <label for="name">Name</label>
-        <input id="name" name="name" type="text" required placeholder="oficina" autocomplete="off"/>
-      </div>
-      <div>
-        <label for="machine_id">Machine</label>
-        <select id="machine_id" name="machine_id" required>
-          {{range .Machines}}
-          <option value="{{.ID}}">{{.Name}}{{if .Online}} (online){{end}}</option>
-          {{end}}
-        </select>
-      </div>
-      <label class="row" style="gap:.5rem;align-items:center">
-        <input type="checkbox" name="is_default" value="1"/>
-        <span>Default for <code>display_show</code> when name is omitted</span>
-      </label>
-      <div class="row">
-        <button type="submit">Add screen</button>
-      </div>
-    </form>
-    {{else}}
-    <p class="muted">Create a machine in <a href="/dashboard/machines">Machines</a> and run the install command on the kiosk host first.</p>
-    {{end}}
-
-    <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
-      <h3 style="margin-bottom:.35rem">MCP tools</h3>
-      <p class="muted">
-        When this module is enabled: <code>display_list</code>, <code>display_show</code>.
-        Readiness is included in <code>takan_status</code>.
-      </p>
-      <p class="faint" style="margin-top:.5rem">
-        Kiosk: <code>firefox --kiosk http://127.0.0.1:8787/</code> on the same host as the agent.
-      </p>
-    </div>
+    <p class="faint">
+      Kiosk: <code>firefox --kiosk http://127.0.0.1:8787/</code> on the same host as the agent.
+    </p>
   </div>
 </section>
+
+{{if .Machines}}
+<dialog id="m-add-display" class="tk-modal">
+  <form method="post" action="/dashboard/display" class="form-stack">
+    <div class="modal-head">
+      <h3>Add screen</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <p class="muted">Binds a name to an installed takan-agent. The agent must be the build that serves local HTML.</p>
+    <div>
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" required placeholder="oficina" autocomplete="off"/>
+    </div>
+    <div>
+      <label for="machine_id">Machine</label>
+      <select id="machine_id" name="machine_id" required>
+        {{range .Machines}}
+        <option value="{{.ID}}">{{.Name}}{{if .Online}} (online){{end}}</option>
+        {{end}}
+      </select>
+    </div>
+    <label class="row" style="gap:.5rem;align-items:center">
+      <input type="checkbox" name="is_default" value="1"/>
+      <span>Default for <code>display_show</code> when name is omitted</span>
+    </label>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Add screen</button>
+    </div>
+  </form>
+</dialog>
+{{end}}
 {{end}}

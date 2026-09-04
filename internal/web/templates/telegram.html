@@ -3,8 +3,9 @@
   <div>
     <h1>Telegram</h1>
     <p class="muted" style="margin-top:.4rem;max-width:56ch">
-      Create a bot with <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>,
-      paste the token, then set which chats the AI may message.
+      Channels hold your Telegram credentials. Create a bot with
+      <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>, add it as a channel,
+      then point bot instances, alerts and <code>telegram_send</code> at it.
     </p>
   </div>
 </section>
@@ -20,144 +21,100 @@
       <div>
         <h3>Bot credentials and their chats</h3>
         <p class="muted">
-          A channel is one BotFather token plus the chats it serves. Every consumer (bot instances,
-          Takan's own notifications, email alerts) attaches to a channel instead of holding a token.
+          A channel is one BotFather token plus the chats it serves. Bot instances, Takan's own
+          notifications and email alerts attach to a channel instead of holding a token.
           Tokens are sealed with the vault key and never shown again.
         </p>
       </div>
-      <span class="pill neutral">{{len .Channels}} channel(s)</span>
+      <div class="row" style="gap:.55rem">
+        <span class="pill neutral">{{len .Channels}} channel(s)</span>
+        <button type="button" class="btn" style="margin-top:0" data-modal-open="m-add-channel">Add channel</button>
+      </div>
     </div>
 
     {{if .Channels}}
-    <div class="machine-list">
+    <div class="channel-list">
       {{range .Channels}}
       {{$ch := .}}
-      <div class="machine-row" style="align-items:flex-start">
-        <div style="flex:1">
+      <article class="channel">
+        <header class="channel-head">
           <div class="row" style="gap:.45rem">
             <span class="name">{{.Name}}</span>
             {{if .BotUser}}<span class="pill neutral">@{{.BotUser}}</span>{{end}}
             {{if .IsDefault}}<span class="pill on">default</span>{{end}}
             {{if .Receiver}}<span class="pill warn">receiving: {{.Receiver}}</span>{{end}}
           </div>
-          {{if .BotName}}<p class="faint" style="margin-top:.2rem">{{.BotName}}</p>{{end}}
-
-          <table class="table" style="margin-top:.6rem">
-            <thead><tr><th>Chat</th><th>Type</th><th></th></tr></thead>
-            <tbody>
-              {{range .Chats}}
-              <tr>
-                <td><span class="name">{{.Label}}</span> <span class="faint mono">{{.ChatID}}</span></td>
-                <td>{{.Type}}</td>
-                <td>
-                  <form method="post" action="/dashboard/telegram/channels/{{$ch.ID}}/chats/{{.ChatID}}/remove"
-                        style="display:flex;justify-content:flex-end">
-                    <button type="submit" class="secondary">Remove</button>
-                  </form>
-                </td>
-              </tr>
-              {{else}}
-              <tr><td colspan="3" class="faint">No chats yet — this channel cannot send.</td></tr>
-              {{end}}
-            </tbody>
-          </table>
-
-          {{if .Attachments}}
-          <p class="faint" style="margin-top:.5rem">Attached:</p>
-          <div class="row" style="gap:.35rem;flex-wrap:wrap;margin-top:.25rem">
-            {{range .Attachments}}
-            <form method="post" action="/dashboard/telegram/channels/{{$ch.ID}}/detach" class="row" style="gap:.25rem">
-              <input type="hidden" name="consumer" value="{{.Consumer}}"/>
-              <input type="hidden" name="consumer_id" value="{{.ConsumerID}}"/>
-              <input type="hidden" name="direction" value="{{.Direction}}"/>
-              <span class="pill {{if .Receive}}warn{{else}}neutral{{end}}">{{.Label}} · {{.Direction}}</span>
-              <button type="submit" class="secondary">Detach</button>
+          <div class="row" style="gap:.4rem">
+            {{if not .IsDefault}}
+            <form method="post" action="/dashboard/telegram/channels/{{.ID}}/default">
+              <button type="submit" class="secondary">Make default</button>
             </form>
             {{end}}
+            <form method="post" action="/dashboard/telegram/channels/{{.ID}}/delete"
+                  onsubmit="return confirm('Remove channel {{.Name}}? Detach its consumers first.')">
+              <button type="submit" class="secondary">Remove</button>
+            </form>
           </div>
+        </header>
+
+        {{if .BotName}}<p class="faint channel-sub">{{.BotName}}</p>{{end}}
+
+        {{if .Chats}}
+        <div class="table-scroll">
+        <table class="data-table channel-table">
+          <thead><tr><th>Chat</th><th>Type</th><th class="col-actions"></th></tr></thead>
+          <tbody>
+            {{range .Chats}}
+            <tr>
+              <td><span class="name">{{.Label}}</span> <span class="faint mono">{{.ChatID}}</span></td>
+              <td><span class="pill {{if .Group}}warn{{else}}neutral{{end}}">{{.Type}}</span></td>
+              <td class="col-actions">
+                <form method="post" action="/dashboard/telegram/channels/{{$ch.ID}}/chats/{{.ChatID}}/remove">
+                  <button type="submit" class="ghost">Remove</button>
+                </form>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        </div>
+        {{else}}
+        <p class="faint channel-sub">No chats yet, so this channel cannot send.</p>
+        {{end}}
+
+        {{if .Attachments}}
+        <div class="chip-row">
+          <span class="faint">Attached</span>
+          {{range .Attachments}}
+          <form method="post" action="/dashboard/telegram/channels/{{$ch.ID}}/detach" class="chip">
+            <input type="hidden" name="consumer" value="{{.Consumer}}"/>
+            <input type="hidden" name="consumer_id" value="{{.ConsumerID}}"/>
+            <input type="hidden" name="direction" value="{{.Direction}}"/>
+            <span class="pill {{if .Receive}}warn{{else}}neutral{{end}}">{{.Label}} · {{.Direction}}</span>
+            <button type="submit" class="ghost" title="Detach">&times;</button>
+          </form>
           {{end}}
+        </div>
+        {{end}}
 
-          <form method="post" action="/dashboard/telegram/channels/{{.ID}}/chats" class="row"
-                style="gap:.35rem;margin-top:.6rem;flex-wrap:wrap">
-            <input name="chat_id" placeholder="chat id (e.g. -1002233445566)" required style="max-width:15rem"/>
-            <select name="chat_type">
-              <option value="private">private</option>
-              <option value="group">group</option>
-            </select>
-            <input name="chat_label" placeholder="label" style="max-width:10rem"/>
-            <button type="submit" class="secondary">Add chat</button>
-          </form>
-          <form method="post" action="/dashboard/telegram/channels/{{.ID}}/discover" style="margin-top:.4rem">
-            <button type="submit" class="secondary">Discover chats (getUpdates)</button>
-          </form>
-          <p class="faint" style="margin-top:.3rem">
-            Group ids are negative. Add the bot to the group, send one message there, then press Discover.
-            Discovery is refused while a bot instance is consuming this channel.
-          </p>
-
-          <form method="post" action="/dashboard/telegram/channels/{{.ID}}/attach" class="row"
-                style="gap:.35rem;margin-top:.5rem;flex-wrap:wrap">
-            <select name="consumer">
-              <option value="notifier">notifier (Takan alerts)</option>
-              <option value="email">email module</option>
-            </select>
-            <input name="chat_id" placeholder="chat id (blank = first)" style="max-width:12rem"/>
-            <button type="submit" class="secondary">Attach sender</button>
+        <div class="channel-actions">
+          <button type="button" class="secondary" data-modal-open="m-add-chat-{{.ID}}">Add chat</button>
+          <button type="button" class="secondary" data-modal-open="m-attach-{{.ID}}">Attach sender</button>
+          <form method="post" action="/dashboard/telegram/channels/{{.ID}}/discover">
+            <button type="submit" class="ghost">Discover chats</button>
           </form>
         </div>
-
-        <div class="row" style="gap:.4rem;align-items:flex-start">
-          {{if not .IsDefault}}
-          <form method="post" action="/dashboard/telegram/channels/{{.ID}}/default">
-            <button type="submit" class="secondary">Make default</button>
-          </form>
-          {{end}}
-          <form method="post" action="/dashboard/telegram/channels/{{.ID}}/delete"
-                onsubmit="return confirm('Remove channel {{.Name}}? Detach its consumers first.')">
-            <button type="submit" class="secondary">Remove</button>
-          </form>
-        </div>
-      </div>
+      </article>
       {{end}}
     </div>
     {{else}}
-    <div class="empty">No channels yet. Add one below.</div>
+    <div class="empty">No channels yet. Add one to give bots and notifications a Telegram credential.</div>
     {{end}}
 
-    <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)">
-      <h3 style="margin-bottom:.5rem">Add channel</h3>
-      <form method="post" action="/dashboard/telegram/channels" class="form-stack" style="max-width:30rem">
-        <div>
-          <label for="ch_name">Name</label>
-          <input id="ch_name" name="name" required placeholder="family" autocomplete="off"/>
-        </div>
-        <div>
-          <label for="ch_token">BotFather token</label>
-          <input id="ch_token" name="token" type="password" required autocomplete="off"
-                 placeholder="123456:ABC-DEF…"/>
-          <p class="faint" style="margin-top:.3rem">Validated with <code>getMe</code>, then sealed. Shown once, never again.</p>
-        </div>
-        <div>
-          <label for="ch_chat">First chat id (optional)</label>
-          <input id="ch_chat" name="chat_id" placeholder="282611642 or -1002233445566" autocomplete="off"/>
-        </div>
-        <div>
-          <label for="ch_type">Chat type</label>
-          <select id="ch_type" name="chat_type">
-            <option value="private">private</option>
-            <option value="group">group</option>
-          </select>
-        </div>
-        <div>
-          <label for="ch_label">Chat label (optional)</label>
-          <input id="ch_label" name="chat_label" placeholder="Family group" autocomplete="off"/>
-        </div>
-        <div class="row"><button type="submit">Add channel</button></div>
-      </form>
-    </div>
   </div>
 </section>
 
+{{if not .Channels}}
 <section class="section">
   <div class="card">
     <div class="card-head">
@@ -224,4 +181,99 @@
     {{end}}
   </div>
 </section>
+{{end}}
+
+<dialog id="m-add-channel" class="tk-modal">
+  <form method="post" action="/dashboard/telegram/channels" class="form-stack">
+    <div class="modal-head">
+      <h3>Add channel</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <p class="faint">Validated with <code>getMe</code>, then sealed with the vault key. The token is never shown again.</p>
+    <div>
+      <label for="ch_name">Name</label>
+      <input id="ch_name" name="name" required placeholder="family" autocomplete="off"/>
+    </div>
+    <div>
+      <label for="ch_token">BotFather token</label>
+      <input id="ch_token" name="token" type="password" required autocomplete="off" placeholder="123456:ABC-DEF…"/>
+    </div>
+    <div>
+      <label for="ch_chat">First chat id (optional)</label>
+      <input id="ch_chat" name="chat_id" placeholder="282611642 or -1002233445566" autocomplete="off"/>
+    </div>
+    <div>
+      <label for="ch_type">Chat type</label>
+      <select id="ch_type" name="chat_type">
+        <option value="private">private</option>
+        <option value="group">group</option>
+      </select>
+    </div>
+    <div>
+      <label for="ch_label">Chat label (optional)</label>
+      <input id="ch_label" name="chat_label" placeholder="Family group" autocomplete="off"/>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Add channel</button>
+    </div>
+  </form>
+</dialog>
+
+{{range .Channels}}
+<dialog id="m-add-chat-{{.ID}}" class="tk-modal">
+  <form method="post" action="/dashboard/telegram/channels/{{.ID}}/chats" class="form-stack">
+    <div class="modal-head">
+      <h3>Add chat to {{.Name}}</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <p class="faint">Group ids are negative. Add the bot to the group, send one message there, then use Discover chats to pick it up automatically.</p>
+    <div>
+      <label for="chat-{{.ID}}">Chat id</label>
+      <input id="chat-{{.ID}}" name="chat_id" required placeholder="-1002233445566"/>
+    </div>
+    <div>
+      <label for="type-{{.ID}}">Type</label>
+      <select id="type-{{.ID}}" name="chat_type">
+        <option value="private">private</option>
+        <option value="group">group</option>
+      </select>
+    </div>
+    <div>
+      <label for="label-{{.ID}}">Label</label>
+      <input id="label-{{.ID}}" name="chat_label" placeholder="Casa"/>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Add chat</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="m-attach-{{.ID}}" class="tk-modal">
+  <form method="post" action="/dashboard/telegram/channels/{{.ID}}/attach" class="form-stack">
+    <div class="modal-head">
+      <h3>Attach sender to {{.Name}}</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <p class="faint">Senders share a channel freely. Receiving is exclusive and belongs to a bot instance.</p>
+    <div>
+      <label for="cons-{{.ID}}">Sender</label>
+      <select id="cons-{{.ID}}" name="consumer">
+        <option value="notifier">notifier (Takan alerts)</option>
+        <option value="email">email module</option>
+      </select>
+    </div>
+    <div>
+      <label for="acid-{{.ID}}">Chat id</label>
+      <input id="acid-{{.ID}}" name="chat_id" placeholder="blank = the channel's first chat"/>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Attach</button>
+    </div>
+  </form>
+</dialog>
+{{end}}
+
 {{end}}

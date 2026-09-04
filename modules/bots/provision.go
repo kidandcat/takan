@@ -31,10 +31,6 @@ const BinaryName = "atlas"
 // provisioning refuses rather than overwriting someone's working daemon.
 const UnitMarker = "# managed-by: takan-bots"
 
-// ExitUnmanagedUnit is the script exit code for "a unit of this name exists and
-// Takan did not create it". Distinct from 77 (no root) and 78 (unsupported host).
-const ExitUnmanagedUnit = 79
-
 // TokenResolver hands back the clear Telegram credential of a channel.
 // Implemented by the telegram module, which owns the sealing key.
 type TokenResolver func(ctx context.Context, c *store.TelegramChannel) (string, error)
@@ -144,10 +140,15 @@ func (p *Provisioner) run(ctx context.Context, userID, botID string) error {
 	if res.ExitCode != 0 {
 		return fail(fmt.Sprintf("exit %d: %s", res.ExitCode, tailLine(res.Stderr, res.Stdout)))
 	}
-	if err := p.Store.SetBotProvisionState(ctx, botID, store.ProvisionOK, ""); err != nil {
+	out := tailLine(res.Stdout, "")
+	state := store.ProvisionOK
+	if strings.Contains(res.Stdout, "adopted existing unit") {
+		state = store.ProvisionAdopted
+	}
+	if err := p.Store.SetBotProvisionState(ctx, botID, state, ""); err != nil {
 		return err
 	}
-	p.notify(ctx, bot, true, tailLine(res.Stdout, ""))
+	p.notify(ctx, bot, true, out)
 	return nil
 }
 
@@ -228,11 +229,12 @@ BIN=/usr/local/bin/$INSTANCE
 TMPBIN="$(mktemp)"
 trap 'rm -f "$TMPBIN"' EXIT
 
-# Refuse before touching anything: overwriting a hand-rolled unit would also
-# replace its binary at $BIN and orphan its own env file and working directory.
+# A unit we did not write belongs to the operator: adopt it instead of
+# replacing it. Adoption only adds an environment drop-in, so the original unit,
+# its ExecStart, its user and its binary are all left exactly as they are.
+MODE=install
 if [ -e "$UNIT" ] && ! grep -qF ` + shellQuote(UnitMarker) + ` "$UNIT" 2>/dev/null; then
-  echo "takan-provision: $INSTANCE.service already exists on $(hostname -s 2>/dev/null || echo this machine) and is not managed by Takan; refusing to overwrite it. Flip it to hub mode manually, or remove the unit first." >&2
-  exit ` + fmt.Sprint(ExitUnmanagedUnit) + `
+  MODE=adopt
 fi
 
 umask 077
@@ -243,15 +245,16 @@ curl -fsS --max-time 60 -H "Authorization: Bearer $TICKET" \
   "$HUB/api/bots/provision/env" | $SUDO tee "$ENVFILE" >/dev/null
 $SUDO chmod 600 "$ENVFILE"
 
-curl -fsS --max-time 180 -H "Authorization: Bearer $TICKET" \
-  "$HUB/api/bots/binary?os=linux&arch=$ARCH" -o "$TMPBIN"
-if [ ! -s "$TMPBIN" ]; then
-  echo "takan-provision: hub returned an empty binary" >&2
-  exit 1
-fi
-$SUDO install -m 0755 "$TMPBIN" "$BIN"
+if [ "$MODE" = install ]; then
+  curl -fsS --max-time 180 -H "Authorization: Bearer $TICKET" \
+    "$HUB/api/bots/binary?os=linux&arch=$ARCH" -o "$TMPBIN"
+  if [ ! -s "$TMPBIN" ]; then
+    echo "takan-provision: hub returned an empty binary" >&2
+    exit 1
+  fi
+  $SUDO install -m 0755 "$TMPBIN" "$BIN"
 
-$SUDO tee "$UNIT" >/dev/null <<UNITEOF
+  $SUDO tee "$UNIT" >/dev/null <<UNITEOF
 ` + UnitMarker + `
 [Unit]
 Description=Takan bot instance $INSTANCE
@@ -272,9 +275,20 @@ MemorySwapMax=0
 [Install]
 WantedBy=multi-user.target
 UNITEOF
+  $SUDO systemctl enable "$INSTANCE.service" >/dev/null 2>&1 || true
+else
+  # Adoption: the operator owns the unit. Add only an environment drop-in, so
+  # ExecStart, User and the installed binary stay exactly as they were. The
+  # leading "-" makes the file optional, so removing it cannot brick the unit.
+  $SUDO mkdir -p "$UNIT.d"
+  $SUDO tee "$UNIT.d/takan.conf" >/dev/null <<DROPEOF
+` + UnitMarker + `
+[Service]
+EnvironmentFile=-$ENVFILE
+DROPEOF
+fi
 
 $SUDO systemctl daemon-reload
-$SUDO systemctl enable "$INSTANCE.service" >/dev/null 2>&1 || true
 $SUDO systemctl restart "$INSTANCE.service"
 sleep 2
 $SUDO systemctl is-active "$INSTANCE.service" >/dev/null 2>&1 || {
@@ -290,7 +304,11 @@ $SUDO systemctl is-active "$INSTANCE.service" >/dev/null 2>&1 || {
   fi
   exit 1
 }
-echo "takan-provision: $INSTANCE.service installed and active on $(hostname -s 2>/dev/null || echo machine)"
+if [ "$MODE" = adopt ]; then
+  echo "takan-provision: adopted existing unit $INSTANCE.service on $(hostname -s 2>/dev/null || echo machine); env drop-in installed, unit file untouched"
+else
+  echo "takan-provision: $INSTANCE.service installed and active on $(hostname -s 2>/dev/null || echo machine)"
+fi
 `
 }
 

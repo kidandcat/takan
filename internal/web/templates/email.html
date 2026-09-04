@@ -24,21 +24,18 @@
       {{end}}
     </div>
 
-    <form method="post" action="/dashboard/email" class="form-stack" style="max-width:100%">
-      <div>
-        <label for="api_key">API key</label>
-        <input id="api_key" name="api_key" type="password" {{if not .EmailConfigured}}required{{end}}
-          placeholder="{{if .EmailConfigured}}leave blank to keep current key{{else}}re_...{{end}}" autocomplete="off"/>
-      </div>
-      <div class="row">
-        <button type="submit">{{if .EmailConfigured}}Update key &amp; refresh domains{{else}}Save &amp; load domains{{end}}</button>
-        {{if .EmailConfigured}}
-        <button type="submit" formaction="/dashboard/email/refresh" class="secondary">Refresh domains only</button>
-        <button type="submit" formaction="/dashboard/email/clear" class="secondary" formnovalidate
-          onclick="return confirm('Remove API key and domain settings?')">Clear</button>
-        {{end}}
-      </div>
-    </form>
+    {{/* The key form lives in #m-set-email-key; these buttons stay inline and
+         post the same form through the form= association. */}}
+    <div class="row">
+      <button type="button" class="btn" data-modal-open="m-set-email-key">
+        {{if .EmailConfigured}}Update API key{{else}}Connect Resend{{end}}
+      </button>
+      {{if .EmailConfigured}}
+      <button type="submit" form="email-key-form" formaction="/dashboard/email/refresh" class="secondary">Refresh domains only</button>
+      <button type="submit" form="email-key-form" formaction="/dashboard/email/clear" class="secondary" formnovalidate
+        onclick="return confirm('Remove API key and domain settings?')">Clear</button>
+      {{end}}
+    </div>
 
     {{if .EmailConfigured}}
     <div id="email-domains">
@@ -49,6 +46,25 @@
     {{end}}
   </div>
 </section>
+
+<dialog id="m-set-email-key" class="tk-modal">
+  <form id="email-key-form" method="post" action="/dashboard/email" class="form-stack">
+    <div class="modal-head">
+      <h3>Resend API key</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <p class="muted">Stored encrypted. Domains are discovered automatically from your Resend account.</p>
+    <div>
+      <label for="api_key">API key</label>
+      <input id="api_key" name="api_key" type="password" {{if not .EmailConfigured}}required{{end}}
+        placeholder="{{if .EmailConfigured}}leave blank to keep current key{{else}}re_...{{end}}" autocomplete="off"/>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">{{if .EmailConfigured}}Update key &amp; refresh domains{{else}}Save &amp; load domains{{end}}</button>
+    </div>
+  </form>
+</dialog>
 {{end}}
 
 {{define "email_domain_list"}}

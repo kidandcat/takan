@@ -17,7 +17,7 @@
       <span class="pill off">auto-approve</span>
       {{end}}
       <span class="pill neutral">{{.VaultItemCount}} logins</span>
-      <button type="button" class="secondary" onclick="openImportModal()">Import CSV</button>
+      <button type="button" class="secondary" data-modal-open="m-import-csv">Import CSV</button>
       <button type="button" onclick="openVaultModal()">Add login</button>
     </div>
   </div>
@@ -167,8 +167,8 @@
     </div>
     {{else}}
     <div class="empty" style="padding:1.5rem 1.2rem">
-      No logins yet.
-      <button type="button" class="ghost" onclick="openVaultModal()" style="font-size:.9rem">Add one</button>
+      No logins yet. Use
+      <button type="button" class="ghost" onclick="openVaultModal()" style="font-size:.9rem">Add login</button>
       or import a Chrome / Google CSV.
     </div>
     {{end}}
@@ -187,94 +187,85 @@
 </section>
 
 <!-- Add / Edit login modal -->
-<div class="modal-backdrop" id="vault-modal" hidden onclick="if(event.target===this)closeVaultModal()">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="vault-modal-title">
+<dialog id="m-login" class="tk-modal" aria-labelledby="vault-modal-title">
+  <form method="post" action="/dashboard/vault" id="vault-form" class="form-stack">
     <div class="modal-head">
       <h3 id="vault-modal-title">Add login</h3>
-      <button type="button" class="icon-btn" aria-label="Close" onclick="closeVaultModal()">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
     </div>
-    <form method="post" action="/dashboard/vault" id="vault-form" class="form-stack">
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="v-name">Name</label>
-          <input id="v-name" name="name" type="text" placeholder="BankSync" autocomplete="off"/>
-        </div>
-        <div>
-          <label for="v-url">URL</label>
-          <input id="v-url" name="url" type="url" placeholder="https://…" autocomplete="off"/>
-        </div>
-      </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="v-user">Username</label>
-          <input id="v-user" name="username" type="text" autocomplete="off"/>
-        </div>
-        <div>
-          <label for="v-pass">Password</label>
-          <input id="v-pass" name="password" type="password" autocomplete="new-password"/>
-          <p class="faint" id="v-pass-hint" style="margin:.3rem 0 0;font-size:.75rem" hidden>Leave blank to keep current password</p>
-        </div>
-      </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="v-totp">TOTP secret</label>
-          <input id="v-totp" name="totp" type="text" placeholder="base32 or otpauth://…" autocomplete="off"/>
-          <p class="faint" id="v-totp-hint" style="margin:.3rem 0 0;font-size:.75rem" hidden>Leave blank to keep current secret</p>
-        </div>
-        <div>
-          <label for="v-folder">Folder</label>
-          <input id="v-folder" name="folder" type="text" autocomplete="off"/>
-        </div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+      <div>
+        <label for="v-name">Name</label>
+        <input id="v-name" name="name" type="text" placeholder="BankSync" autocomplete="off"/>
       </div>
       <div>
-        <label for="v-notes">Notes</label>
-        <textarea id="v-notes" name="notes" rows="2" placeholder="Optional"></textarea>
+        <label for="v-url">URL</label>
+        <input id="v-url" name="url" type="url" placeholder="https://…" autocomplete="off"/>
       </div>
-      <div class="modal-foot">
-        <button type="button" class="secondary" onclick="closeVaultModal()">Cancel</button>
-        <button type="submit" id="vault-submit">Save</button>
+    </div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+      <div>
+        <label for="v-user">Username</label>
+        <input id="v-user" name="username" type="text" autocomplete="off"/>
       </div>
-    </form>
-  </div>
-</div>
+      <div>
+        <label for="v-pass">Password</label>
+        <input id="v-pass" name="password" type="password" autocomplete="new-password"/>
+        <p class="faint" id="v-pass-hint" style="margin:.3rem 0 0;font-size:.75rem" hidden>Leave blank to keep current password</p>
+      </div>
+    </div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+      <div>
+        <label for="v-totp">TOTP secret</label>
+        <input id="v-totp" name="totp" type="text" placeholder="base32 or otpauth://…" autocomplete="off"/>
+        <p class="faint" id="v-totp-hint" style="margin:.3rem 0 0;font-size:.75rem" hidden>Leave blank to keep current secret</p>
+      </div>
+      <div>
+        <label for="v-folder">Folder</label>
+        <input id="v-folder" name="folder" type="text" autocomplete="off"/>
+      </div>
+    </div>
+    <div>
+      <label for="v-notes">Notes</label>
+      <textarea id="v-notes" name="notes" rows="2" placeholder="Optional"></textarea>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit" id="vault-submit">Save</button>
+    </div>
+  </form>
+</dialog>
 
 <!-- Import CSV modal -->
-<div class="modal-backdrop" id="import-modal" hidden onclick="if(event.target===this)closeImportModal()">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-modal-title" style="width:min(100%,420px)">
+<dialog id="m-import-csv" class="tk-modal" aria-labelledby="import-modal-title">
+  <form method="post" action="/dashboard/vault/import" enctype="multipart/form-data" class="form-stack">
     <div class="modal-head">
       <h3 id="import-modal-title">Import CSV</h3>
-      <button type="button" class="icon-btn" aria-label="Close" onclick="closeImportModal()">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
     </div>
-    <form method="post" action="/dashboard/vault/import" enctype="multipart/form-data" class="form-stack">
-      <p class="muted" style="margin:0 0 .5rem;font-size:.9rem">
-        Chrome or Google Password Manager export
-        (<code style="font-size:.78rem">name,url,username,password,note</code>.
-      </p>
-      <div>
-        <label for="v-csv">CSV file</label>
-        <input id="v-csv" type="file" name="csv" accept=".csv,text/csv" required/>
-      </div>
-      <div class="modal-foot">
-        <button type="button" class="secondary" onclick="closeImportModal()">Cancel</button>
-        <button type="submit">Import</button>
-      </div>
-    </form>
-  </div>
-</div>
+    <p class="muted" style="margin:0 0 .5rem;font-size:.9rem">
+      Chrome or Google Password Manager export
+      (<code style="font-size:.78rem">name,url,username,password,note</code>.
+    </p>
+    <div>
+      <label for="v-csv">CSV file</label>
+      <input id="v-csv" type="file" name="csv" accept=".csv,text/csv" required/>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Import</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 (function () {
-  var modal = document.getElementById('vault-modal');
+  var modal = document.getElementById('m-login');
   var form = document.getElementById('vault-form');
   var title = document.getElementById('vault-modal-title');
   var submit = document.getElementById('vault-submit');
   var passHint = document.getElementById('v-pass-hint');
   var totpHint = document.getElementById('v-totp-hint');
-  var importModal = document.getElementById('import-modal');
 
   function setVal(id, v) {
     var el = document.getElementById(id);
@@ -304,32 +295,14 @@
       if (passHint) passHint.hidden = true;
       if (totpHint) totpHint.hidden = true;
     }
-    modal.hidden = false;
-    document.body.style.overflow = 'hidden';
+    if (typeof modal.showModal === 'function') modal.showModal();
     var focus = document.getElementById('v-name');
     if (focus) setTimeout(function () { focus.focus(); }, 30);
   };
 
   window.closeVaultModal = function () {
-    if (modal) modal.hidden = true;
-    document.body.style.overflow = '';
+    if (modal && typeof modal.close === 'function') modal.close();
   };
-
-  window.openImportModal = function () {
-    if (!importModal) return;
-    importModal.hidden = false;
-    document.body.style.overflow = 'hidden';
-  };
-  window.closeImportModal = function () {
-    if (importModal) importModal.hidden = true;
-    document.body.style.overflow = '';
-  };
-
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    closeVaultModal();
-    closeImportModal();
-  });
 })();
 </script>
 {{end}}

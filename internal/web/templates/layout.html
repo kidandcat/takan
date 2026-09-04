@@ -305,6 +305,7 @@
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
+      flex-wrap: wrap;
       gap: 1rem;
       margin-bottom: 1rem;
     }
@@ -1324,12 +1325,114 @@
     }
     .modal-foot button { margin-top: 0; }
 
+    /* Shared modal: every "add / attach" form in the panel lives in one of these.
+       Native <dialog> gives ESC + focus trapping; the styling reuses the panel
+       tokens so a modal looks like a card that floated up. */
+    dialog.tk-modal {
+      width: min(100%, 520px);
+      padding: 1.25rem 1.35rem 1.4rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: #fff;
+      color: var(--text);
+      box-shadow: var(--shadow-lg);
+    }
+    dialog.tk-modal::backdrop {
+      background: rgba(15, 20, 24, 0.48);
+      backdrop-filter: blur(4px);
+    }
+    dialog.tk-modal .form-stack { max-width: none; gap: 0.55rem; }
+    /* Field groups stack label over control. The head and foot are laid out
+       explicitly at the same specificity so neither can inherit the grid. */
+    dialog.tk-modal .form-stack > div:not(.modal-head):not(.modal-foot) {
+      display: grid;
+      gap: 0.15rem;
+    }
+    dialog.tk-modal .form-stack > .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    dialog.tk-modal .form-stack > .modal-foot {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+    dialog.tk-modal .modal-head { margin-bottom: 0.9rem; }
+    dialog.tk-modal .modal-close {
+      margin-top: 0;
+      padding: 0.1rem 0.45rem;
+      font-size: 1.1rem;
+      line-height: 1;
+    }
+    @media (max-width: 560px) {
+      dialog.tk-modal {
+        width: calc(100vw - 1.5rem);
+        padding: 1rem 1rem 1.1rem;
+        max-height: calc(100vh - 2rem);
+      }
+      dialog.tk-modal .modal-foot { flex-direction: column-reverse; }
+      /* Inline grid-template-columns on .form-grid would otherwise keep
+         multi-column rows side by side on a phone. */
+      .form-grid { grid-template-columns: 1fr !important; }
+      .form-grid button { width: 100%; }
+      dialog.tk-modal .modal-foot button { width: 100%; }
+    }
+
+    /* Channel cards (Telegram) */
+    .channel-list { display: flex; flex-direction: column; gap: 0.7rem; }
+    .channel {
+      padding: 0.85rem 0.95rem;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: rgba(229, 225, 218, 0.70);
+    }
+    .channel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .channel-head .name { font-weight: 600; }
+    .channel-sub { margin-top: 0.3rem; }
+    .channel-table { margin-top: 0.6rem; }
+    .channel-table .col-actions { text-align: right; width: 1%; white-space: nowrap; }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      margin-top: 0.6rem;
+    }
+    .chip { display: inline-flex; align-items: center; gap: 0.15rem; }
+    .chip button { margin-top: 0; padding: 0 0.3rem; font-size: 0.95rem; line-height: 1; }
+    .channel-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.7rem; }
+    .channel-actions button, .channel-actions form { margin-top: 0; }
+
+    .stack { display: flex; flex-direction: column; gap: 0.55rem; }
+
+    .subhead {
+      margin: 1.25rem 0 0.2rem;
+      font-size: 0.95rem;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+    }
+    .subhead-help {
+      margin: 0 0 0.7rem;
+      color: var(--text-secondary);
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+
     /* Data tables */
     .data-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 0.9rem;
     }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .data-table th {
       text-align: left;
       font-size: 0.72rem;
@@ -1458,6 +1561,12 @@
       .machine-row { flex-direction: column; align-items: flex-start; }
       .machine-row form { width: 100%; }
       .machine-row button { width: 100%; }
+      .card-head { flex-direction: column; align-items: stretch; gap: 0.7rem; }
+      .card-head > .row { justify-content: flex-start; }
+      .data-table th, .data-table td { padding: 0.5rem 0.4rem; }
+      .channel-head { flex-direction: column; align-items: stretch; }
+      .channel-actions button, .channel-actions form { width: 100%; }
+      .channel-actions form button { width: 100%; }
     }
   </style>
 </head>
@@ -1579,6 +1688,39 @@
     </div>
   </div>
 {{end}}
+
+  <script>
+  // One modal helper for the whole panel. Triggers carry data-modal-open="<id>";
+  // any control inside carries data-modal-close. ESC and focus trapping are
+  // native to <dialog>; clicking the backdrop closes too.
+  (function () {
+    function dialogFor(el) { return el && el.closest ? el.closest('dialog') : null; }
+    document.addEventListener('click', function (e) {
+      var opener = e.target.closest('[data-modal-open]');
+      if (opener) {
+        var d = document.getElementById(opener.getAttribute('data-modal-open'));
+        if (d && typeof d.showModal === 'function') { e.preventDefault(); d.showModal(); }
+        return;
+      }
+      if (e.target.closest('[data-modal-close]')) {
+        var dc = dialogFor(e.target);
+        if (dc) { e.preventDefault(); dc.close(); }
+        return;
+      }
+      // A click landing on the dialog element itself is the backdrop.
+      if (e.target.tagName === 'DIALOG' && e.target.classList.contains('tk-modal')) e.target.close();
+    });
+    // A rejected submit redirects back with ?modal=<id> so the operator does not
+    // have to reopen the form and retype it.
+    try {
+      var want = new URLSearchParams(window.location.search).get('modal');
+      if (want) {
+        var d = document.getElementById(want);
+        if (d && typeof d.showModal === 'function') d.showModal();
+      }
+    } catch (err) { /* no URLSearchParams: modals still open on click */ }
+  })();
+  </script>
 </body>
 </html>
 {{end}}

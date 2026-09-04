@@ -45,58 +45,14 @@
 </section>
 
 <section class="section">
-  <div class="card">
-    <div class="card-head">
-      <div>
-        <h3>Daily diary</h3>
-        <p class="muted">One entry per day. Empty day defaults to today (Europe/Madrid). Tool: <code>health_log</code> (action=upsert).</p>
-      </div>
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.75rem">
+    <div>
+      <h3 style="margin:0">Daily diary</h3>
+      <p class="muted" style="margin:.3rem 0 0">One entry per day. Empty day defaults to today (Europe/Madrid). Tool: <code>health_log</code> (action=upsert).</p>
     </div>
-    <form method="post" action="/dashboard/health/log" class="stack" style="gap:.75rem">
-      <div class="row" style="gap:1rem;flex-wrap:wrap">
-        <div style="flex:1;min-width:8rem">
-          <label for="log_day">Day</label>
-          <input id="log_day" name="day" type="date"/>
-        </div>
-        <div style="flex:1;min-width:8rem">
-          <label for="log_weight">Weight (kg)</label>
-          <input id="log_weight" name="weight_kg" type="text" inputmode="decimal" placeholder="optional"/>
-        </div>
-      </div>
-      <div class="row" style="gap:1rem;flex-wrap:wrap">
-        <div style="flex:1;min-width:10rem">
-          <label for="log_sleep">Sleep</label>
-          <input id="log_sleep" name="sleep" type="text" placeholder="hours / quality"/>
-        </div>
-        <div style="flex:1;min-width:10rem">
-          <label for="log_training">Training</label>
-          <input id="log_training" name="training" type="text" placeholder="what you did"/>
-        </div>
-      </div>
-      <div>
-        <label for="log_symptoms">Symptoms</label>
-        <textarea id="log_symptoms" name="symptoms" rows="2"></textarea>
-      </div>
-      <div>
-        <label for="log_pain">Pain</label>
-        <textarea id="log_pain" name="pain" rows="2" placeholder="where, intensity 0–10, notes"></textarea>
-      </div>
-      <div>
-        <label for="log_meds">Medication</label>
-        <input id="log_meds" name="medication" type="text"/>
-      </div>
-      <div>
-        <label for="log_notes">Notes</label>
-        <textarea id="log_notes" name="notes" rows="3" placeholder="Freeform diary for the day"></textarea>
-      </div>
-      <button type="submit">Save diary day</button>
-    </form>
+    <button type="button" class="btn" style="margin-top:0" data-modal-open="m-add-log">Add diary entry</button>
   </div>
-</section>
-
-{{if .HealthLog}}
-<section class="section">
-  <h3 style="margin-bottom:.75rem">Recent diary</h3>
+  {{if .HealthLog}}
   <div class="stack" style="gap:.65rem">
     {{range .HealthLog}}
     <article class="card" style="padding:1rem 1.1rem">
@@ -120,67 +76,22 @@
     </article>
     {{end}}
   </div>
-</section>
-{{end}}
-
-<section class="section">
+  {{else}}
   <div class="card">
-    <div class="card-head">
-      <div>
-        <h3>Injuries &amp; conditions</h3>
-        <p class="muted">Historial — active, recovering, chronic, resolved. Tool: <code>health_issue</code> (action=add).</p>
-      </div>
-    </div>
-    <form method="post" action="/dashboard/health/issues" class="stack" style="gap:.75rem">
-      <div class="row" style="gap:1rem;flex-wrap:wrap">
-        <div style="flex:2;min-width:12rem">
-          <label for="iss_title">Title</label>
-          <input id="iss_title" name="title" type="text" required placeholder="Right calf fibrillar tear"/>
-        </div>
-        <div style="flex:1;min-width:8rem">
-          <label for="iss_status">Status</label>
-          <select id="iss_status" name="status">
-            <option value="active">active</option>
-            <option value="recovering" selected>recovering</option>
-            <option value="chronic">chronic</option>
-            <option value="resolved">resolved</option>
-          </select>
-        </div>
-      </div>
-      <div class="row" style="gap:1rem;flex-wrap:wrap">
-        <div style="flex:1;min-width:8rem">
-          <label for="iss_started">Started</label>
-          <input id="iss_started" name="started_on" type="date"/>
-        </div>
-        <div style="flex:1;min-width:8rem">
-          <label for="iss_ended">Ended</label>
-          <input id="iss_ended" name="ended_on" type="date"/>
-        </div>
-        <div style="flex:1;min-width:8rem">
-          <label for="iss_body">Body part</label>
-          <input id="iss_body" name="body_part" type="text" placeholder="right calf"/>
-        </div>
-      </div>
-      <div>
-        <label for="iss_dx">Diagnosis</label>
-        <textarea id="iss_dx" name="diagnosis" rows="2"></textarea>
-      </div>
-      <div>
-        <label for="iss_tx">Treatment</label>
-        <textarea id="iss_tx" name="treatment" rows="2"></textarea>
-      </div>
-      <div>
-        <label for="iss_notes">Notes</label>
-        <textarea id="iss_notes" name="notes" rows="2"></textarea>
-      </div>
-      <button type="submit">Add issue</button>
-    </form>
+    <div class="empty">No diary days yet. Use <strong>Add diary entry</strong> to log today.</div>
   </div>
+  {{end}}
 </section>
 
-{{if .HealthIssues}}
 <section class="section">
-  <h3 style="margin-bottom:.75rem">Issue list</h3>
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.75rem">
+    <div>
+      <h3 style="margin:0">Injuries &amp; conditions</h3>
+      <p class="muted" style="margin:.3rem 0 0">Historial — active, recovering, chronic, resolved. Tool: <code>health_issue</code> (action=add).</p>
+    </div>
+    <button type="button" class="btn" style="margin-top:0" data-modal-open="m-add-issue">Add issue</button>
+  </div>
+  {{if .HealthIssues}}
   <div class="stack" style="gap:.65rem">
     {{range .HealthIssues}}
     <article class="card" style="padding:1rem 1.1rem">
@@ -230,6 +141,113 @@
     </article>
     {{end}}
   </div>
+  {{else}}
+  <div class="card">
+    <div class="empty">No injuries or conditions recorded. Use <strong>Add issue</strong> to start the historial.</div>
+  </div>
+  {{end}}
 </section>
-{{end}}
+
+<dialog id="m-add-log" class="tk-modal">
+  <form method="post" action="/dashboard/health/log" class="form-stack">
+    <div class="modal-head">
+      <h3>Add diary entry</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+      <div>
+        <label for="log_day">Day</label>
+        <input id="log_day" name="day" type="date"/>
+      </div>
+      <div>
+        <label for="log_weight">Weight (kg)</label>
+        <input id="log_weight" name="weight_kg" type="text" inputmode="decimal" placeholder="optional"/>
+      </div>
+    </div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+      <div>
+        <label for="log_sleep">Sleep</label>
+        <input id="log_sleep" name="sleep" type="text" placeholder="hours / quality"/>
+      </div>
+      <div>
+        <label for="log_training">Training</label>
+        <input id="log_training" name="training" type="text" placeholder="what you did"/>
+      </div>
+    </div>
+    <div>
+      <label for="log_symptoms">Symptoms</label>
+      <textarea id="log_symptoms" name="symptoms" rows="2"></textarea>
+    </div>
+    <div>
+      <label for="log_pain">Pain</label>
+      <textarea id="log_pain" name="pain" rows="2" placeholder="where, intensity 0–10, notes"></textarea>
+    </div>
+    <div>
+      <label for="log_meds">Medication</label>
+      <input id="log_meds" name="medication" type="text"/>
+    </div>
+    <div>
+      <label for="log_notes">Notes</label>
+      <textarea id="log_notes" name="notes" rows="3" placeholder="Freeform diary for the day"></textarea>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Save diary day</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="m-add-issue" class="tk-modal">
+  <form method="post" action="/dashboard/health/issues" class="form-stack">
+    <div class="modal-head">
+      <h3>Add issue</h3>
+      <button type="button" class="ghost modal-close" data-modal-close aria-label="Close">&times;</button>
+    </div>
+    <div>
+      <label for="iss_title">Title</label>
+      <input id="iss_title" name="title" type="text" required placeholder="Right calf fibrillar tear"/>
+    </div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+      <div>
+        <label for="iss_status">Status</label>
+        <select id="iss_status" name="status">
+          <option value="active">active</option>
+          <option value="recovering" selected>recovering</option>
+          <option value="chronic">chronic</option>
+          <option value="resolved">resolved</option>
+        </select>
+      </div>
+      <div>
+        <label for="iss_body">Body part</label>
+        <input id="iss_body" name="body_part" type="text" placeholder="right calf"/>
+      </div>
+    </div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.65rem">
+      <div>
+        <label for="iss_started">Started</label>
+        <input id="iss_started" name="started_on" type="date"/>
+      </div>
+      <div>
+        <label for="iss_ended">Ended</label>
+        <input id="iss_ended" name="ended_on" type="date"/>
+      </div>
+    </div>
+    <div>
+      <label for="iss_dx">Diagnosis</label>
+      <textarea id="iss_dx" name="diagnosis" rows="2"></textarea>
+    </div>
+    <div>
+      <label for="iss_tx">Treatment</label>
+      <textarea id="iss_tx" name="treatment" rows="2"></textarea>
+    </div>
+    <div>
+      <label for="iss_notes">Notes</label>
+      <textarea id="iss_notes" name="notes" rows="2"></textarea>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="secondary" data-modal-close>Cancel</button>
+      <button type="submit">Add issue</button>
+    </div>
+  </form>
+</dialog>
 {{end}}
